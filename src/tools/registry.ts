@@ -9,6 +9,14 @@ import type { ToolDefinition } from "./types";
  */
 export const tools: ToolDefinition[] = [
   {
+    id: "connections",
+    name: "我的连接",
+    description: "管理 Dataverse 连接（交互式登录 / Client Secret），登录后可用 WhoAmI 验证连通性。仅桌面版可用。",
+    category: "连接",
+    icon: "🔌",
+    Component: lazy(() => import("./connections/ConnectionsPage")),
+  },
+  {
     id: "guid-formatter",
     name: "GUID 格式转换",
     description: "在裸 GUID、大括号 GUID、Web API key 等格式之间快速转换。",
