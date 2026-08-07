@@ -7,13 +7,13 @@ namespace MsdPpTools.Desktop.Auth;
 
 public sealed class AuthService
 {
-    // TODO: replace with the real Entra ID App Registration client id (public client,
-    // "Mobile and desktop applications" redirect URI http://localhost, Dataverse delegated
-    // permission). Interactive login cannot work until this is a real, registered app id —
-    // see 技术设计方案.md's prerequisite note. Placeholder deliberately fails loudly rather
-    // than silently mis-authenticating.
-    private const string InteractiveClientId = "00000000-0000-0000-0000-000000000000";
-    private const string CommonAuthority = "https://login.microsoftonline.com/common";
+    // ApplicationUser1 (zane-yuan tenant) — "Mobile and desktop applications" platform with
+    // redirect URI http://localhost, "Allow public client flows" enabled. See 技术设计方案.md.
+    private const string InteractiveClientId = "490264e0-fa67-4eb2-ae24-0a4a918de366";
+
+    // This app registration is single-tenant, so /common is rejected with AADSTS50194 —
+    // must use the tenant-specific authority instead.
+    private const string InteractiveAuthority = "https://login.microsoftonline.com/c2c941b4-63a5-4727-80d9-d13483d28643";
 
     private static readonly string CacheDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MsdPpTools", "msal_cache");
@@ -60,7 +60,7 @@ public sealed class AuthService
         }
 
         var app = PublicClientApplicationBuilder.Create(InteractiveClientId)
-            .WithAuthority(CommonAuthority)
+            .WithAuthority(InteractiveAuthority)
             .WithRedirectUri("http://localhost")
             .Build();
 
