@@ -1,0 +1,51 @@
+import { lazy } from "react";
+import type { ToolDefinition } from "./types";
+
+/**
+ * How to add a new tool:
+ * 1. Create a folder under src/tools/<your-tool-id>/ with a default-exported component.
+ * 2. lazy-import it below and add one entry to this array.
+ * The sidebar, home grid, and routing all derive from this list automatically.
+ */
+export const tools: ToolDefinition[] = [
+  {
+    id: "guid-formatter",
+    name: "GUID 格式转换",
+    description: "在裸 GUID、大括号 GUID、Web API key 等格式之间快速转换。",
+    category: "Dataverse",
+    icon: "🆔",
+    Component: lazy(() => import("./sample-tool/GuidFormatter")),
+  },
+  {
+    id: "odata-filter-builder",
+    name: "OData $filter 构建器",
+    description: "可视化拼接 OData $filter 表达式，自动处理各类型字面量格式。",
+    category: "Dataverse",
+    icon: "🔍",
+    Component: lazy(() => import("./odata-filter-builder/OdataFilterBuilder")),
+  },
+  {
+    id: "fetchxml-to-odata",
+    name: "FetchXML → OData",
+    description: "把 FetchXML 转换为 $select/$filter/$orderby 等 OData 查询片段。",
+    category: "Dataverse",
+    icon: "🔄",
+    Component: lazy(() => import("./fetchxml-to-odata/FetchXmlToOData")),
+  },
+  {
+    id: "solution-diff",
+    name: "Solution 深度对比",
+    description: "上传两个 solution.zip，对比实体/属性/Web资源/流程等组件的差异。",
+    category: "Solution",
+    icon: "🧬",
+    Component: lazy(() => import("./solution-diff/SolutionDiff")),
+  },
+];
+
+export function getToolById(id: string): ToolDefinition | undefined {
+  return tools.find((t) => t.id === id);
+}
+
+export function getCategories(): string[] {
+  return Array.from(new Set(tools.map((t) => t.category)));
+}
