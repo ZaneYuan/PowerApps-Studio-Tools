@@ -1,16 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { FormEvent } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
-
-interface ConnectionDto {
-  id: string;
-  name: string;
-  environmentUrl: string;
-  authType: "Interactive" | "ClientSecret";
-  tenantId?: string;
-  clientId?: string;
-  hasSecret: boolean;
-}
+import { useActiveConnection } from "../../native/activeConnection";
 
 type AuthTypeInput = "interactive" | "clientSecret";
 
@@ -43,20 +34,10 @@ interface ConnectionStatus {
 
 export default function ConnectionsPage() {
   const available = isNativeBridgeAvailable();
-  const [connections, setConnections] = useState<ConnectionDto[]>([]);
+  const { connections, refreshConnections } = useActiveConnection();
   const [form, setForm] = useState<FormState>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [status, setStatus] = useState<Record<string, ConnectionStatus>>({});
-
-  async function refresh() {
-    const list = await callNative<ConnectionDto[]>("connections.list");
-    setConnections(list);
-  }
-
-  useEffect(() => {
-    if (available) void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   async function handleAdd(e: FormEvent) {
     e.preventDefault();
@@ -71,7 +52,7 @@ export default function ConnectionsPage() {
         clientSecret: form.clientSecret || undefined,
       });
       setForm(emptyForm);
-      await refresh();
+      await refreshConnections();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
     }
@@ -79,7 +60,7 @@ export default function ConnectionsPage() {
 
   async function handleRemove(id: string) {
     await callNative("connections.remove", { id });
-    await refresh();
+    await refreshConnections();
   }
 
   async function handleWhoAmI(id: string) {

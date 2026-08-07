@@ -17,6 +17,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./connections/ConnectionsPage")),
   },
   {
+    id: "metadata-browser",
+    name: "Metadata Browser",
+    description: "浏览实体的字段 / 1:N / N:1 / N:N 关系元数据，按需懒加载。仅桌面版可用。",
+    category: "连接",
+    icon: "📚",
+    Component: lazy(() => import("./metadata-browser/MetadataBrowser")),
+  },
+  {
     id: "guid-formatter",
     name: "GUID 格式转换",
     description: "在裸 GUID、大括号 GUID、Web API key 等格式之间快速转换。",
