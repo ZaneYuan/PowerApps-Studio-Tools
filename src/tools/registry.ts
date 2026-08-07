@@ -25,6 +25,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./metadata-browser/MetadataBrowser")),
   },
   {
+    id: "sql4cds",
+    name: "SQL4CDS",
+    description: "只读单表 SQL SELECT，翻译成 Dataverse Web API 查询并真实执行。仅桌面版可用。",
+    category: "连接",
+    icon: "🗄️",
+    Component: lazy(() => import("./sql4cds/Sql4Cds")),
+  },
+  {
     id: "guid-formatter",
     name: "GUID 格式转换",
     description: "在裸 GUID、大括号 GUID、Web API key 等格式之间快速转换。",
