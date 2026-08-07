@@ -33,6 +33,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./sql4cds/Sql4Cds")),
   },
   {
+    id: "fetchxml-builder",
+    name: "FetchXML Builder",
+    description: "可视化拼 FetchXML（含嵌套过滤分组、嵌套 link-entity），生成后真实执行。仅桌面版可用。",
+    category: "连接",
+    icon: "🧩",
+    Component: lazy(() => import("./fetchxml-builder/FetchXmlBuilder")),
+  },
+  {
     id: "guid-formatter",
     name: "GUID 格式转换",
     description: "在裸 GUID、大括号 GUID、Web API key 等格式之间快速转换。",
