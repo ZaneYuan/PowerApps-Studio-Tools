@@ -11,9 +11,14 @@ public sealed class AuthService
     // redirect URI http://localhost, "Allow public client flows" enabled. See 技术设计方案.md.
     private const string InteractiveClientId = "490264e0-fa67-4eb2-ae24-0a4a918de366";
 
-    // This app registration is single-tenant, so /common is rejected with AADSTS50194 —
-    // must use the tenant-specific authority instead.
-    private const string InteractiveAuthority = "https://login.microsoftonline.com/c2c941b4-63a5-4727-80d9-d13483d28643";
+    // /organizations lets any work/school account from any tenant sign in — requires the app
+    // registration itself to be set to multi-tenant ("Accounts in any organizational
+    // directory") in Entra, and Dynamics CRM API permission consented in each tenant that
+    // signs in. (Previously hardcoded to one specific tenant's authority, which is why this
+    // was AADSTS50194 with /common — a genuinely single-tenant app rejects that endpoint. Now
+    // that the app itself is multi-tenant, /organizations is the correct — not "common" —
+    // choice: it excludes personal Microsoft accounts, which Dataverse never accepts anyway.)
+    private const string InteractiveAuthority = "https://login.microsoftonline.com/organizations";
 
     private static readonly string CacheDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MsdPpTools", "msal_cache");
