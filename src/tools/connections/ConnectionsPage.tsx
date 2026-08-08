@@ -2,8 +2,9 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
+import { parseConnectionString } from "./connectionString";
 
-type AuthTypeInput = "interactive" | "clientSecret";
+type AuthTypeInput = "interactive" | "clientSecret" | "certificate";
 
 interface FormState {
   name: string;
@@ -12,6 +13,8 @@ interface FormState {
   tenantId: string;
   clientId: string;
   clientSecret: string;
+  certificateFilePath: string;
+  certificatePassword: string;
 }
 
 const emptyForm: FormState = {
@@ -21,6 +24,14 @@ const emptyForm: FormState = {
   tenantId: "",
   clientId: "",
   clientSecret: "",
+  certificateFilePath: "",
+  certificatePassword: "",
+};
+
+const AUTH_TYPE_LABELS: Record<string, string> = {
+  Interactive: "交互式登录",
+  ClientSecret: "Client Secret",
+  Certificate: "证书认证",
 };
 
 const inputCls =
@@ -38,6 +49,8 @@ export default function ConnectionsPage() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [status, setStatus] = useState<Record<string, ConnectionStatus>>({});
+  const [connectionString, setConnectionString] = useState("");
+  const [connectionStringWarnings, setConnectionStringWarnings] = useState<string[]>([]);
 
   async function handleAdd(e: FormEvent) {
     e.preventDefault();
@@ -50,11 +63,38 @@ export default function ConnectionsPage() {
         tenantId: form.tenantId || undefined,
         clientId: form.clientId || undefined,
         clientSecret: form.clientSecret || undefined,
+        certificateFilePath: form.certificateFilePath || undefined,
+        certificatePassword: form.certificatePassword || undefined,
       });
       setForm(emptyForm);
+      setConnectionString("");
+      setConnectionStringWarnings([]);
       await refreshConnections();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function handleParseConnectionString() {
+    const parsed = parseConnectionString(connectionString);
+    setForm((f) => ({
+      ...f,
+      authType: parsed.authType ?? f.authType,
+      environmentUrl: parsed.environmentUrl ?? f.environmentUrl,
+      tenantId: parsed.tenantId ?? f.tenantId,
+      clientId: parsed.clientId ?? f.clientId,
+      clientSecret: parsed.clientSecret ?? f.clientSecret,
+    }));
+    setConnectionStringWarnings(parsed.warnings);
+  }
+
+  async function handlePickCertificateFile() {
+    const result = await callNative<{ filePath: string | null; fileName: string | null }>("dialog.pickFile", {
+      title: "选择证书文件 (.pfx)",
+      filter: "证书文件 (*.pfx;*.p12)|*.pfx;*.p12|所有文件 (*.*)|*.*",
+    });
+    if (result.filePath) {
+      setForm((f) => ({ ...f, certificateFilePath: result.filePath! }));
     }
   }
 
@@ -103,7 +143,7 @@ export default function ConnectionsPage() {
                   <div>
                     <div className="font-medium text-gray-900 dark:text-gray-100">{c.name}</div>
                     <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {c.environmentUrl} · {c.authType === "Interactive" ? "交互式登录" : "Client Secret"}
+                      {c.environmentUrl} · {AUTH_TYPE_LABELS[c.authType] ?? c.authType}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -139,6 +179,35 @@ export default function ConnectionsPage() {
         )}
       </div>
 
+      <div className="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-gray-800">
+        <h2 className="text-sm font-medium text-gray-700 dark:text-gray-300">从连接字符串导入</h2>
+        <p className="text-xs text-gray-400">
+          粘贴 XRM Tooling 格式的连接字符串（例如 <code>AuthType=OAuth;Url=...;ClientId=...</code>），解析后会预填下面的表单，不会自动提交——请检查无误后再点"添加"。
+        </p>
+        <textarea
+          value={connectionString}
+          onChange={(e) => setConnectionString(e.target.value)}
+          placeholder="AuthType=OAuth;Url=https://org.crm.dynamics.com;ClientId=..."
+          rows={2}
+          className={inputCls}
+        />
+        <button
+          type="button"
+          onClick={handleParseConnectionString}
+          disabled={!connectionString.trim()}
+          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+        >
+          解析并填充下方表单
+        </button>
+        {connectionStringWarnings.length > 0 && (
+          <ul className="list-inside list-disc space-y-0.5 text-xs text-amber-600 dark:text-amber-400">
+            {connectionStringWarnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       <form onSubmit={handleAdd} className="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-gray-800">
         <h2 className="text-sm font-medium text-gray-700 dark:text-gray-300">添加连接</h2>
 
@@ -163,8 +232,9 @@ export default function ConnectionsPage() {
           onChange={(e) => setForm((f) => ({ ...f, authType: e.target.value as AuthTypeInput }))}
           className={inputCls}
         >
-          <option value="interactive">交互式登录（用户本人登录）</option>
+          <option value="interactive">交互式登录（用户本人登录，原生支持 MFA / 条件访问）</option>
           <option value="clientSecret">Client Secret（应用身份）</option>
+          <option value="certificate">证书认证（应用身份，.pfx 文件）</option>
         </select>
 
         {form.authType === "clientSecret" && (
@@ -188,6 +258,44 @@ export default function ConnectionsPage() {
               placeholder="Client Secret"
               value={form.clientSecret}
               onChange={(e) => setForm((f) => ({ ...f, clientSecret: e.target.value }))}
+              className={inputCls}
+            />
+          </>
+        )}
+
+        {form.authType === "certificate" && (
+          <>
+            <input
+              type="text"
+              placeholder="Tenant ID"
+              value={form.tenantId}
+              onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value }))}
+              className={inputCls}
+            />
+            <input
+              type="text"
+              placeholder="Client ID"
+              value={form.clientId}
+              onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))}
+              className={inputCls}
+            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handlePickCertificateFile}
+                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                选择证书文件 (.pfx)
+              </button>
+              <span className="truncate text-xs text-gray-500 dark:text-gray-400">
+                {form.certificateFilePath || "未选择文件"}
+              </span>
+            </div>
+            <input
+              type="password"
+              placeholder="证书密码"
+              value={form.certificatePassword}
+              onChange={(e) => setForm((f) => ({ ...f, certificatePassword: e.target.value }))}
               className={inputCls}
             />
           </>

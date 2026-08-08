@@ -14,7 +14,9 @@ public static class ConnectionHandlers
         string AuthType,
         string? TenantId,
         string? ClientId,
-        bool HasSecret);
+        bool HasSecret,
+        string? CertificateFilePath,
+        bool HasCertificatePassword);
 
     private sealed class AddConnectionParams
     {
@@ -24,6 +26,8 @@ public static class ConnectionHandlers
         public string? TenantId { get; set; }
         public string? ClientId { get; set; }
         public string? ClientSecret { get; set; }
+        public string? CertificateFilePath { get; set; }
+        public string? CertificatePassword { get; set; }
     }
 
     private sealed class IdParams
@@ -59,6 +63,10 @@ public static class ConnectionHandlers
                 EncryptedClientSecret = string.IsNullOrEmpty(input.ClientSecret)
                     ? null
                     : SecretProtector.Protect(input.ClientSecret),
+                CertificateFilePath = input.CertificateFilePath,
+                EncryptedCertificatePassword = string.IsNullOrEmpty(input.CertificatePassword)
+                    ? null
+                    : SecretProtector.Protect(input.CertificatePassword),
             };
 
             store.Add(connection);
@@ -81,5 +89,7 @@ public static class ConnectionHandlers
         c.AuthType.ToString(),
         c.TenantId,
         c.ClientId,
-        !string.IsNullOrEmpty(c.EncryptedClientSecret));
+        !string.IsNullOrEmpty(c.EncryptedClientSecret),
+        c.CertificateFilePath,
+        !string.IsNullOrEmpty(c.EncryptedCertificatePassword));
 }

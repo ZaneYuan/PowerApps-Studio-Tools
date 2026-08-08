@@ -6,10 +6,12 @@ export interface ConnectionDto {
   id: string;
   name: string;
   environmentUrl: string;
-  authType: "Interactive" | "ClientSecret";
+  authType: "Interactive" | "ClientSecret" | "Certificate";
   tenantId?: string;
   clientId?: string;
   hasSecret: boolean;
+  certificateFilePath?: string;
+  hasCertificatePassword: boolean;
 }
 
 interface ActiveConnectionContextValue {

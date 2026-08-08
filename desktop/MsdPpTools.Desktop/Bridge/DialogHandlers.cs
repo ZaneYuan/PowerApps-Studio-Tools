@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Win32;
 
 namespace MsdPpTools.Desktop.Bridge;
@@ -5,14 +6,22 @@ namespace MsdPpTools.Desktop.Bridge;
 /// <summary>Registers dialog.* bridge methods — native file pickers the JS side can't do itself.</summary>
 public static class DialogHandlers
 {
+    private sealed class PickFileParams
+    {
+        public string? Title { get; set; }
+        public string? Filter { get; set; }
+    }
+
     public static void Register(NativeBridge bridge)
     {
-        bridge.Register("dialog.pickFile", _ =>
+        bridge.Register("dialog.pickFile", @params =>
         {
+            var input = @params.Deserialize<PickFileParams>(NativeBridge.JsonOptions);
+
             var dialog = new OpenFileDialog
             {
-                Title = "选择插件程序集 (.dll)",
-                Filter = "程序集文件 (*.dll)|*.dll|所有文件 (*.*)|*.*",
+                Title = input?.Title ?? "选择插件程序集 (.dll)",
+                Filter = input?.Filter ?? "程序集文件 (*.dll)|*.dll|所有文件 (*.*)|*.*",
                 CheckFileExists = true,
             };
 

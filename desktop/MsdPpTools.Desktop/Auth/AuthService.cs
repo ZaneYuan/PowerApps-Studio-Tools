@@ -1,4 +1,5 @@
 using System.IO;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.Identity.Client;
 using Microsoft.Identity.Client.Extensions.Msal;
 using MsdPpTools.Desktop.Connections;
@@ -50,6 +51,7 @@ public sealed class AuthService
         {
             ConnectionAuthType.Interactive => await AcquireInteractiveTokenAsync(connection.EnvironmentUrl),
             ConnectionAuthType.ClientSecret => await AcquireClientSecretTokenAsync(connection),
+            ConnectionAuthType.Certificate => await AcquireCertificateTokenAsync(connection),
             _ => throw new NotSupportedException($"不支持的认证方式: {connection.AuthType}"),
         };
 
@@ -111,6 +113,37 @@ public sealed class AuthService
 
         var app = ConfidentialClientApplicationBuilder.Create(connection.ClientId)
             .WithClientSecret(secret)
+            .WithAuthority(authority)
+            .Build();
+
+        var scopes = new[] { $"{connection.EnvironmentUrl.TrimEnd('/')}/.default" };
+        var result = await app.AcquireTokenForClient(scopes).ExecuteAsync();
+
+        return new TokenResult { AccessToken = result.AccessToken, ExpiresOn = result.ExpiresOn };
+    }
+
+    private static async Task<TokenResult> AcquireCertificateTokenAsync(Connection connection)
+    {
+        if (string.IsNullOrEmpty(connection.CertificateFilePath) ||
+            string.IsNullOrEmpty(connection.EncryptedCertificatePassword) ||
+            string.IsNullOrEmpty(connection.ClientId) ||
+            string.IsNullOrEmpty(connection.TenantId))
+        {
+            throw new InvalidOperationException("此连接缺少证书文件 / 证书密码 / client id / tenant id。");
+        }
+
+        var password = SecretProtector.Unprotect(connection.EncryptedCertificatePassword);
+
+        // X509CertificateLoader (not the obsolete X509Certificate2(path, password) constructor,
+        // which SYSLIB0057 deprecates from .NET 9 on) — EphemeralKeySet avoids persisting the
+        // private key to the Windows key store just to acquire a token.
+        var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            connection.CertificateFilePath, password, X509KeyStorageFlags.EphemeralKeySet);
+
+        var authority = $"https://login.microsoftonline.com/{connection.TenantId}";
+
+        var app = ConfidentialClientApplicationBuilder.Create(connection.ClientId)
+            .WithCertificate(certificate)
             .WithAuthority(authority)
             .Build();
 
