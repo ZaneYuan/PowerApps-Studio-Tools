@@ -1,0 +1,161 @@
+import { callNative } from "../../native/bridge";
+
+/** Solution export/import can legitimately run longer than the bridge's default 30s — see
+ *  DataverseApiClient.cs's matching HttpClient.Timeout bump. */
+const LONG_TIMEOUT_MS = 180_000;
+
+const ENTITY_COMPONENT_TYPE = 1;
+
+async function fetchDataverse<T>(connectionId: string, path: string): Promise<T> {
+  return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
+}
+
+async function postDataverse<T>(
+  connectionId: string,
+  path: string,
+  body: Record<string, unknown>,
+  timeoutMs?: number,
+): Promise<T> {
+  return callNative<T>("dataverse.request", { connectionId, method: "POST", path, body }, { timeoutMs });
+}
+
+export interface UnmanagedSolution {
+  solutionid: string;
+  uniquename: string;
+  friendlyname: string;
+}
+
+/** Existing unmanaged solutions only — v1 deliberately doesn't auto-create a solution or
+ *  publisher, the user picks one they already use. */
+export async function fetchUnmanagedSolutions(connectionId: string): Promise<UnmanagedSolution[]> {
+  const res = await fetchDataverse<{ value: UnmanagedSolution[] }>(
+    connectionId,
+    "solutions?$filter=isvisible eq true and ismanaged eq false&$select=uniquename,friendlyname,solutionid&$orderby=friendlyname",
+  );
+  return res.value;
+}
+
+async function isComponentInSolution(
+  connectionId: string,
+  solutionId: string,
+  componentType: number,
+  componentId: string,
+): Promise<boolean> {
+  const res = await fetchDataverse<{ value: unknown[] }>(
+    connectionId,
+    `solutioncomponents?$select=solutioncomponentid&$top=1` +
+      `&$filter=_solutionid_value eq ${solutionId} and componenttype eq ${componentType} and objectid eq ${componentId}`,
+  );
+  return res.value.length > 0;
+}
+
+/** Adds the table to the solution if it isn't already there — query-first, not try/catch on
+ *  AddSolutionComponent's error text (no documented "already exists" string to match against).
+ *  DoNotIncludeSubcomponents keeps the export scoped to just the table + its ribbon, not its
+ *  forms/views/attributes too — smaller export, faster import, less chance of clobbering a
+ *  concurrent unrelated edit to the same table. */
+export async function ensureEntityInSolution(
+  connectionId: string,
+  solutionUniqueName: string,
+  solutionId: string,
+  logicalName: string,
+): Promise<void> {
+  const meta = await fetchDataverse<{ MetadataId: string }>(
+    connectionId,
+    `EntityDefinitions(LogicalName='${logicalName}')?$select=MetadataId`,
+  );
+
+  const already = await isComponentInSolution(connectionId, solutionId, ENTITY_COMPONENT_TYPE, meta.MetadataId);
+  if (already) return;
+
+  await postDataverse(connectionId, "AddSolutionComponent", {
+    ComponentId: meta.MetadataId,
+    ComponentType: ENTITY_COMPONENT_TYPE,
+    SolutionUniqueName: solutionUniqueName,
+    AddRequiredComponents: false,
+    DoNotIncludeSubcomponents: true,
+  });
+}
+
+export async function exportSolutionZip(connectionId: string, solutionUniqueName: string): Promise<string> {
+  const res = await callNative<{ ExportSolutionFile: string }>(
+    "dataverse.request",
+    {
+      connectionId,
+      method: "POST",
+      path: "ExportSolution",
+      body: { SolutionName: solutionUniqueName, Managed: false },
+    },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
+  return res.ExportSolutionFile;
+}
+
+/** Re-imports the (edited) unmanaged solution zip. Generates the ImportJobId client-side so the
+ *  caller can poll for real completion via waitForImportJobCompletion even if this call's own
+ *  timeout fires while the import keeps running server-side — see the timeout-swallowing logic
+ *  below. OverwriteUnmanagedCustomizations:true matters concretely for this tool: every "Save"
+ *  re-imports the same solution, and without it a second/later save could silently no-op instead
+ *  of applying. */
+export async function importSolutionZip(connectionId: string, zipBase64: string): Promise<string> {
+  const importJobId = crypto.randomUUID();
+  try {
+    await callNative(
+      "dataverse.request",
+      {
+        connectionId,
+        method: "POST",
+        path: "ImportSolution",
+        body: {
+          CustomizationFile: zipBase64,
+          ImportJobId: importJobId,
+          OverwriteUnmanagedCustomizations: true,
+          PublishWorkflows: false,
+        },
+      },
+      { timeoutMs: LONG_TIMEOUT_MS },
+    );
+  } catch (err) {
+    const isBridgeTimeout = err instanceof Error && err.message.includes("超时");
+    if (!isBridgeTimeout) throw err;
+    // The import keeps running server-side regardless — waitForImportJobCompletion below is
+    // the real source of truth, so a client-side timeout alone isn't treated as failure here.
+  }
+  return importJobId;
+}
+
+export interface ImportJobStatus {
+  progress: number;
+  completedon: string | null;
+  data: string | null;
+}
+
+export async function pollImportJob(connectionId: string, importJobId: string): Promise<ImportJobStatus> {
+  return fetchDataverse<ImportJobStatus>(
+    connectionId,
+    `importjobs(${importJobId})?$select=progress,completedon,data`,
+  );
+}
+
+export async function waitForImportJobCompletion(
+  connectionId: string,
+  importJobId: string,
+  { pollIntervalMs = 3000, maxWaitMs = 300_000 }: { pollIntervalMs?: number; maxWaitMs?: number } = {},
+): Promise<ImportJobStatus> {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const status = await pollImportJob(connectionId, importJobId);
+    if (status.completedon) return status;
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  throw new Error("等待导入完成超时（5 分钟），请去 Solutions 的导入历史里手动确认结果。");
+}
+
+export async function publishEntity(connectionId: string, logicalName: string): Promise<void> {
+  const parameterXml = `<importexportxml><entities><entity>${logicalName}</entity></entities></importexportxml>`;
+  await callNative(
+    "dataverse.request",
+    { connectionId, method: "POST", path: "PublishXml", body: { ParameterXml: parameterXml } },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
+}

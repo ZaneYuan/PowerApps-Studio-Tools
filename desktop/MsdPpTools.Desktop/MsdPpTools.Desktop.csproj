@@ -12,6 +12,17 @@
     <PackageReference Include="Microsoft.Identity.Client" Version="4.87.0" />
     <PackageReference Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.87.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
+    <PackageReference Include="System.Reflection.MetadataLoadContext" Version="10.0.0" />
+    <!-- Not compiled/linked against — restored purely so Microsoft.Xrm.Sdk.dll (needed to
+         resolve the IPlugin interface inside MetadataLoadContext) is on disk at build time.
+         See Plugins/PluginAssemblyInspector.cs. -->
+    <PackageReference Include="Microsoft.CrmSdk.CoreAssemblies" Version="9.0.2.60" ExcludeAssets="all" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(PkgMicrosoft_CrmSdk_CoreAssemblies)\lib\net462\Microsoft.Xrm.Sdk.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="ReferenceAssemblies\Microsoft.Xrm.Sdk.dll" />
   </ItemGroup>
 
 </Project>

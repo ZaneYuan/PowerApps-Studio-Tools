@@ -11,7 +11,10 @@ namespace MsdPpTools.Desktop.Bridge;
 /// fetches Dataverse directly, which is what sidesteps its per-environment CORS allow-list.</summary>
 public sealed class DataverseApiClient
 {
-    private static readonly HttpClient Http = new();
+    // Default HttpClient timeout is 100s. Solution export/import (Ribbon Workbench) can run
+    // longer than that on a real org — without this, the request gets aborted here right as
+    // the JS-side caller's own (longer, explicitly-opted-in) timeout is still waiting on it.
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
 
     private readonly AuthService _authService;
     private readonly ConnectionStore _store;
@@ -34,6 +37,10 @@ public sealed class DataverseApiClient
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.Add("OData-MaxVersion", "4.0");
         request.Headers.Add("OData-Version", "4.0");
+        // Without this, POST creates return 204 + empty body (new id only in the OData-EntityId
+        // response header). Plugin Registration needs the created record's id back inline to
+        // chain the next create, so ask Dataverse to return the full representation instead.
+        request.Headers.Add("Prefer", "return=representation");
 
         if (body.HasValue)
         {

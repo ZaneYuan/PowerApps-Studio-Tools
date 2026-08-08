@@ -27,4 +27,5 @@ dist-ssr
 bin/
 obj/
 *.user
+.vs/
 

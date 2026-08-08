@@ -60,11 +60,11 @@ export function toDiffLines(oldText: string, newText: string): DiffLine[] {
   return lines;
 }
 
-function findChild(el: Element, tag: string): Element | undefined {
+export function findChild(el: Element, tag: string): Element | undefined {
   return Array.from(el.children).find((c) => c.tagName.toLowerCase() === tag);
 }
 
-function findChildren(el: Element, tag: string): Element[] {
+export function findChildren(el: Element, tag: string): Element[] {
   return Array.from(el.children).filter((c) => c.tagName.toLowerCase() === tag);
 }
 

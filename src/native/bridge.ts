@@ -25,6 +25,7 @@ export function isNativeBridgeAvailable(): boolean {
 export function callNative<T = unknown>(
   method: string,
   params: Record<string, unknown> = {},
+  options: { timeoutMs?: number } = {},
 ): Promise<T> {
   const bridge = window.chrome?.webview;
   if (!bridge) {
@@ -32,6 +33,7 @@ export function callNative<T = unknown>(
   }
 
   const id = crypto.randomUUID();
+  const timeoutMs = options.timeoutMs ?? NATIVE_CALL_TIMEOUT_MS;
 
   return new Promise<T>((resolve, reject) => {
     const onMessage = (event: MessageEvent<WebView2Message>) => {
@@ -48,7 +50,7 @@ export function callNative<T = unknown>(
     const timeoutId = setTimeout(() => {
       bridge.removeEventListener("message", onMessage);
       reject(new Error(`调用 "${method}" 超时`));
-    }, NATIVE_CALL_TIMEOUT_MS);
+    }, timeoutMs);
 
     bridge.addEventListener("message", onMessage);
     bridge.postMessage({ id, method, params });
