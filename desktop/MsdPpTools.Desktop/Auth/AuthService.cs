@@ -10,23 +10,30 @@ public sealed class AuthService
 {
     // ApplicationUser1 (zane-yuan tenant) — "Mobile and desktop applications" platform with
     // redirect URI http://localhost, "Allow public client flows" enabled. See 技术设计方案.md.
-    private const string InteractiveClientId = "490264e0-fa67-4eb2-ae24-0a4a918de366";
+    // Only a fallback now — a public-client app registration only exists (and is consentable)
+    // in the tenant it was created in, so this default only works for accounts in that one
+    // tenant. Any other tenant needs its own registration; each connection can override
+    // ClientId/TenantId to point at it (see AcquireInteractiveTokenAsync below).
+    private const string DefaultInteractiveClientId = "490264e0-fa67-4eb2-ae24-0a4a918de366";
 
-    // /organizations lets any work/school account from any tenant sign in — requires the app
-    // registration itself to be set to multi-tenant ("Accounts in any organizational
-    // directory") in Entra, and Dynamics CRM API permission consented in each tenant that
-    // signs in. (Previously hardcoded to one specific tenant's authority, which is why this
-    // was AADSTS50194 with /common — a genuinely single-tenant app rejects that endpoint. Now
-    // that the app itself is multi-tenant, /organizations is the correct — not "common" —
-    // choice: it excludes personal Microsoft accounts, which Dataverse never accepts anyway.)
-    private const string InteractiveAuthority = "https://login.microsoftonline.com/organizations";
+    // /organizations lets any work/school account from any tenant *that has consented to the
+    // app* sign in. This is only reachable when ClientId/TenantId aren't overridden per
+    // connection — with no TenantId override, AAD resolves the app registration in the
+    // *signed-in user's own* tenant, which fails with AADSTS700016 unless that tenant has
+    // consented to (or itself owns) the app. Prefer setting a connection's own TenantId once
+    // you have a client id registered in that tenant.
+    private const string DefaultInteractiveAuthority = "https://login.microsoftonline.com/organizations";
 
     private static readonly string CacheDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MsdPpTools", "msal_cache");
 
     private readonly ConnectionStore _store;
     private readonly Dictionary<string, TokenResult> _tokenCache = new();
-    private IPublicClientApplication? _publicClientApp;
+    // Keyed by "{clientId}|{authority}" — different connections can point at different app
+    // registrations/tenants now, so this can no longer be a single shared instance. All
+    // instances still share the same on-disk MSAL cache file; MSAL partitions it internally
+    // by client id/authority/account, so this is safe.
+    private readonly Dictionary<string, IPublicClientApplication> _publicClientApps = new();
 
     public AuthService(ConnectionStore store)
     {
@@ -49,7 +56,7 @@ public sealed class AuthService
 
         var token = connection.AuthType switch
         {
-            ConnectionAuthType.Interactive => await AcquireInteractiveTokenAsync(connection.EnvironmentUrl),
+            ConnectionAuthType.Interactive => await AcquireInteractiveTokenAsync(connection),
             ConnectionAuthType.ClientSecret => await AcquireClientSecretTokenAsync(connection),
             ConnectionAuthType.Certificate => await AcquireCertificateTokenAsync(connection),
             _ => throw new NotSupportedException($"不支持的认证方式: {connection.AuthType}"),
@@ -59,15 +66,59 @@ public sealed class AuthService
         return token;
     }
 
-    private async Task<IPublicClientApplication> GetPublicClientAppAsync()
+    /// <summary>Direct username/password sign-in (no browser popup) — mirrors the classic XRM
+    /// "Microsoft Login Control" username/password fields. Only works for accounts *without*
+    /// MFA/Conditional Access; those throw MsalUiRequiredException from MSAL, which is
+    /// translated into a message pointing back at the normal interactive login. Credentials are
+    /// used for this one token acquisition only and never persisted anywhere.</summary>
+    public async Task<TokenResult> LoginWithUsernamePasswordAsync(string connectionId, string username, string password)
     {
-        if (_publicClientApp is not null)
+        var connection = _store.FindById(connectionId)
+            ?? throw new InvalidOperationException("找不到该连接，可能已被删除。");
+        if (connection.AuthType != ConnectionAuthType.Interactive)
         {
-            return _publicClientApp;
+            throw new InvalidOperationException("只有交互式登录类型的连接支持用户名密码直接登录。");
         }
 
-        var app = PublicClientApplicationBuilder.Create(InteractiveClientId)
-            .WithAuthority(InteractiveAuthority)
+        var (clientId, authority) = ResolveInteractiveClientAndAuthority(connection);
+        var app = await GetPublicClientAppAsync(clientId, authority);
+        var scopes = new[] { $"{connection.EnvironmentUrl.TrimEnd('/')}/.default" };
+
+        AuthenticationResult result;
+        try
+        {
+            result = await app.AcquireTokenByUsernamePassword(scopes, username, password).ExecuteAsync();
+        }
+        catch (MsalUiRequiredException ex)
+        {
+            throw new InvalidOperationException(
+                "这个账号需要 MFA / 条件访问，用户名密码直接登录不支持——请改用普通的\"登录 + WhoAmI\"（会弹出浏览器完成 MFA）。", ex);
+        }
+
+        var token = new TokenResult { AccessToken = result.AccessToken, ExpiresOn = result.ExpiresOn };
+        _tokenCache[connectionId] = token;
+        return token;
+    }
+
+    private static (string ClientId, string Authority) ResolveInteractiveClientAndAuthority(Connection connection)
+    {
+        var clientId = string.IsNullOrEmpty(connection.ClientId) ? DefaultInteractiveClientId : connection.ClientId;
+        var authority = string.IsNullOrEmpty(connection.TenantId)
+            ? DefaultInteractiveAuthority
+            : $"https://login.microsoftonline.com/{connection.TenantId}";
+        return (clientId, authority);
+    }
+
+    private async Task<IPublicClientApplication> GetPublicClientAppAsync(string clientId, string authority)
+    {
+        var key = $"{clientId}|{authority}";
+        if (_publicClientApps.TryGetValue(key, out var existing))
+        {
+            return existing;
+        }
+
+        var app = PublicClientApplicationBuilder.Create(clientId)
+            .WithAuthority(authority)
             .WithRedirectUri("http://localhost")
             .Build();
 
@@ -76,14 +127,15 @@ public sealed class AuthService
         var cacheHelper = await MsalCacheHelper.CreateAsync(storageProperties);
         cacheHelper.RegisterCache(app.UserTokenCache);
 
-        _publicClientApp = app;
+        _publicClientApps[key] = app;
         return app;
     }
 
-    private async Task<TokenResult> AcquireInteractiveTokenAsync(string environmentUrl)
+    private async Task<TokenResult> AcquireInteractiveTokenAsync(Connection connection)
     {
-        var app = await GetPublicClientAppAsync();
-        var scopes = new[] { $"{environmentUrl.TrimEnd('/')}/.default" };
+        var (clientId, authority) = ResolveInteractiveClientAndAuthority(connection);
+        var app = await GetPublicClientAppAsync(clientId, authority);
+        var scopes = new[] { $"{connection.EnvironmentUrl.TrimEnd('/')}/.default" };
 
         AuthenticationResult result;
         var accounts = await app.GetAccountsAsync();

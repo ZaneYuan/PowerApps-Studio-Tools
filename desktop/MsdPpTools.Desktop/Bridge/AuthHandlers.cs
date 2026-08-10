@@ -7,18 +7,25 @@ namespace MsdPpTools.Desktop.Bridge;
 /// ever learns whether login succeeded; DataverseApiClient fetches the token natively.</summary>
 public static class AuthHandlers
 {
-    private sealed class ConnectionIdParams
+    private sealed class LoginParams
     {
         public string ConnectionId { get; set; } = "";
+        // Optional — when both are present, logs in via MSAL's username/password flow instead
+        // of the normal silent-then-interactive-popup flow. Never persisted; used only for this
+        // one token acquisition. See AuthService.LoginWithUsernamePasswordAsync.
+        public string? Username { get; set; }
+        public string? Password { get; set; }
     }
 
     public static void Register(NativeBridge bridge, AuthService authService)
     {
         bridge.Register("auth.login", async @params =>
         {
-            var input = @params.Deserialize<ConnectionIdParams>(NativeBridge.JsonOptions)
+            var input = @params.Deserialize<LoginParams>(NativeBridge.JsonOptions)
                 ?? throw new ArgumentException("缺少 connectionId");
-            var token = await authService.GetTokenAsync(input.ConnectionId);
+            var token = !string.IsNullOrEmpty(input.Username) && !string.IsNullOrEmpty(input.Password)
+                ? await authService.LoginWithUsernamePasswordAsync(input.ConnectionId, input.Username, input.Password)
+                : await authService.GetTokenAsync(input.ConnectionId);
             return new { success = true, expiresOn = token.ExpiresOn };
         });
     }

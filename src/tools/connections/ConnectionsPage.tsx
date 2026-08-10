@@ -43,6 +43,14 @@ interface ConnectionStatus {
   error?: string;
 }
 
+interface PasswordLoginState {
+  open: boolean;
+  username: string;
+  password: string;
+}
+
+const emptyPasswordLogin: PasswordLoginState = { open: false, username: "", password: "" };
+
 export default function ConnectionsPage() {
   const available = isNativeBridgeAvailable();
   const { connections, refreshConnections } = useActiveConnection();
@@ -51,6 +59,7 @@ export default function ConnectionsPage() {
   const [status, setStatus] = useState<Record<string, ConnectionStatus>>({});
   const [connectionString, setConnectionString] = useState("");
   const [connectionStringWarnings, setConnectionStringWarnings] = useState<string[]>([]);
+  const [passwordLogin, setPasswordLogin] = useState<Record<string, PasswordLoginState>>({});
 
   async function handleAdd(e: FormEvent) {
     e.preventDefault();
@@ -103,10 +112,10 @@ export default function ConnectionsPage() {
     await refreshConnections();
   }
 
-  async function handleWhoAmI(id: string) {
+  async function handleWhoAmI(id: string, credentials?: { username: string; password: string }) {
     setStatus((s) => ({ ...s, [id]: { loading: true } }));
     try {
-      await callNative("auth.login", { connectionId: id });
+      await callNative("auth.login", { connectionId: id, ...credentials });
       const result = await callNative<Record<string, unknown>>("dataverse.request", {
         connectionId: id,
         method: "GET",
@@ -116,6 +125,17 @@ export default function ConnectionsPage() {
     } catch (err) {
       setStatus((s) => ({ ...s, [id]: { error: err instanceof Error ? err.message : String(err) } }));
     }
+  }
+
+  function togglePasswordLogin(id: string) {
+    setPasswordLogin((p) => {
+      const current = p[id] ?? emptyPasswordLogin;
+      return { ...p, [id]: { ...current, open: !current.open } };
+    });
+  }
+
+  function updatePasswordLogin(id: string, patch: Partial<PasswordLoginState>) {
+    setPasswordLogin((p) => ({ ...p, [id]: { ...(p[id] ?? emptyPasswordLogin), ...patch } }));
   }
 
   if (!available) {
@@ -154,6 +174,14 @@ export default function ConnectionsPage() {
                     >
                       {status[c.id]?.loading ? "登录并调用中…" : "登录 + WhoAmI"}
                     </button>
+                    {c.authType === "Interactive" && (
+                      <button
+                        onClick={() => togglePasswordLogin(c.id)}
+                        className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+                      >
+                        用户名密码登录
+                      </button>
+                    )}
                     <button
                       onClick={() => handleRemove(c.id)}
                       className="text-xs text-gray-400 hover:text-red-500"
@@ -162,6 +190,40 @@ export default function ConnectionsPage() {
                     </button>
                   </div>
                 </div>
+
+                {c.authType === "Interactive" && passwordLogin[c.id]?.open && (
+                  <div className="mt-2 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2 dark:border-gray-800 dark:bg-gray-950">
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      直接用用户名密码登录，不弹浏览器窗口——只对没有开启 MFA / 条件访问的账号有效，遇到 MFA 会报错提示改用上面的"登录 + WhoAmI"。密码只用于这一次登录，不会保存。
+                    </p>
+                    <input
+                      type="text"
+                      placeholder="用户名 (user@tenant.onmicrosoft.com)"
+                      value={passwordLogin[c.id]?.username ?? ""}
+                      onChange={(e) => updatePasswordLogin(c.id, { username: e.target.value })}
+                      className={inputCls}
+                    />
+                    <input
+                      type="password"
+                      placeholder="密码"
+                      value={passwordLogin[c.id]?.password ?? ""}
+                      onChange={(e) => updatePasswordLogin(c.id, { password: e.target.value })}
+                      className={inputCls}
+                    />
+                    <button
+                      onClick={() => {
+                        const cred = passwordLogin[c.id];
+                        if (cred?.username && cred.password) {
+                          void handleWhoAmI(c.id, { username: cred.username, password: cred.password });
+                        }
+                      }}
+                      disabled={status[c.id]?.loading || !passwordLogin[c.id]?.username || !passwordLogin[c.id]?.password}
+                      className="rounded-md bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {status[c.id]?.loading ? "登录并调用中…" : "用密码登录 + WhoAmI"}
+                    </button>
+                  </div>
+                )}
 
                 {status[c.id]?.error && (
                   <pre className="mt-2 overflow-x-auto rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
@@ -236,6 +298,28 @@ export default function ConnectionsPage() {
           <option value="clientSecret">Client Secret（应用身份）</option>
           <option value="certificate">证书认证（应用身份，.pfx 文件）</option>
         </select>
+
+        {form.authType === "interactive" && (
+          <>
+            <p className="text-xs text-gray-400">
+              下面两项都可以留空，留空则用默认的 App Registration（只在它所在的租户下的账号能登录成功）。如果目标环境是别的租户，需要在那个租户的 Entra 里自己注册一个"Mobile and desktop applications"类型、允许 public client flow、并且有 Dynamics CRM API 委托权限的 App Registration，把它的 Tenant ID / Client ID 填在这里。
+            </p>
+            <input
+              type="text"
+              placeholder="Tenant ID（可选，留空用默认租户）"
+              value={form.tenantId}
+              onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value }))}
+              className={inputCls}
+            />
+            <input
+              type="text"
+              placeholder="Client ID（可选，留空用默认 App Registration）"
+              value={form.clientId}
+              onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))}
+              className={inputCls}
+            />
+          </>
+        )}
 
         {form.authType === "clientSecret" && (
           <>
