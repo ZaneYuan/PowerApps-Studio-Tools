@@ -73,6 +73,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./ribbon-workbench/RibbonWorkbench")),
   },
   {
+    id: "record-explorer",
+    name: "关联记录浏览器",
+    description: "输入实体+GUID，分层展示向上两级查找字段记录、向下一级子表记录，支持模糊搜索过滤+高亮。仅桌面版可用。",
+    category: "连接",
+    icon: "🔗",
+    Component: lazy(() => import("./record-explorer/RecordExplorer")),
+  },
+  {
     id: "guid-formatter",
     name: "GUID 格式转换",
     description: "在裸 GUID、大括号 GUID、Web API key 等格式之间快速转换。",

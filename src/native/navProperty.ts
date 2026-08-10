@@ -55,3 +55,14 @@ export async function getBindNavigationProperty(
 export function clearNavPropertyCache(): void {
   cache.clear();
 }
+
+/** Exposes the cached many-to-one relationship list directly — used by Record Explorer to
+ *  resolve which entity a lookup *value* points to (via `ReferencingAttribute` →
+ *  `ReferencedEntity`) without a second metadata call, reusing the same cache
+ *  `getBindNavigationProperty` already populates for @odata.bind resolution. */
+export async function getManyToOneRelationships(
+  connectionId: string,
+  entityLogicalName: string,
+): Promise<RelationshipMeta[]> {
+  return loadManyToOne(connectionId, entityLogicalName);
+}
