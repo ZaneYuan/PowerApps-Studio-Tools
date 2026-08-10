@@ -29,3 +29,7 @@ obj/
 *.user
 .vs/
 
+# desktop shell publish output (scripts/publish-desktop.ps1)
+/publish/
+desktop/**/wwwroot/
+
