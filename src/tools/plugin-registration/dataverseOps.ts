@@ -29,7 +29,7 @@ export async function fetchAssemblies(connectionId: string): Promise<PluginAssem
 export async function fetchPluginTypes(connectionId: string, assemblyId: string): Promise<PluginType[]> {
   const res = await fetchDataverse<{ value: PluginType[] }>(
     connectionId,
-    `plugintypes?$select=plugintypeid,typename,friendlyname&$filter=_pluginassemblyid_value eq ${assemblyId}&$orderby=typename`,
+    `plugintypes?$select=plugintypeid,typename,friendlyname,name&$filter=_pluginassemblyid_value eq ${assemblyId}&$orderby=typename`,
   );
   return res.value;
 }
@@ -55,6 +55,54 @@ export async function fetchImages(connectionId: string, stepId: string): Promise
 
 export async function fetchRecordDetail(connectionId: string, collection: string, id: string): Promise<unknown> {
   return fetchDataverse<unknown>(connectionId, `${collection}(${id})`);
+}
+
+/** Targeted (not the generic unfiltered fetchRecordDetail) — this is the single source for both
+ *  the Step detail table and the edit dialog's pre-fill, so message/entity are resolved to
+ *  readable names via $expand instead of showing raw GUIDs, while still carrying the raw
+ *  `_eventhandler_value`/`_..._value` fields the existing cascade-delete/enable-toggle logic
+ *  reads via lookupValue(). */
+export interface StepDetail {
+  sdkmessageprocessingstepid: string;
+  name: string;
+  stage: number;
+  mode: number;
+  rank: number;
+  statecode: number;
+  statuscode: number;
+  filteringattributes: string | null;
+  configuration: string | null;
+  supporteddeployment: number;
+  sdkmessageid?: { name: string } | null;
+  sdkmessagefilterid?: { primaryobjecttypecode: string } | null;
+  _eventhandler_value?: string | null;
+  _sdkmessageprocessingstepsecureconfigid_value?: string | null;
+}
+
+export async function fetchStepDetail(connectionId: string, stepId: string): Promise<StepDetail> {
+  return fetchDataverse<StepDetail>(
+    connectionId,
+    `sdkmessageprocessingsteps(${stepId})` +
+      `?$select=name,stage,mode,rank,statecode,statuscode,filteringattributes,configuration,supporteddeployment,eventhandler,sdkmessageprocessingstepsecureconfigid` +
+      `&$expand=sdkmessageid($select=name),sdkmessagefilterid($select=primaryobjecttypecode)`,
+  );
+}
+
+export interface ImageDetail {
+  sdkmessageprocessingstepimageid: string;
+  name: string;
+  entityalias: string;
+  imagetype: number;
+  messagepropertyname: string;
+  attributes1: string | null;
+  _sdkmessageprocessingstepid_value?: string | null;
+}
+
+export async function fetchImageDetail(connectionId: string, imageId: string): Promise<ImageDetail> {
+  return fetchDataverse<ImageDetail>(
+    connectionId,
+    `sdkmessageprocessingstepimages(${imageId})?$select=name,entityalias,imagetype,messagepropertyname,attributes1,sdkmessageprocessingstepid`,
+  );
 }
 
 export interface SdkMessage {
@@ -175,6 +223,79 @@ export async function registerImage(connectionId: string, input: RegisterImageIn
     messagepropertyname: input.messagePropertyName,
     attributes1: input.attributes,
     [`${stepNav}@odata.bind`]: `/sdkmessageprocessingsteps(${input.stepId})`,
+  });
+}
+
+export interface UpdateStepInput {
+  name: string;
+  stage: number;
+  mode: number;
+  rank: number;
+  filteringAttributes: string;
+  unsecureConfig: string;
+  /** Empty string = leave the existing secure config record untouched (its value is never
+   *  re-fetched/pre-filled into the edit form). Non-empty either updates the existing secure
+   *  config record or creates+binds a new one if the step didn't have one yet. */
+  secureConfig: string;
+  deployment: number;
+}
+
+/** Editing an existing Step is scoped to its configuration — message/primary entity binding is
+ *  left alone (Dataverse allows changing it via PATCH, but re-pointing a step at a different
+ *  message/entity is unusual enough that delete-and-recreate is the clearer, safer path). */
+export async function updateStep(connectionId: string, stepId: string, input: UpdateStepInput): Promise<void> {
+  await patchDataverse(connectionId, `sdkmessageprocessingsteps(${stepId})`, {
+    name: input.name,
+    stage: input.stage,
+    mode: input.mode,
+    rank: input.rank,
+    filteringattributes: input.filteringAttributes,
+    configuration: input.unsecureConfig,
+    supporteddeployment: input.deployment,
+  });
+
+  if (!input.secureConfig.trim()) return;
+
+  const existing = await fetchDataverse<{ _sdkmessageprocessingstepsecureconfigid_value?: string | null }>(
+    connectionId,
+    `sdkmessageprocessingsteps(${stepId})?$select=sdkmessageprocessingstepsecureconfigid`,
+  );
+  const existingId = existing._sdkmessageprocessingstepsecureconfigid_value;
+  if (existingId) {
+    await patchDataverse(connectionId, `sdkmessageprocessingstepsecureconfigs(${existingId})`, {
+      value: input.secureConfig,
+    });
+  } else {
+    const secureConfigNav = await getBindNavigationProperty(
+      connectionId,
+      "sdkmessageprocessingstep",
+      "sdkmessageprocessingstepsecureconfigid",
+    );
+    const created = await postDataverse<{ sdkmessageprocessingstepsecureconfigid: string }>(
+      connectionId,
+      "sdkmessageprocessingstepsecureconfigs",
+      { value: input.secureConfig },
+    );
+    await patchDataverse(connectionId, `sdkmessageprocessingsteps(${stepId})`, {
+      [`${secureConfigNav}@odata.bind`]: `/sdkmessageprocessingstepsecureconfigs(${created.sdkmessageprocessingstepsecureconfigid})`,
+    });
+  }
+}
+
+export interface UpdateImageInput {
+  alias: string;
+  imageType: number;
+  messagePropertyName: string;
+  attributes: string;
+}
+
+export async function updateImage(connectionId: string, imageId: string, input: UpdateImageInput): Promise<void> {
+  await patchDataverse(connectionId, `sdkmessageprocessingstepimages(${imageId})`, {
+    name: input.alias,
+    entityalias: input.alias,
+    imagetype: input.imageType,
+    messagepropertyname: input.messagePropertyName,
+    attributes1: input.attributes,
   });
 }
 

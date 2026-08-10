@@ -9,6 +9,7 @@ export interface PluginType {
   plugintypeid: string;
   typename: string;
   friendlyname: string | null;
+  name: string | null;
 }
 
 export interface SdkMessageRef {

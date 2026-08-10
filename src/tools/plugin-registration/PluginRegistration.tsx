@@ -10,14 +10,25 @@ import {
   deleteImage,
   deleteStepCascade,
   deleteTypeCascade,
+  fetchImageDetail,
   fetchRecordDetail,
+  fetchStepDetail,
   setStepEnabled,
 } from "./dataverseOps";
-import { COLLECTION_BY_KIND, nodeKey, type TreeNodeKind } from "./types";
+import {
+  COLLECTION_BY_KIND,
+  DEPLOYMENT_LABELS,
+  IMAGE_TYPE_LABELS,
+  MODE_LABELS,
+  STAGE_LABELS,
+  STEP_STATE_LABELS,
+  nodeKey,
+  type TreeNodeKind,
+} from "./types";
 
 type DialogState =
-  | { kind: "step"; pluginTypeId: string; pluginTypeName: string }
-  | { kind: "image"; stepId: string }
+  | { kind: "step"; pluginTypeId: string; pluginTypeName: string; editStepId?: string }
+  | { kind: "image"; stepId: string; messageName: string; primaryEntity: string | null; editImageId?: string }
   | { kind: "assembly"; existingAssemblyId?: string }
   | null;
 
@@ -26,6 +37,67 @@ function lookupValue(detail: unknown, attribute: string): string | null {
   if (!detail || typeof detail !== "object") return null;
   const value = (detail as Record<string, unknown>)[`_${attribute}_value`];
   return typeof value === "string" ? value : null;
+}
+
+function fmt(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "boolean") return v ? "是" : "否";
+  return String(v);
+}
+
+/** Curated label/value rows for the detail table — picks the fields worth showing per node
+ *  kind instead of dumping the entire raw record, and translates the numeric enum fields
+ *  (stage/mode/deployment/state/image type) into their labels. */
+function detailRows(kind: TreeNodeKind, detail: unknown): { label: string; value: string }[] {
+  if (!detail || typeof detail !== "object") return [];
+  const d = detail as Record<string, unknown>;
+  switch (kind) {
+    case "assembly":
+      return [
+        { label: "Name", value: fmt(d.name) },
+        { label: "Version", value: fmt(d.version) },
+        { label: "Culture", value: fmt(d.culture) },
+        { label: "Public Key Token", value: fmt(d.publickeytoken) },
+        { label: "Is Managed", value: fmt(d.ismanaged) },
+        { label: "Created On", value: fmt(d.createdon) },
+        { label: "Modified On", value: fmt(d.modifiedon) },
+      ];
+    case "type":
+      return [
+        { label: "Friendly Name", value: fmt(d.friendlyname) },
+        { label: "Name", value: fmt(d.name) },
+        { label: "Type Name", value: fmt(d.typename) },
+        { label: "Created On", value: fmt(d.createdon) },
+        { label: "Modified On", value: fmt(d.modifiedon) },
+      ];
+    case "step": {
+      const message = (d.sdkmessageid as { name?: string } | null)?.name;
+      const entity = (d.sdkmessagefilterid as { primaryobjecttypecode?: string } | null)?.primaryobjecttypecode;
+      return [
+        { label: "Name", value: fmt(d.name) },
+        { label: "Message", value: fmt(message) },
+        { label: "主实体", value: entity ? entity : "（不限）" },
+        { label: "Stage", value: STAGE_LABELS[d.stage as number] ?? fmt(d.stage) },
+        { label: "Mode", value: MODE_LABELS[d.mode as number] ?? fmt(d.mode) },
+        { label: "Rank", value: fmt(d.rank) },
+        { label: "Deployment", value: DEPLOYMENT_LABELS[d.supporteddeployment as number] ?? fmt(d.supporteddeployment) },
+        { label: "状态", value: STEP_STATE_LABELS[d.statecode as number] ?? fmt(d.statecode) },
+        { label: "Filtering Attributes", value: fmt(d.filteringattributes) },
+        { label: "Unsecure Configuration", value: fmt(d.configuration) },
+        { label: "有 Secure Configuration", value: d._sdkmessageprocessingstepsecureconfigid_value ? "是" : "否" },
+      ];
+    }
+    case "image":
+      return [
+        { label: "Name", value: fmt(d.name) },
+        { label: "Entity Alias", value: fmt(d.entityalias) },
+        { label: "Image Type", value: IMAGE_TYPE_LABELS[d.imagetype as number] ?? fmt(d.imagetype) },
+        { label: "Message Property Name", value: fmt(d.messagepropertyname) },
+        { label: "Attributes", value: fmt(d.attributes1) },
+      ];
+    default:
+      return [];
+  }
 }
 
 export default function PluginRegistration() {
@@ -46,7 +118,15 @@ export default function PluginRegistration() {
     setDetailLoading(true);
     setDetailError(null);
     try {
-      const data = await fetchRecordDetail(activeConnectionId, COLLECTION_BY_KIND[kind], id);
+      // Step/Image use a targeted $select+$expand (resolves Message/Primary Entity to readable
+      // names instead of raw GUIDs) — Assembly/Type stay on the generic unfiltered fetch since
+      // they don't have confusing lookups worth resolving.
+      const data =
+        kind === "step"
+          ? await fetchStepDetail(activeConnectionId, id)
+          : kind === "image"
+            ? await fetchImageDetail(activeConnectionId, id)
+            : await fetchRecordDetail(activeConnectionId, COLLECTION_BY_KIND[kind], id);
       setDetail(data);
     } catch (err) {
       setDetailError(err instanceof Error ? err.message : String(err));
@@ -60,6 +140,14 @@ export default function PluginRegistration() {
     setDetail(null);
     setActionError(null);
     void loadDetail(kind, id);
+  }
+
+  function handleEditStep(stepId: string, pluginTypeId: string, pluginTypeName: string) {
+    setDialog({ kind: "step", pluginTypeId, pluginTypeName, editStepId: stepId });
+  }
+
+  function handleEditImage(imageId: string, stepId: string) {
+    setDialog({ kind: "image", stepId, messageName: "", primaryEntity: null, editImageId: imageId });
   }
 
   async function handleToggleStepEnabled(enable: boolean) {
@@ -176,7 +264,9 @@ export default function PluginRegistration() {
         onSelect={handleSelect}
         onAddAssembly={() => setDialog({ kind: "assembly" })}
         onAddStep={(pluginTypeId, pluginTypeName) => setDialog({ kind: "step", pluginTypeId, pluginTypeName })}
-        onAddImage={(stepId) => setDialog({ kind: "image", stepId })}
+        onAddImage={(stepId, messageName, primaryEntity) => setDialog({ kind: "image", stepId, messageName, primaryEntity })}
+        onEditStep={handleEditStep}
+        onEditImage={handleEditImage}
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-auto rounded-lg border border-gray-200 p-3 dark:border-gray-800">
@@ -199,6 +289,28 @@ export default function PluginRegistration() {
                 className="rounded-md border border-amber-300 px-3 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-900/20"
               >
                 {stepEnabled ? "停用 Step" : "启用 Step"}
+              </button>
+            )}
+            {selected.kind === "step" && (
+              <button
+                onClick={() => {
+                  const pluginTypeId = lookupValue(detail, "eventhandler");
+                  if (pluginTypeId) handleEditStep(selected.id, pluginTypeId, "");
+                }}
+                className="rounded-md border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                编辑（或双击树节点）
+              </button>
+            )}
+            {selected.kind === "image" && (
+              <button
+                onClick={() => {
+                  const stepId = lookupValue(detail, "sdkmessageprocessingstepid");
+                  if (stepId) handleEditImage(selected.id, stepId);
+                }}
+                className="rounded-md border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                编辑（或双击树节点）
               </button>
             )}
             <button
@@ -235,9 +347,20 @@ export default function PluginRegistration() {
         {selected && detailLoading && <p className="text-xs text-gray-400">加载详情…</p>}
         {selected && detailError && <p className="text-xs text-red-600 dark:text-red-400">{detailError}</p>}
         {selected && detail !== null && !detailLoading && (
-          <pre className="overflow-auto text-xs text-gray-700 dark:text-gray-300">
-            {JSON.stringify(detail, null, 2)}
-          </pre>
+          <div className="overflow-auto">
+            <table className="w-full max-w-2xl text-left text-sm">
+              <tbody>
+                {detailRows(selected.kind, detail).map((row) => (
+                  <tr key={row.label} className="border-t border-gray-100 dark:border-gray-800">
+                    <td className="w-48 px-2 py-1.5 align-top text-xs font-medium text-gray-500 dark:text-gray-400">
+                      {row.label}
+                    </td>
+                    <td className="break-all px-2 py-1.5 text-xs text-gray-900 dark:text-gray-100">{row.value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
@@ -246,9 +369,13 @@ export default function PluginRegistration() {
           connectionId={activeConnectionId}
           pluginTypeId={dialog.pluginTypeId}
           pluginTypeName={dialog.pluginTypeName}
+          editStepId={dialog.editStepId}
           onClose={() => setDialog(null)}
-          onRegistered={() => {
+          onSaved={() => {
             treeRef.current?.invalidateChildrenOf("type", dialog.pluginTypeId);
+            if (dialog.editStepId && selected?.kind === "step" && selected.id === dialog.editStepId) {
+              void loadDetail("step", selected.id);
+            }
             setDialog(null);
           }}
         />
@@ -257,9 +384,15 @@ export default function PluginRegistration() {
         <ImageRegisterDialog
           connectionId={activeConnectionId}
           stepId={dialog.stepId}
+          messageName={dialog.messageName}
+          primaryEntity={dialog.primaryEntity}
+          editImageId={dialog.editImageId}
           onClose={() => setDialog(null)}
-          onRegistered={() => {
+          onSaved={() => {
             treeRef.current?.invalidateChildrenOf("step", dialog.stepId);
+            if (dialog.editImageId && selected?.kind === "image" && selected.id === dialog.editImageId) {
+              void loadDetail("image", selected.id);
+            }
             setDialog(null);
           }}
         />

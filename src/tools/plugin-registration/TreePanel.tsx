@@ -27,7 +27,9 @@ interface TreePanelProps {
   onSelect: (kind: TreeNodeKind, id: string) => void;
   onAddAssembly: () => void;
   onAddStep: (pluginTypeId: string, pluginTypeName: string) => void;
-  onAddImage: (stepId: string) => void;
+  onAddImage: (stepId: string, messageName: string, primaryEntity: string | null) => void;
+  onEditStep: (stepId: string, pluginTypeId: string, pluginTypeName: string) => void;
+  onEditImage: (imageId: string, stepId: string) => void;
 }
 
 const rowBase =
@@ -39,7 +41,7 @@ function Caret({ open }: { open: boolean }) {
 }
 
 const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel(
-  { connectionId, selectedKey, onSelect, onAddAssembly, onAddStep, onAddImage },
+  { connectionId, selectedKey, onSelect, onAddAssembly, onAddStep, onAddImage, onEditStep, onEditImage },
   ref,
 ) {
   const [assemblies, setAssemblies] = useState<PluginAssembly[] | null>(null);
@@ -198,7 +200,7 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                               onClick={() => onSelect("type", t.plugintypeid)}
                               title={t.typename}
                             >
-                              🧩 {t.friendlyname || t.typename}
+                              🧩 {t.friendlyname || t.name || t.typename}
                             </button>
                             <button
                               onClick={() => onAddStep(t.plugintypeid, t.friendlyname || t.typename)}
@@ -231,7 +233,10 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                                       <button
                                         className="min-w-0 flex-1 truncate text-left"
                                         onClick={() => onSelect("step", s.sdkmessageprocessingstepid)}
-                                        title={s.name}
+                                        onDoubleClick={() =>
+                                          onEditStep(s.sdkmessageprocessingstepid, t.plugintypeid, t.friendlyname || t.name || t.typename)
+                                        }
+                                        title={`${s.name}（双击编辑）`}
                                       >
                                         ⚙️ {s.sdkmessageid?.name ?? "?"}
                                         {entity ? `(${entity})` : ""} · {STAGE_LABELS[s.stage] ?? s.stage} ·{" "}
@@ -243,7 +248,9 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                                         )}
                                       </button>
                                       <button
-                                        onClick={() => onAddImage(s.sdkmessageprocessingstepid)}
+                                        onClick={() =>
+                                          onAddImage(s.sdkmessageprocessingstepid, s.sdkmessageid?.name ?? "", entity ?? null)
+                                        }
                                         className="shrink-0 px-1 text-xs text-blue-500 hover:underline"
                                         title="注册 Image"
                                       >
@@ -268,7 +275,10 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                                               <button
                                                 className={`${rowBase} ${selectedKey === iKey ? rowSelected : ""}`}
                                                 onClick={() => onSelect("image", img.sdkmessageprocessingstepimageid)}
-                                                title={img.name}
+                                                onDoubleClick={() =>
+                                                  onEditImage(img.sdkmessageprocessingstepimageid, s.sdkmessageprocessingstepid)
+                                                }
+                                                title={`${img.name}（双击编辑）`}
                                               >
                                                 <span className="inline-block w-3 shrink-0" />
                                                 🖼️ {img.entityalias}{" "}
