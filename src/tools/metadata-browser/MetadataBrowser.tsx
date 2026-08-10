@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import {
@@ -42,8 +42,10 @@ export default function MetadataBrowser() {
   const [tabLoading, setTabLoading] = useState(false);
   const [tabError, setTabError] = useState<string | null>(null);
 
-  const [expanded, setExpanded] = useState<{ key: string; data: unknown } | null>(null);
-  const [expandLoading, setExpandLoading] = useState<string | null>(null);
+  // Row-click "expand full JSON below" is disabled for now in favor of per-cell click-to-copy
+  // (see the table rendering below) — commented out rather than deleted in case it comes back.
+  // const [expanded, setExpanded] = useState<{ key: string; data: unknown } | null>(null);
+  // const [expandLoading, setExpandLoading] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
@@ -67,9 +69,11 @@ export default function MetadataBrowser() {
     if (!entities) return [];
     const q = entityFilter.trim().toLowerCase();
     if (!q) return entities;
-    return entities.filter(
-      (e) => e.LogicalName.toLowerCase().includes(q) || labelOf(e.DisplayName, "").toLowerCase().includes(q),
-    );
+    return entities
+      .filter((e) => e.LogicalName.toLowerCase().includes(q) || labelOf(e.DisplayName, "").toLowerCase().includes(q))
+      // Shorter names are usually the closer match (searching "quote" should surface `quote`
+      // itself before `contoso_leadquotemember`) — simple stand-in for real relevance ranking.
+      .sort((a, b) => labelOf(a.DisplayName, a.LogicalName).length - labelOf(b.DisplayName, b.LogicalName).length);
   }, [entities, entityFilter]);
 
   async function loadTab(entity: EntitySummary, tab: TabKey) {
@@ -104,35 +108,33 @@ export default function MetadataBrowser() {
     setSelectedEntity(entity);
     setActiveTab("attributes");
     setRowFilter("");
-    setExpanded(null);
     void loadTab(entity, "attributes");
   }
 
   function selectTab(tab: TabKey) {
     setActiveTab(tab);
     setRowFilter("");
-    setExpanded(null);
     if (selectedEntity) void loadTab(selectedEntity, tab);
   }
 
-  async function toggleExpand(rowKey: string, metadataId: string) {
-    if (expanded?.key === rowKey) {
-      setExpanded(null);
-      return;
-    }
-    if (!activeConnectionId || !selectedEntity) return;
-    setExpandLoading(rowKey);
-    try {
-      const collection = activeTab === "attributes" ? "Attributes" : RELATIONSHIP_COLLECTION[activeTab];
-      const path = `EntityDefinitions(LogicalName='${selectedEntity.LogicalName}')/${collection}(${metadataId})`;
-      const detail = await fetchDataverse<unknown>(activeConnectionId, path);
-      setExpanded({ key: rowKey, data: detail });
-    } catch (err) {
-      setExpanded({ key: rowKey, data: { 错误: err instanceof Error ? err.message : String(err) } });
-    } finally {
-      setExpandLoading(null);
-    }
-  }
+  // async function toggleExpand(rowKey: string, metadataId: string) {
+  //   if (expanded?.key === rowKey) {
+  //     setExpanded(null);
+  //     return;
+  //   }
+  //   if (!activeConnectionId || !selectedEntity) return;
+  //   setExpandLoading(rowKey);
+  //   try {
+  //     const collection = activeTab === "attributes" ? "Attributes" : RELATIONSHIP_COLLECTION[activeTab];
+  //     const path = `EntityDefinitions(LogicalName='${selectedEntity.LogicalName}')/${collection}(${metadataId})`;
+  //     const detail = await fetchDataverse<unknown>(activeConnectionId, path);
+  //     setExpanded({ key: rowKey, data: detail });
+  //   } catch (err) {
+  //     setExpanded({ key: rowKey, data: { 错误: err instanceof Error ? err.message : String(err) } });
+  //   } finally {
+  //     setExpandLoading(null);
+  //   }
+  // }
 
   function copyText(key: string, text: string) {
     navigator.clipboard.writeText(text);
@@ -273,63 +275,66 @@ export default function MetadataBrowser() {
                     {filteredRows.map((row) => {
                       const rowKey =
                         (row as { MetadataId: string }).MetadataId ?? JSON.stringify(row).slice(0, 40);
-                      const isExpanded = expanded?.key === rowKey;
+                      const cellCls =
+                        "cursor-pointer px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800";
+                      const relationshipDetail =
+                        activeTab === "attributes"
+                          ? ""
+                          : activeTab === "manyToMany"
+                            ? `${(row as RelationshipSummary).Entity1LogicalName} ↔ ${(row as RelationshipSummary).Entity2LogicalName}`
+                            : `${(row as RelationshipSummary).ReferencingEntity}.${(row as RelationshipSummary).ReferencingAttribute} → ${(row as RelationshipSummary).ReferencedEntity}`;
                       return (
-                        <Fragment key={rowKey}>
-                          <tr
-                            onClick={() => toggleExpand(rowKey, (row as { MetadataId: string }).MetadataId)}
-                            className="cursor-pointer border-t border-gray-100 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-900"
-                          >
-                            {activeTab === "attributes" ? (
-                              <>
-                                <td className="px-3 py-1.5 font-mono text-xs">
-                                  {(row as AttributeSummary).LogicalName}
-                                  {(row as AttributeSummary).IsPrimaryId && (
-                                    <span className="ml-1 rounded bg-gray-100 px-1 text-[10px] text-gray-500 dark:bg-gray-800">
-                                      PK
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-1.5">
-                                  {labelOf((row as AttributeSummary).DisplayName, "")}
-                                </td>
-                                <td className="px-3 py-1.5 text-xs text-gray-500">
-                                  {(row as AttributeSummary).AttributeType}
-                                </td>
-                                <td className="px-3 py-1.5 text-xs text-gray-500">
-                                  {(row as AttributeSummary).RequiredLevel?.Value ?? ""}
-                                </td>
-                                <td className="px-3 py-1.5 text-xs text-gray-500">
-                                  {(row as AttributeSummary).IsCustomAttribute ? "是" : ""}
-                                </td>
-                              </>
-                            ) : (
-                              <>
-                                <td className="px-3 py-1.5 font-mono text-xs">
-                                  {(row as RelationshipSummary).SchemaName}
-                                </td>
-                                <td className="px-3 py-1.5 text-xs text-gray-500">
-                                  {activeTab === "manyToMany"
-                                    ? `${(row as RelationshipSummary).Entity1LogicalName} ↔ ${(row as RelationshipSummary).Entity2LogicalName}`
-                                    : `${(row as RelationshipSummary).ReferencingEntity}.${(row as RelationshipSummary).ReferencingAttribute} → ${(row as RelationshipSummary).ReferencedEntity}`}
-                                </td>
-                              </>
-                            )}
-                          </tr>
-                          {isExpanded && (
-                            <tr>
-                              <td colSpan={5} className="border-t border-gray-100 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-950">
-                                {expandLoading === rowKey ? (
-                                  <span className="text-xs text-gray-400">加载详情…</span>
-                                ) : (
-                                  <pre className="max-h-64 overflow-auto text-xs text-gray-700 dark:text-gray-300">
-                                    {JSON.stringify(expanded?.data, null, 2)}
-                                  </pre>
+                        <tr key={rowKey} className="border-t border-gray-100 dark:border-gray-800">
+                          {activeTab === "attributes" ? (
+                            <>
+                              <td
+                                onClick={() => copyText(`ln-${rowKey}`, (row as AttributeSummary).LogicalName)}
+                                className={`${cellCls} font-mono text-xs`}
+                                title="点击复制 Logical Name"
+                              >
+                                {copiedKey === `ln-${rowKey}` ? "已复制" : (row as AttributeSummary).LogicalName}
+                                {(row as AttributeSummary).IsPrimaryId && (
+                                  <span className="ml-1 rounded bg-gray-100 px-1 text-[10px] text-gray-500 dark:bg-gray-800">
+                                    PK
+                                  </span>
                                 )}
                               </td>
-                            </tr>
+                              <td
+                                onClick={() => copyText(`dn-${rowKey}`, labelOf((row as AttributeSummary).DisplayName, ""))}
+                                className={cellCls}
+                                title="点击复制显示名"
+                              >
+                                {copiedKey === `dn-${rowKey}` ? "已复制" : labelOf((row as AttributeSummary).DisplayName, "")}
+                              </td>
+                              <td className="px-3 py-1.5 text-xs text-gray-500">
+                                {(row as AttributeSummary).AttributeType}
+                              </td>
+                              <td className="px-3 py-1.5 text-xs text-gray-500">
+                                {(row as AttributeSummary).RequiredLevel?.Value ?? ""}
+                              </td>
+                              <td className="px-3 py-1.5 text-xs text-gray-500">
+                                {(row as AttributeSummary).IsCustomAttribute ? "是" : ""}
+                              </td>
+                            </>
+                          ) : (
+                            <>
+                              <td
+                                onClick={() => copyText(`sn-${rowKey}`, (row as RelationshipSummary).SchemaName)}
+                                className={`${cellCls} font-mono text-xs`}
+                                title="点击复制 Schema Name"
+                              >
+                                {copiedKey === `sn-${rowKey}` ? "已复制" : (row as RelationshipSummary).SchemaName}
+                              </td>
+                              <td
+                                onClick={() => copyText(`detail-${rowKey}`, relationshipDetail)}
+                                className={`${cellCls} text-xs text-gray-500`}
+                                title="点击复制详情"
+                              >
+                                {copiedKey === `detail-${rowKey}` ? "已复制" : relationshipDetail}
+                              </td>
+                            </>
                           )}
-                        </Fragment>
+                        </tr>
                       );
                     })}
                   </tbody>
