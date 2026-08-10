@@ -4,10 +4,12 @@ import { useActiveConnection } from "../../native/activeConnection";
 import {
   exportSolutionZip,
   ensureEntityInSolution,
+  fetchSolutionEntities,
   fetchUnmanagedSolutions,
   importSolutionZip,
   publishEntity,
   waitForImportJobCompletion,
+  type SolutionEntity,
   type UnmanagedSolution,
 } from "./dataverseOps";
 import { readRibbonDiffXml, writeRibbonDiffXml } from "./ribbonXml";
@@ -34,6 +36,9 @@ export default function RibbonWorkbench() {
   const [entityName, setEntityName] = useState("");
   const [ribbonXml, setRibbonXml] = useState("");
 
+  const [solutionEntities, setSolutionEntities] = useState<SolutionEntity[] | null>(null);
+  const [solutionEntitiesError, setSolutionEntitiesError] = useState<string | null>(null);
+
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -51,6 +56,18 @@ export default function RibbonWorkbench() {
   }, [activeConnectionId]);
 
   const selectedSolution = solutions?.find((s) => s.uniquename === solutionUniqueName) ?? null;
+
+  useEffect(() => {
+    setSolutionEntities(null);
+    setSolutionEntitiesError(null);
+    setEntityName("");
+    setRibbonXml("");
+    if (!activeConnectionId || !selectedSolution) return;
+    fetchSolutionEntities(activeConnectionId, selectedSolution.solutionid)
+      .then(setSolutionEntities)
+      .catch((err) => setSolutionEntitiesError(err instanceof Error ? err.message : String(err)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConnectionId, selectedSolution?.solutionid]);
 
   async function handleLoad() {
     if (!activeConnectionId || !selectedSolution || !entityName.trim()) return;
@@ -158,7 +175,26 @@ export default function RibbonWorkbench() {
           )}
         </div>
         <div>
-          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">表 (entity logical name)</label>
+          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">表（solution 中已有的）</label>
+          {solutionEntitiesError && <p className="text-xs text-red-600 dark:text-red-400">{solutionEntitiesError}</p>}
+          <select
+            value={solutionEntities?.some((en) => en.logicalName === entityName) ? entityName : ""}
+            onChange={(e) => setEntityName(e.target.value)}
+            disabled={!selectedSolution || !solutionEntities}
+            className={`${inputCls} w-56`}
+          >
+            <option value="">
+              {!selectedSolution ? "先选 solution…" : !solutionEntities ? "加载中…" : "-- 选一张已有的表 --"}
+            </option>
+            {solutionEntities?.map((en) => (
+              <option key={en.logicalName} value={en.logicalName}>
+                {en.displayName} ({en.logicalName})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">或输入新表名（会自动加入 solution）</label>
           <input
             type="text"
             value={entityName}

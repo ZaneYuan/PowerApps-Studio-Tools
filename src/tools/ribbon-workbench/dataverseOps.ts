@@ -77,6 +77,44 @@ export async function ensureEntityInSolution(
   });
 }
 
+export interface SolutionEntity {
+  logicalName: string;
+  displayName: string;
+}
+
+/** Entity-type components (ComponentType=1) already in the solution — `objectid` on those rows
+ *  *is* the entity's MetadataId, so EntityDefinitions can be keyed by it directly instead of
+ *  needing a LogicalName round-trip. One request per component (Promise.all) rather than a
+ *  single OR-chained $filter — solutions worth editing ribbons on are rarely hundreds of tables,
+ *  and this keeps the query trivial to reason about. */
+export async function fetchSolutionEntities(connectionId: string, solutionId: string): Promise<SolutionEntity[]> {
+  const components = await fetchDataverse<{ value: { objectid: string }[] }>(
+    connectionId,
+    `solutioncomponents?$select=objectid&$filter=_solutionid_value eq ${solutionId} and componenttype eq ${ENTITY_COMPONENT_TYPE}`,
+  );
+
+  const entities = await Promise.all(
+    components.value.map(async (c): Promise<SolutionEntity | null> => {
+      try {
+        const meta = await fetchDataverse<{
+          LogicalName: string;
+          DisplayName?: { UserLocalizedLabel?: { Label: string } | null } | null;
+        }>(connectionId, `EntityDefinitions(${c.objectid})?$select=LogicalName,DisplayName`);
+        return {
+          logicalName: meta.LogicalName,
+          displayName: meta.DisplayName?.UserLocalizedLabel?.Label ?? meta.LogicalName,
+        };
+      } catch {
+        return null; // a stale/orphaned solutioncomponent row shouldn't break the whole list
+      }
+    }),
+  );
+
+  return entities
+    .filter((e): e is SolutionEntity => e !== null)
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
 export async function exportSolutionZip(connectionId: string, solutionUniqueName: string): Promise<string> {
   const res = await callNative<{ ExportSolutionFile: string }>(
     "dataverse.request",
