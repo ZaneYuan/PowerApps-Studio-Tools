@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
+import { useEntitySetName } from "../../native/useEntitySetName";
 import FilterGroupEditor from "./FilterGroupEditor";
 import LinkEntityEditor from "./LinkEntityEditor";
 import { serializeFetchXml } from "./serialize";
@@ -20,14 +21,14 @@ function naivePluralize(name: string): string {
 export default function FetchXmlBuilder() {
   const { activeConnectionId } = useActiveConnection();
   const [query, setQuery] = useState<FetchXmlQuery>(newQuery);
-  const [entitySetOverride, setEntitySetOverride] = useState("");
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
 
   const { xml, error } = useMemo(() => serializeFetchXml(query), [query]);
   const entitySetGuess = query.entityName.trim() ? naivePluralize(query.entityName.trim()) : "";
-  const entitySet = entitySetOverride || entitySetGuess;
+  const entitySetMeta = useEntitySetName(activeConnectionId, query.entityName);
+  const entitySet = entitySetMeta.entitySetName || entitySetGuess;
 
   function updateOrder(id: string, patch: Partial<{ attribute: string; descending: boolean }>) {
     setQuery((q) => ({
@@ -218,14 +219,30 @@ export default function FetchXmlBuilder() {
 
       {xml && !error && (
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-xs text-gray-500 dark:text-gray-400">Entity Set Name（猜测，可编辑）：</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            Entity Set Name（{entitySetMeta.resolved ? "已从元数据确认" : "猜测"}，可编辑覆盖）：
+          </span>
           <input
             type="text"
-            value={entitySetOverride}
-            onChange={(e) => setEntitySetOverride(e.target.value)}
-            placeholder={entitySetGuess}
+            value={entitySetMeta.override}
+            onChange={(e) => entitySetMeta.setOverride(e.target.value)}
+            placeholder={entitySetMeta.resolved ?? entitySetGuess}
             className={`${inputCls} w-40 font-mono`}
           />
+          {entitySetMeta.loading && <span className="text-xs text-gray-400">读取真实值中…</span>}
+          {entitySetMeta.resolved && !entitySetMeta.loading && (
+            <span className="text-xs text-green-600 dark:text-green-400">✓ 真实值</span>
+          )}
+          {entitySetMeta.error && !entitySetMeta.loading && (
+            <span className="text-xs text-amber-600 dark:text-amber-400" title={entitySetMeta.error}>
+              ⚠ 读取失败，已回退为猜测值
+            </span>
+          )}
+          {activeConnectionId && query.entityName.trim() && (
+            <button onClick={entitySetMeta.refresh} className="text-xs text-blue-600 hover:underline dark:text-blue-400">
+              刷新
+            </button>
+          )}
           <button
             onClick={handleRun}
             disabled={!activeConnectionId || running}

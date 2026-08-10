@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
+import { useEntitySetName } from "../../native/useEntitySetName";
 import { translateSql } from "./translate";
 
 const SAMPLE = `SELECT TOP 50 name, revenue, statecode
@@ -34,13 +35,13 @@ function OutputRow({ label, value }: { label: string; value: string | null }) {
 export default function Sql4Cds() {
   const { activeConnectionId } = useActiveConnection();
   const [sql, setSql] = useState("");
-  const [entitySetOverride, setEntitySetOverride] = useState("");
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
 
   const result = useMemo(() => translateSql(sql), [sql]);
-  const entitySet = entitySetOverride || result.entitySetGuess || "";
+  const entitySetMeta = useEntitySetName(activeConnectionId, result.entityLogicalName ?? "");
+  const entitySet = entitySetMeta.entitySetName || result.entitySetGuess || "";
 
   const queryParts = useMemo(() => {
     const parts: string[] = [];
@@ -117,14 +118,35 @@ export default function Sql4Cds() {
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className="text-gray-500 dark:text-gray-400">实体：</span>
             <code className="rounded bg-gray-100 px-2 py-0.5 dark:bg-gray-800">{result.entityLogicalName}</code>
-            <span className="text-gray-500 dark:text-gray-400">Entity Set Name（猜测，可编辑）：</span>
+            <span className="text-gray-500 dark:text-gray-400">
+              Entity Set Name（{entitySetMeta.resolved ? "已从元数据确认" : "猜测"}，可编辑覆盖）：
+            </span>
             <input
               type="text"
-              value={entitySetOverride}
-              onChange={(e) => setEntitySetOverride(e.target.value)}
-              placeholder={result.entitySetGuess ?? ""}
+              value={entitySetMeta.override}
+              onChange={(e) => entitySetMeta.setOverride(e.target.value)}
+              placeholder={entitySetMeta.resolved ?? result.entitySetGuess ?? ""}
               className="rounded-md border border-gray-300 bg-white px-2 py-1 font-mono text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
             />
+            {entitySetMeta.loading && (
+              <span className="text-xs text-gray-400">读取真实值中…</span>
+            )}
+            {entitySetMeta.resolved && !entitySetMeta.loading && (
+              <span className="text-xs text-green-600 dark:text-green-400">✓ 真实值</span>
+            )}
+            {entitySetMeta.error && !entitySetMeta.loading && (
+              <span className="text-xs text-amber-600 dark:text-amber-400" title={entitySetMeta.error}>
+                ⚠ 读取失败，已回退为猜测值
+              </span>
+            )}
+            {activeConnectionId && result.entityLogicalName && (
+              <button
+                onClick={entitySetMeta.refresh}
+                className="text-xs text-blue-600 hover:underline dark:text-blue-400"
+              >
+                刷新
+              </button>
+            )}
           </div>
 
           <OutputRow label="请求路径" value={path} />

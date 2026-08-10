@@ -1,18 +1,17 @@
 import { callNative } from "../../native/bridge";
+import { fetchEntityMeta as fetchSharedEntityMeta } from "../../native/metadataService";
 import { SCALAR_ATTRIBUTE_TYPES, type AttributeInfo, type EntityMeta } from "./types";
 
 async function fetchDataverse<T>(connectionId: string, path: string): Promise<T> {
   return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
 }
 
-/** Real EntitySetName/PrimaryIdAttribute from metadata — unlike the naive-pluralization guess
- *  used by SQL4CDS/FetchXML Builder, this is exact and works for irregular plurals too. */
+/** Real EntitySetName/PrimaryIdAttribute from the shared, cross-tool cached metadata service —
+ *  unlike the naive-pluralization guess used elsewhere, this is exact and works for irregular
+ *  plurals too. */
 export async function fetchEntityMeta(connectionId: string, logicalName: string): Promise<EntityMeta> {
-  const res = await fetchDataverse<{ EntitySetName: string; PrimaryIdAttribute: string }>(
-    connectionId,
-    `EntityDefinitions(LogicalName='${logicalName}')?$select=EntitySetName,PrimaryIdAttribute`,
-  );
-  return { entitySetName: res.EntitySetName, primaryIdAttribute: res.PrimaryIdAttribute };
+  const meta = await fetchSharedEntityMeta(connectionId, logicalName);
+  return { entitySetName: meta.entitySetName, primaryIdAttribute: meta.primaryIdAttribute };
 }
 
 export async function fetchScalarAttributes(connectionId: string, logicalName: string): Promise<AttributeInfo[]> {
