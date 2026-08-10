@@ -1,6 +1,6 @@
 import { callNative } from "../../native/bridge";
 import { fetchAttributes, fetchEntityMeta } from "../../native/metadataService";
-import { getManyToOneRelationships } from "../../native/navProperty";
+import { buildLookupRelationshipMap } from "../../native/navProperty";
 import {
   ADMIN_LOOKUP_BLACKLIST,
   isChildRelationshipRelevant,
@@ -46,13 +46,10 @@ async function withSelectRetry<T>(fields: string[], run: (fields: string[]) => P
  *  resolve without the `_value@...lookuplogicalname` annotation — those are skipped for
  *  traversal (still shown as a raw value on the record itself). */
 async function buildLookupTargetMap(connectionId: string, entityLogicalName: string): Promise<Map<string, Set<string>>> {
-  const rels = await getManyToOneRelationships(connectionId, entityLogicalName);
+  const relMap = await buildLookupRelationshipMap(connectionId, entityLogicalName);
   const map = new Map<string, Set<string>>();
-  for (const r of rels) {
-    const attr = r.ReferencingAttribute.toLowerCase();
-    const set = map.get(attr) ?? new Set<string>();
-    set.add(r.ReferencedEntity);
-    map.set(attr, set);
+  for (const [attr, rels] of relMap) {
+    map.set(attr, new Set(rels.map((r) => r.ReferencedEntity)));
   }
   return map;
 }

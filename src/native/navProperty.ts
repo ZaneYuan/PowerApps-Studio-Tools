@@ -66,3 +66,23 @@ export async function getManyToOneRelationships(
 ): Promise<RelationshipMeta[]> {
   return loadManyToOne(connectionId, entityLogicalName);
 }
+
+/** attribute logical name (lowercased) -> every ManyToOneRelationships candidate for it. More
+ *  than one entry for the same attribute means a polymorphic lookup — callers that can't
+ *  disambiguate (no `_value@...lookuplogicalname` annotation to read) should treat that as
+ *  unresolvable. Shared by Record Explorer (read-side: which entity does a populated lookup
+ *  point to) and the data migration tool (write-side: build `@odata.bind` for a lookup column). */
+export async function buildLookupRelationshipMap(
+  connectionId: string,
+  entityLogicalName: string,
+): Promise<Map<string, RelationshipMeta[]>> {
+  const rels = await loadManyToOne(connectionId, entityLogicalName);
+  const map = new Map<string, RelationshipMeta[]>();
+  for (const r of rels) {
+    const attr = r.ReferencingAttribute.toLowerCase();
+    const list = map.get(attr) ?? [];
+    list.push(r);
+    map.set(attr, list);
+  }
+  return map;
+}

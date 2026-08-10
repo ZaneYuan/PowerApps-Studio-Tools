@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
+import { downloadTextFile } from "../../native/download";
 import { labelOf } from "../metadata-browser/types";
-import { fetchEntityMeta, fetchScalarAttributes, importRow, queryRows } from "./dataverseOps";
+import { fetchEntityMeta, fetchMigratableAttributes, importRow, queryRows } from "./dataverseOps";
+import { buildImportLogText, importLogFilename, type ImportLogEntry } from "./importLog";
 import type { AttributeInfo, EntityMeta, RowImportStatus } from "./types";
 
 const inputCls =
@@ -37,6 +39,7 @@ export default function DataMigration() {
   const [targetConnectionId, setTargetConnectionId] = useState<string>("");
   const [importStatuses, setImportStatuses] = useState<Record<string, RowImportStatus>>({});
   const [importing, setImporting] = useState(false);
+  const [lastLog, setLastLog] = useState<{ filename: string; text: string } | null>(null);
 
   async function handleLoadColumns() {
     if (!activeConnectionId || !entityName.trim()) return;
@@ -50,7 +53,7 @@ export default function DataMigration() {
       const name = entityName.trim();
       const [meta, attrs] = await Promise.all([
         fetchEntityMeta(activeConnectionId, name),
-        fetchScalarAttributes(activeConnectionId, name),
+        fetchMigratableAttributes(activeConnectionId, name),
       ]);
       setEntityMeta(meta);
       setAttributes(attrs);
@@ -118,20 +121,39 @@ export default function DataMigration() {
     setImporting(true);
     const columns = Array.from(selectedColumns);
     const targetRows = (rows ?? []).filter((r) => selectedRowIds.has(rowId(r)));
+    const entityLogicalName = entityName.trim();
+    const startedAt = new Date();
+    const logEntries: ImportLogEntry[] = [];
 
     for (const row of targetRows) {
       const id = rowId(row);
       setImportStatuses((s) => ({ ...s, [id]: { state: "importing" } }));
       try {
-        await importRow(targetConnectionId, entityMeta.entitySetName, row, columns);
+        await importRow(targetConnectionId, entityLogicalName, entityMeta.entitySetName, entityMeta.primaryIdAttribute, row, columns);
         setImportStatuses((s) => ({ ...s, [id]: { state: "success" } }));
+        logEntries.push({ id, state: "success" });
       } catch (err) {
-        setImportStatuses((s) => ({
-          ...s,
-          [id]: { state: "error", error: err instanceof Error ? err.message : String(err) },
-        }));
+        const error = err instanceof Error ? err.message : String(err);
+        setImportStatuses((s) => ({ ...s, [id]: { state: "error", error } }));
+        logEntries.push({ id, state: "error", error });
       }
     }
+
+    const finishedAt = new Date();
+    const filename = importLogFilename(entityLogicalName, finishedAt);
+    const text = buildImportLogText({
+      startedAt,
+      finishedAt,
+      sourceConnectionName: connections.find((c) => c.id === activeConnectionId)?.name ?? activeConnectionId ?? "",
+      targetConnectionName: connections.find((c) => c.id === targetConnectionId)?.name ?? targetConnectionId,
+      entityLogicalName,
+      entitySetName: entityMeta.entitySetName,
+      columns,
+      entries: logEntries,
+    });
+    setLastLog({ filename, text });
+    downloadTextFile(filename, text);
+
     setImporting(false);
   }
 
@@ -164,8 +186,11 @@ export default function DataMigration() {
   return (
     <div className="flex h-[calc(100vh-8rem)] flex-col gap-3">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        从当前连接查询一张表的数据，勾选行 + 列（含主键 ID，用于保留原始记录 id），导入到任意一个已保存的连接。只支持标量字段——Lookup / Owner /
-        Customer 等关联类型字段不在可选列表里（跨环境的关联记录 id 通常对不上，v1 不处理）。
+        从当前连接查询一张表的数据，勾选行 + 列，导入到任意一个已保存的连接。**默认按 GUID 匹配更新导入**：目标环境已存在同 ID
+        记录就只更新勾选的字段，不存在就用这个 ID 新建一条——主键 ID 始终用于匹配，不用单独勾选。支持标量字段和单目标 Lookup
+        字段（按目标连接自己的 schema 解析 `@odata.bind`）——Owner / Customer / PartyList 等多态关联字段仍不支持。选 Lookup
+        字段的前提是两边环境这个字段指向的记录 ID 一致，不一致会在写入这一行时报错，不会静默出错数据。每次导入结束会自动下载一份
+        .txt 执行日志。
       </div>
 
       <div className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
@@ -215,6 +240,7 @@ export default function DataMigration() {
                 />
                 <span className="font-mono">{a.LogicalName}</span>
                 {a.IsPrimaryId && <span className="text-gray-400">(ID)</span>}
+                {a.AttributeType === "Lookup" && <span className="text-purple-500 dark:text-purple-400">(Lookup)</span>}
                 <span className="text-gray-400">{labelOf(a.DisplayName, "")}</span>
               </label>
             ))}
@@ -289,6 +315,14 @@ export default function DataMigration() {
               <span className="text-gray-500 dark:text-gray-400">
                 本次结果：成功 {summary.success} / 失败 {summary.error}（共 {summary.total}）
               </span>
+            )}
+            {lastLog && (
+              <button
+                onClick={() => downloadTextFile(lastLog.filename, lastLog.text)}
+                className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                重新下载执行日志 (.txt)
+              </button>
             )}
           </div>
 
