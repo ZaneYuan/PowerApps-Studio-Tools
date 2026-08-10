@@ -18,6 +18,29 @@ async function fetchDataverse<T>(connectionId: string, path: string): Promise<T>
   return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
 }
 
+const UNKNOWN_PROPERTY_RE = /Could not find a property named '([^']+)'/i;
+
+/** `EntityDefinitions/Attributes` metadata can list an attribute the live OData $metadata model
+ *  doesn't actually expose — seen in practice on system entities like `quote`, presumably a
+ *  metadata/EDM sync quirk in that org, not something predictable ahead of time. Rather than
+ *  fail the whole record/child fetch over one bad field, drop it from $select and retry. */
+async function withSelectRetry<T>(fields: string[], run: (fields: string[]) => Promise<T>): Promise<T> {
+  let current = fields;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await run(current);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const match = message.match(UNKNOWN_PROPERTY_RE);
+      if (!match) throw err;
+      const next = current.filter((f) => f.toLowerCase() !== match[1].toLowerCase());
+      if (next.length === current.length) throw err; // nothing removed — avoid looping forever
+      current = next;
+    }
+  }
+  throw new Error("多次尝试后仍然查询失败，可能有多个字段在这个环境的 OData 模型里不可用。");
+}
+
 /** attribute logical name (lowercased) -> set of possible ReferencedEntity values. More than
  *  one entry means a polymorphic lookup (Customer/Owner/regardingobjectid-style) we can't
  *  resolve without the `_value@...lookuplogicalname` annotation — those are skipped for
@@ -43,10 +66,10 @@ export async function fetchRecordSnapshot(
     fetchEntityMeta(connectionId, entityLogicalName),
     fetchAttributes(connectionId, entityLogicalName),
   ]);
-  const select = attributes.map((a) => a.logicalName).join(",");
-  const raw = await fetchDataverse<Record<string, unknown>>(
-    connectionId,
-    `${entityMeta.entitySetName}(${id})?$select=${select}`,
+  const raw = await withSelectRetry(
+    attributes.map((a) => a.logicalName),
+    (fields) =>
+      fetchDataverse<Record<string, unknown>>(connectionId, `${entityMeta.entitySetName}(${id})?$select=${fields.join(",")}`),
   );
 
   // Lookups come back as `_logicalname_value` — unwrap to the plain attribute name so
@@ -119,10 +142,13 @@ async function fetchChildren(connectionId: string, entityLogicalName: string, id
           fetchEntityMeta(connectionId, rel.ReferencingEntity),
           fetchAttributes(connectionId, rel.ReferencingEntity),
         ]);
-        const select = childAttributes.map((a) => a.logicalName).join(",");
-        const res = await fetchDataverse<{ value: Record<string, unknown>[] }>(
-          connectionId,
-          `${childMeta.entitySetName}?$select=${select}&$filter=${rel.ReferencingAttribute} eq ${id}&$top=${CHILD_ROW_LIMIT + 1}`,
+        const res = await withSelectRetry(
+          childAttributes.map((a) => a.logicalName),
+          (fields) =>
+            fetchDataverse<{ value: Record<string, unknown>[] }>(
+              connectionId,
+              `${childMeta.entitySetName}?$select=${fields.join(",")}&$filter=${rel.ReferencingAttribute} eq ${id}&$top=${CHILD_ROW_LIMIT + 1}`,
+            ),
         );
         const truncated = res.value.length > CHILD_ROW_LIMIT;
         const rows = res.value.slice(0, CHILD_ROW_LIMIT).map((raw) => toSnapshot(raw, rel.ReferencingEntity, childMeta.primaryNameAttribute));
