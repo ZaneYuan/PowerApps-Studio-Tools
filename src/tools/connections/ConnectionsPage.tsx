@@ -115,7 +115,12 @@ export default function ConnectionsPage() {
   async function handleWhoAmI(id: string, credentials?: { username: string; password: string }) {
     setStatus((s) => ({ ...s, [id]: { loading: true } }));
     try {
-      await callNative("auth.login", { connectionId: id, ...credentials });
+      // Interactive login needs a human to type credentials / approve MFA in the popup, which
+      // routinely takes longer than the default 30s — that default is sized for ordinary API
+      // calls. Without this override, the bridge call times out client-side while the WPF side
+      // is still legitimately waiting on the browser window, and the UI reports a misleading
+      // "timed out" instead of whatever the real outcome ends up being.
+      await callNative("auth.login", { connectionId: id, ...credentials }, { timeoutMs: 5 * 60_000 });
       const result = await callNative<Record<string, unknown>>("dataverse.request", {
         connectionId: id,
         method: "GET",
@@ -302,20 +307,24 @@ export default function ConnectionsPage() {
         {form.authType === "interactive" && (
           <>
             <p className="text-xs text-gray-400">
-              下面两项都可以留空，留空则用默认的 App Registration（只在它所在的租户下的账号能登录成功）。如果目标环境是别的租户，需要在那个租户的 Entra 里自己注册一个"Mobile and desktop applications"类型、允许 public client flow、并且有 Dynamics CRM API 委托权限的 App Registration，把它的 Tenant ID / Client ID 填在这里。
+              交互式登录需要一个在目标环境所在租户里注册好的 App Registration（"Mobile and desktop applications"平台、redirect
+              URI <code>http://localhost</code>、允许 public client flow、并已同意 Dynamics CRM API 的委托权限）——先问问这个环境的管理员是不是已经有现成的可以直接用，没有的话去
+              Entra 后台自己注册一个。这里没有默认值：不同租户各自有各自的 App Registration，同一个 Client ID 只在它注册所在的那个租户里能用。
             </p>
             <input
               type="text"
-              placeholder="Tenant ID（可选，留空用默认租户）"
+              placeholder="Tenant ID（必填，例如 contoso.onmicrosoft.com 或租户 GUID）"
               value={form.tenantId}
               onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value }))}
+              required
               className={inputCls}
             />
             <input
               type="text"
-              placeholder="Client ID（可选，留空用默认 App Registration）"
+              placeholder="Client ID（必填）"
               value={form.clientId}
               onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))}
+              required
               className={inputCls}
             />
           </>

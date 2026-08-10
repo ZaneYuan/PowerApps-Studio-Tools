@@ -8,22 +8,6 @@ namespace MsdPpTools.Desktop.Auth;
 
 public sealed class AuthService
 {
-    // ApplicationUser1 (zane-yuan tenant) — "Mobile and desktop applications" platform with
-    // redirect URI http://localhost, "Allow public client flows" enabled. See 技术设计方案.md.
-    // Only a fallback now — a public-client app registration only exists (and is consentable)
-    // in the tenant it was created in, so this default only works for accounts in that one
-    // tenant. Any other tenant needs its own registration; each connection can override
-    // ClientId/TenantId to point at it (see AcquireInteractiveTokenAsync below).
-    private const string DefaultInteractiveClientId = "490264e0-fa67-4eb2-ae24-0a4a918de366";
-
-    // /organizations lets any work/school account from any tenant *that has consented to the
-    // app* sign in. This is only reachable when ClientId/TenantId aren't overridden per
-    // connection — with no TenantId override, AAD resolves the app registration in the
-    // *signed-in user's own* tenant, which fails with AADSTS700016 unless that tenant has
-    // consented to (or itself owns) the app. Prefer setting a connection's own TenantId once
-    // you have a client id registered in that tenant.
-    private const string DefaultInteractiveAuthority = "https://login.microsoftonline.com/organizations";
-
     private static readonly string CacheDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MsdPpTools", "msal_cache");
 
@@ -100,13 +84,22 @@ public sealed class AuthService
         return token;
     }
 
+    // No fallback app registration — a public-client app registration is only usable (and
+    // consentable) in the tenant it was created in, so a single hardcoded default could only
+    // ever work for one specific tenant and silently fails (AADSTS700016) for every other
+    // account, with no indication *why* short of reading the raw AAD error. Requiring each
+    // connection to state its own tenant + app registration makes that explicit instead.
     private static (string ClientId, string Authority) ResolveInteractiveClientAndAuthority(Connection connection)
     {
-        var clientId = string.IsNullOrEmpty(connection.ClientId) ? DefaultInteractiveClientId : connection.ClientId;
-        var authority = string.IsNullOrEmpty(connection.TenantId)
-            ? DefaultInteractiveAuthority
-            : $"https://login.microsoftonline.com/{connection.TenantId}";
-        return (clientId, authority);
+        if (string.IsNullOrEmpty(connection.ClientId) || string.IsNullOrEmpty(connection.TenantId))
+        {
+            throw new InvalidOperationException(
+                "此连接缺少 Tenant ID / Client ID。交互式登录需要一个在目标租户里注册好的 App Registration" +
+                "（\"Mobile and desktop applications\" 平台、redirect URI http://localhost、允许 public client flow、" +
+                "并已同意 Dynamics CRM API 的委托权限）——去 Entra 后台注册一个，或者问问这个环境的管理员是不是已经有现成的，" +
+                "把 Tenant ID / Client ID 填到连接里。");
+        }
+        return (connection.ClientId, $"https://login.microsoftonline.com/{connection.TenantId}");
     }
 
     private async Task<IPublicClientApplication> GetPublicClientAppAsync(string clientId, string authority)
