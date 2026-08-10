@@ -1,18 +1,19 @@
-import { NavLink } from "react-router";
 import { tools, getCategories } from "../tools/registry";
+import { useTabManager } from "../native/tabs";
 import ConnectionSwitcher from "./ConnectionSwitcher";
 
 export default function Sidebar() {
   const categories = getCategories();
+  const { activeTabId, openTab, activateHome } = useTabManager();
 
   return (
     <nav className="flex h-full flex-col overflow-y-auto">
-      <NavLink to="/" className="flex items-center gap-2 px-4 pb-1 pt-4">
+      <button onClick={activateHome} className="flex items-center gap-2 px-4 pb-1 pt-4 text-left">
         <span className="text-xl">🧰</span>
         <span className="text-base font-semibold text-gray-900 dark:text-gray-100">
           MSD365 PP Tools
         </span>
-      </NavLink>
+      </button>
 
       <ConnectionSwitcher />
 
@@ -27,19 +28,17 @@ export default function Sidebar() {
                 .filter((t) => t.category === category)
                 .map((tool) => (
                   <li key={tool.id}>
-                    <NavLink
-                      to={`/tools/${tool.id}`}
-                      className={({ isActive }) =>
-                        `flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
-                          isActive
-                            ? "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
-                            : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
-                        }`
-                      }
+                    <button
+                      onClick={() => openTab(tool.id)}
+                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
+                        activeTabId === tool.id
+                          ? "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
+                          : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+                      }`}
                     >
                       <span>{tool.icon}</span>
                       <span>{tool.name}</span>
-                    </NavLink>
+                    </button>
                   </li>
                 ))}
             </ul>

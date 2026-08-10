@@ -1,7 +1,9 @@
-import { Link } from "react-router";
 import { tools } from "../tools/registry";
+import { useTabManager } from "../native/tabs";
 
 export default function Home() {
+  const { openTab } = useTabManager();
+
   return (
     <div>
       <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
@@ -18,10 +20,10 @@ export default function Home() {
       ) : (
         <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {tools.map((tool) => (
-            <Link
+            <button
               key={tool.id}
-              to={`/tools/${tool.id}`}
-              className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm transition hover:border-blue-300 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-blue-700"
+              onClick={() => openTab(tool.id)}
+              className="rounded-lg border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-300 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-blue-700"
             >
               <div className="flex items-center gap-2">
                 <span className="text-2xl">{tool.icon}</span>
@@ -35,7 +37,7 @@ export default function Home() {
               <span className="mt-3 inline-block rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400">
                 {tool.category}
               </span>
-            </Link>
+            </button>
           ))}
         </div>
       )}

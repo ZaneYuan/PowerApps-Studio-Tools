@@ -15,8 +15,7 @@
     "jszip": "^3.10.1",
     "node-sql-parser": "^5.4.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "react-router": "^8.3.0"
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
