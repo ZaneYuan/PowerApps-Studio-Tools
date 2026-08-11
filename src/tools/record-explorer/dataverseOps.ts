@@ -22,11 +22,16 @@ const UNKNOWN_PROPERTY_RE = /Could not find a property named '([^']+)'/i;
 
 /** `EntityDefinitions/Attributes` metadata can list an attribute the live OData $metadata model
  *  doesn't actually expose — seen in practice on system entities like `quote`, presumably a
- *  metadata/EDM sync quirk in that org, not something predictable ahead of time. Rather than
- *  fail the whole record/child fetch over one bad field, drop it from $select and retry. */
+ *  metadata/EDM sync quirk in that org, not something predictable ahead of time, and on wide
+ *  entities more than one field can be affected. Rather than fail the whole record/child fetch
+ *  over a bad field, drop it from $select and retry — one field per round trip, since Dataverse
+ *  only ever reports the single field that broke a given request. No fixed attempt cap: each
+ *  round either removes exactly one field (bounded by the field count, so this always
+ *  terminates) or makes no progress, in which case the real Dataverse error is rethrown as-is
+ *  instead of being masked by a generic "gave up" message. */
 async function withSelectRetry<T>(fields: string[], run: (fields: string[]) => Promise<T>): Promise<T> {
   let current = fields;
-  for (let attempt = 0; attempt < 5; attempt++) {
+  while (true) {
     try {
       return await run(current);
     } catch (err) {
@@ -38,7 +43,6 @@ async function withSelectRetry<T>(fields: string[], run: (fields: string[]) => P
       current = next;
     }
   }
-  throw new Error("多次尝试后仍然查询失败，可能有多个字段在这个环境的 OData 模型里不可用。");
 }
 
 /** attribute logical name (lowercased) -> set of possible ReferencedEntity values. More than

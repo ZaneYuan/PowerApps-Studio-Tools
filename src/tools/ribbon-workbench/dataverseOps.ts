@@ -10,15 +10,6 @@ async function fetchDataverse<T>(connectionId: string, path: string): Promise<T>
   return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
 }
 
-async function postDataverse<T>(
-  connectionId: string,
-  path: string,
-  body: Record<string, unknown>,
-  timeoutMs?: number,
-): Promise<T> {
-  return callNative<T>("dataverse.request", { connectionId, method: "POST", path, body }, { timeoutMs });
-}
-
 export interface UnmanagedSolution {
   solutionid: string;
   uniquename: string;
@@ -33,48 +24,6 @@ export async function fetchUnmanagedSolutions(connectionId: string): Promise<Unm
     "solutions?$filter=isvisible eq true and ismanaged eq false&$select=uniquename,friendlyname,solutionid&$orderby=friendlyname",
   );
   return res.value;
-}
-
-async function isComponentInSolution(
-  connectionId: string,
-  solutionId: string,
-  componentType: number,
-  componentId: string,
-): Promise<boolean> {
-  const res = await fetchDataverse<{ value: unknown[] }>(
-    connectionId,
-    `solutioncomponents?$select=solutioncomponentid&$top=1` +
-      `&$filter=_solutionid_value eq ${solutionId} and componenttype eq ${componentType} and objectid eq ${componentId}`,
-  );
-  return res.value.length > 0;
-}
-
-/** Adds the table to the solution if it isn't already there — query-first, not try/catch on
- *  AddSolutionComponent's error text (no documented "already exists" string to match against).
- *  DoNotIncludeSubcomponents keeps the export scoped to just the table + its ribbon, not its
- *  forms/views/attributes too — smaller export, faster import, less chance of clobbering a
- *  concurrent unrelated edit to the same table. */
-export async function ensureEntityInSolution(
-  connectionId: string,
-  solutionUniqueName: string,
-  solutionId: string,
-  logicalName: string,
-): Promise<void> {
-  const meta = await fetchDataverse<{ MetadataId: string }>(
-    connectionId,
-    `EntityDefinitions(LogicalName='${logicalName}')?$select=MetadataId`,
-  );
-
-  const already = await isComponentInSolution(connectionId, solutionId, ENTITY_COMPONENT_TYPE, meta.MetadataId);
-  if (already) return;
-
-  await postDataverse(connectionId, "AddSolutionComponent", {
-    ComponentId: meta.MetadataId,
-    ComponentType: ENTITY_COMPONENT_TYPE,
-    SolutionUniqueName: solutionUniqueName,
-    AddRequiredComponents: false,
-    DoNotIncludeSubcomponents: true,
-  });
 }
 
 export interface SolutionEntity {

@@ -3,7 +3,6 @@ import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import {
   exportSolutionZip,
-  ensureEntityInSolution,
   fetchSolutionEntities,
   fetchUnmanagedSolutions,
   importSolutionZip,
@@ -77,12 +76,6 @@ export default function RibbonWorkbench() {
     setSaveError(null);
     setSaveResultData(null);
     try {
-      await ensureEntityInSolution(
-        activeConnectionId,
-        selectedSolution.uniquename,
-        selectedSolution.solutionid,
-        logicalName,
-      );
       const zip = await exportSolutionZip(activeConnectionId, selectedSolution.uniquename);
       const xml = await readRibbonDiffXml(zip, logicalName);
       setRibbonXml(xml);
@@ -147,8 +140,8 @@ export default function RibbonWorkbench() {
   return (
     <div className="max-w-5xl space-y-4">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        编辑表的 RibbonDiffXml（原始 XML，暂无可视化编辑器）。原理：把表加入你选的 solution → 导出 → 改
-        RibbonDiffXml → 重新导入 → 发布。v1 只支持单表的 ribbon，不支持全局 Application Ribbon。
+        编辑表的 RibbonDiffXml（原始 XML，暂无可视化编辑器）。原理：导出你选的 solution → 改 RibbonDiffXml →
+        重新导入 → 发布。只能选 solution 里已有的表，v1 只支持单表的 ribbon，不支持全局 Application Ribbon。
         <br />
         ⚠️ 会实际修改所选 solution 的 unmanaged customizations，建议先在测试表/非生产环境上试。跟其他人同时编辑同一张表的
         ribbon 有小概率互相覆盖（保存前会重新导出一次，但没法完全消除这个窗口）。
@@ -178,7 +171,7 @@ export default function RibbonWorkbench() {
           <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">表（solution 中已有的）</label>
           {solutionEntitiesError && <p className="text-xs text-red-600 dark:text-red-400">{solutionEntitiesError}</p>}
           <select
-            value={solutionEntities?.some((en) => en.logicalName === entityName) ? entityName : ""}
+            value={entityName}
             onChange={(e) => setEntityName(e.target.value)}
             disabled={!selectedSolution || !solutionEntities}
             className={`${inputCls} w-56`}
@@ -192,16 +185,6 @@ export default function RibbonWorkbench() {
               </option>
             ))}
           </select>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">或输入新表名（会自动加入 solution）</label>
-          <input
-            type="text"
-            value={entityName}
-            onChange={(e) => setEntityName(e.target.value)}
-            placeholder="account"
-            className={`${inputCls} w-40`}
-          />
         </div>
         <button
           onClick={handleLoad}
