@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import {
@@ -34,9 +34,14 @@ export default function MetadataBrowser() {
   const [entities, setEntities] = useState<EntitySummary[] | null>(null);
   const [entitiesError, setEntitiesError] = useState<string | null>(null);
   const [entityFilter, setEntityFilter] = useState("");
-  const [selectedEntity, setSelectedEntity] = useState<EntitySummary | null>(null);
-  const [activeTab, setActiveTab] = useState<TabKey>("attributes");
-  const [rowFilter, setRowFilter] = useState("");
+
+  // Opened entities behave like browser tabs: switching between them must not lose scroll
+  // position, active sub-tab, or row filter, so each of those is keyed by LogicalName instead
+  // of living in a single shared field.
+  const [openEntities, setOpenEntities] = useState<EntitySummary[]>([]);
+  const [activeLogicalName, setActiveLogicalName] = useState<string | null>(null);
+  const [activeTabByEntity, setActiveTabByEntity] = useState<Record<string, TabKey>>({});
+  const [rowFilterByEntity, setRowFilterByEntity] = useState<Record<string, string>>({});
 
   const [tabCache, setTabCache] = useState<Record<string, (AttributeSummary | RelationshipSummary)[]>>({});
   const [tabLoading, setTabLoading] = useState(false);
@@ -55,7 +60,10 @@ export default function MetadataBrowser() {
     }
     setEntities(null);
     setEntitiesError(null);
-    setSelectedEntity(null);
+    setOpenEntities([]);
+    setActiveLogicalName(null);
+    setActiveTabByEntity({});
+    setRowFilterByEntity({});
     fetchDataverse<{ value: EntitySummary[] }>(
       activeConnectionId,
       // EntityDefinitions doesn't support $orderby — sort client-side instead.
@@ -104,17 +112,39 @@ export default function MetadataBrowser() {
     }
   }
 
-  function selectEntity(entity: EntitySummary) {
-    setSelectedEntity(entity);
-    setActiveTab("attributes");
-    setRowFilter("");
-    void loadTab(entity, "attributes");
+  const selectedEntity = openEntities.find((e) => e.LogicalName === activeLogicalName) ?? null;
+  const activeTab: TabKey = (activeLogicalName && activeTabByEntity[activeLogicalName]) || "attributes";
+  const rowFilter = (activeLogicalName && rowFilterByEntity[activeLogicalName]) || "";
+
+  function openEntity(entity: EntitySummary) {
+    setOpenEntities((prev) => (prev.some((e) => e.LogicalName === entity.LogicalName) ? prev : [...prev, entity]));
+    setActiveLogicalName(entity.LogicalName);
+    setActiveTabByEntity((prev) => (prev[entity.LogicalName] ? prev : { ...prev, [entity.LogicalName]: "attributes" }));
+    void loadTab(entity, activeTabByEntity[entity.LogicalName] ?? "attributes");
+  }
+
+  function closeEntityTab(logicalName: string, e: MouseEvent) {
+    e.stopPropagation();
+    setOpenEntities((prev) => {
+      const idx = prev.findIndex((x) => x.LogicalName === logicalName);
+      const next = prev.filter((x) => x.LogicalName !== logicalName);
+      if (activeLogicalName === logicalName) {
+        const fallback = next[idx] ?? next[idx - 1] ?? null;
+        setActiveLogicalName(fallback ? fallback.LogicalName : null);
+      }
+      return next;
+    });
   }
 
   function selectTab(tab: TabKey) {
-    setActiveTab(tab);
-    setRowFilter("");
+    if (!activeLogicalName) return;
+    setActiveTabByEntity((prev) => ({ ...prev, [activeLogicalName]: tab }));
     if (selectedEntity) void loadTab(selectedEntity, tab);
+  }
+
+  function setRowFilter(value: string) {
+    if (!activeLogicalName) return;
+    setRowFilterByEntity((prev) => ({ ...prev, [activeLogicalName]: value }));
   }
 
   // async function toggleExpand(rowKey: string, metadataId: string) {
@@ -188,9 +218,9 @@ export default function MetadataBrowser() {
             {filteredEntities.map((e) => (
               <li key={e.MetadataId}>
                 <button
-                  onClick={() => selectEntity(e)}
+                  onClick={() => openEntity(e)}
                   className={`block w-full truncate px-3 py-1.5 text-left text-sm ${
-                    selectedEntity?.LogicalName === e.LogicalName
+                    activeLogicalName === e.LogicalName
                       ? "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
                       : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
                   }`}
@@ -206,8 +236,40 @@ export default function MetadataBrowser() {
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
+        {openEntities.length > 0 && (
+          <div className="mb-2 flex items-center gap-1 overflow-x-auto border-b border-gray-200 dark:border-gray-800">
+            {openEntities.map((e) => (
+              <div
+                key={e.LogicalName}
+                className={`group flex shrink-0 items-center gap-1 rounded-t-md border-b-2 px-2.5 py-1.5 text-xs ${
+                  activeLogicalName === e.LogicalName
+                    ? "border-blue-600 font-medium text-blue-700 dark:text-blue-400"
+                    : "border-transparent text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
+                }`}
+              >
+                <button
+                  onClick={() => setActiveLogicalName(e.LogicalName)}
+                  className="max-w-[9rem] truncate"
+                  title={e.LogicalName}
+                >
+                  {labelOf(e.DisplayName, e.LogicalName)}
+                </button>
+                <button
+                  onClick={(ev) => closeEntityTab(e.LogicalName, ev)}
+                  className="rounded px-1 text-gray-400 opacity-0 hover:bg-gray-200 hover:text-gray-700 group-hover:opacity-100 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  title="关闭"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {!selectedEntity ? (
-          <p className="text-sm text-gray-400">从左侧选一个实体。</p>
+          <p className="text-sm text-gray-400">
+            从左侧选一个实体{openEntities.length > 0 ? "，或点击上方标签页切换。" : "。"}
+          </p>
         ) : (
           <>
             <div className="mb-3 flex items-center gap-2">
