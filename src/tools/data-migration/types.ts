@@ -7,10 +7,10 @@ export interface AttributeInfo {
   DisplayName: LabelValue | null;
 }
 
-/** Only scalar column types are migratable in v1 — Lookup/Owner/Customer/PartyList are
- *  deliberately excluded (see AttributeInfo filtering in dataverseOps.ts): their values are
- *  GUIDs pointing at records in the *source* environment that almost certainly don't exist
- *  in the target, so copying them verbatim would just produce dangling references. */
+/** Plain scalar column types. Single-target Lookup is migratable too (added separately in
+ *  dataverseOps.ts's filter — resolved against the *target* environment's own schema at import
+ *  time, not copied as a raw GUID). Polymorphic reference types (Owner/Customer/PartyList) stay
+ *  excluded — the write side can't tell which target entity a given GUID belongs to. */
 export const SCALAR_ATTRIBUTE_TYPES = new Set([
   "String",
   "Memo",

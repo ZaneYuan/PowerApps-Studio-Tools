@@ -15,19 +15,40 @@ export async function fetchEntityMeta(connectionId: string, logicalName: string)
   return { entitySetName: meta.entitySetName, primaryIdAttribute: meta.primaryIdAttribute };
 }
 
+/** Suffixes Dataverse uses for a Lookup field's auto-maintained, read-only display-name
+ *  companion attributes (e.g. `contoso_language` (Lookup) always comes with `contoso_languagename`,
+ *  and often `contoso_languageyominame` for the Pinyin variant on CJK-enabled orgs). These are
+ *  real rows in `EntityDefinitions/Attributes`, but they're not independently writable — the
+ *  platform derives them from the Lookup's target record — so migrating them is meaningless
+ *  and importing the Lookup's own GUID (see below) is all that's needed. */
+const LOOKUP_LABEL_SUFFIXES = ["name", "yominame"];
+
+function isLookupLabelField(logicalName: string, lookupLogicalNames: Set<string>): boolean {
+  const lower = logicalName.toLowerCase();
+  return LOOKUP_LABEL_SUFFIXES.some(
+    (suffix) => lower.endsWith(suffix) && lookupLogicalNames.has(lower.slice(0, -suffix.length)),
+  );
+}
+
 /** Scalar fields plus plain (non-polymorphic-by-type) Lookup fields — Owner/Customer/PartyList
  *  stay excluded (see SCALAR_ATTRIBUTE_TYPES' doc comment: their target type varies per record,
  *  which the write side can't resolve without the annotation this project's dataverse.request
  *  doesn't request). A single-target Lookup is included on the assumption that if you're
  *  choosing to migrate it, the two environments share the same reference data/GUIDs for that
- *  target entity — if they don't, the write fails per-row rather than silently corrupting data. */
+ *  target entity — if they don't, the write fails per-row rather than silently corrupting data.
+ *  Each Lookup's own `<name>`/`<name>yominame` companion fields are filtered back out — see
+ *  isLookupLabelField's doc comment. */
 export async function fetchMigratableAttributes(connectionId: string, logicalName: string): Promise<AttributeInfo[]> {
   const res = await fetchDataverse<{ value: AttributeInfo[] }>(
     connectionId,
     `EntityDefinitions(LogicalName='${logicalName}')/Attributes?$select=LogicalName,AttributeType,IsPrimaryId,DisplayName`,
   );
+  const lookupLogicalNames = new Set(
+    res.value.filter((a) => a.AttributeType === "Lookup").map((a) => a.LogicalName.toLowerCase()),
+  );
   return res.value
     .filter((a) => a.IsPrimaryId || SCALAR_ATTRIBUTE_TYPES.has(a.AttributeType) || a.AttributeType === "Lookup")
+    .filter((a) => !isLookupLabelField(a.LogicalName, lookupLogicalNames))
     .sort((a, b) => {
       if (a.IsPrimaryId !== b.IsPrimaryId) return a.IsPrimaryId ? -1 : 1;
       return a.LogicalName.localeCompare(b.LogicalName);
@@ -39,12 +60,17 @@ export async function queryRows(
   entitySetName: string,
   primaryIdAttribute: string,
   columns: string[],
+  lookupColumns: Set<string>,
   filter: string,
   top: number,
 ): Promise<Record<string, unknown>[]> {
   // Primary id is always fetched (even if not selected for import) — it's the only stable
   // React/table key we have for each row.
-  const selectCols = Array.from(new Set([primaryIdAttribute, ...columns]));
+  // Lookup columns can only be $select-ed via the `_logicalname_value` form — selecting the
+  // bare logical name 400s with "Could not find a property named '<name>'".
+  const selectCols = Array.from(new Set([primaryIdAttribute, ...columns])).map((c) =>
+    lookupColumns.has(c) ? `_${c}_value` : c,
+  );
   const params = [`$select=${selectCols.join(",")}`, `$top=${top}`];
   if (filter.trim()) params.push(`$filter=${filter.trim()}`);
 

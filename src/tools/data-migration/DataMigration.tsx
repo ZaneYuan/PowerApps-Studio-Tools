@@ -82,11 +82,15 @@ export default function DataMigration() {
     setSelectedRowIds(new Set());
     setImportStatuses({});
     try {
+      const lookupColumns = new Set(
+        (attributes ?? []).filter((a) => a.AttributeType === "Lookup").map((a) => a.LogicalName),
+      );
       const data = await queryRows(
         activeConnectionId,
         entityMeta.entitySetName,
         entityMeta.primaryIdAttribute,
         Array.from(selectedColumns),
+        lookupColumns,
         filter,
         top,
       );
