@@ -1,5 +1,14 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { fetchAssemblies, fetchImages, fetchPluginTypes, fetchSteps } from "./dataverseOps";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  fetchAllPluginTypes,
+  fetchAllSteps,
+  fetchAssemblies,
+  fetchImages,
+  fetchPluginTypes,
+  fetchSteps,
+  type PluginStepFlat,
+  type PluginTypeFlat,
+} from "./dataverseOps";
 import {
   IMAGE_TYPE_LABELS,
   MODE_LABELS,
@@ -13,6 +22,20 @@ import {
   type PluginType,
   type TreeNodeKind,
 } from "./types";
+
+/** One row in the search dropdown. `matched` is false for a row shown only as context for a
+ *  matched descendant (e.g. the assembly containing a matched Type) — rendered dimmer. */
+interface SearchRow {
+  depth: 0 | 1 | 2;
+  kind: TreeNodeKind;
+  id: string;
+  assemblyId: string;
+  typeId?: string;
+  label: string;
+  matched: boolean;
+}
+
+const MAX_SEARCH_ROWS = 150;
 
 export interface TreePanelHandle {
   /** Clears the whole tree and reloads the assembly list from scratch. */
@@ -56,11 +79,20 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
   const [loadingKeys, setLoadingKeys] = useState<Set<string>>(new Set());
   const [errorByKey, setErrorByKey] = useState<Record<string, string>>({});
 
-  // Fuzzy search across Assembly/Type/Step names — see the eager-load effects below for why
-  // matches aren't limited to whatever's already expanded.
+  // Fuzzy search across Assembly/Type/Step names. Rather than cascading a fetch per matched
+  // Assembly and then per matched Type (which is what made the old version slow), this loads
+  // every Type and every Step org-wide in two flat queries the first time the user searches,
+  // then matches names against those in-memory lists. The tree itself is never filtered by
+  // search — matches surface in a dropdown below the box, and picking one expands/scrolls the
+  // always-complete tree to that node.
   const [searchQuery, setSearchQuery] = useState("");
   const searching = searchQuery.trim().length > 0;
   const q = searchQuery.trim().toLowerCase();
+  const [allTypesFlat, setAllTypesFlat] = useState<PluginTypeFlat[] | null>(null);
+  const [allStepsFlat, setAllStepsFlat] = useState<PluginStepFlat[] | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [pendingScrollKey, setPendingScrollKey] = useState<string | null>(null);
 
   // Rows that support double-click-to-edit also have a plain onClick (select/load detail) — a
   // real double-click fires two native `click` events before the `dblclick`, so without this
@@ -89,14 +121,6 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
   function stepMatches(s: PluginStep): boolean {
     return s.name.toLowerCase().includes(q);
   }
-  function typeHasMatch(t: PluginType): boolean {
-    if (typeMatches(t)) return true;
-    return !!stepsCache[t.plugintypeid]?.some(stepMatches);
-  }
-  function assemblyHasMatch(asm: PluginAssembly): boolean {
-    if (assemblyMatches(asm)) return true;
-    return !!typesCache[asm.pluginassemblyid]?.some(typeHasMatch);
-  }
 
   function withLoading(key: string, fn: () => Promise<void>) {
     setLoadingKeys((s) => new Set(s).add(key));
@@ -123,6 +147,10 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
     setStepsCache({});
     setImagesCache({});
     setExpanded(new Set());
+    setAllTypesFlat(null);
+    setAllStepsFlat(null);
+    setSearchError(null);
+    setSearchQuery("");
     loadAssemblies();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId]);
@@ -148,28 +176,159 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
     });
   }
 
-  // While searching, eagerly load every type (and then every type's steps) so a match can be
-  // found beyond whatever the user already happened to expand — normally these only load on
-  // demand when a node is expanded, which would make search useless for anything still collapsed.
+  // The first time the user searches, load every Type and every Step org-wide in one shot each
+  // (not per-assembly/per-type) and keep them cached for the rest of the session.
   useEffect(() => {
-    if (!searching || !assemblies) return;
-    for (const asm of assemblies) {
-      const key = nodeKey("assembly", asm.pluginassemblyid);
-      if (!typesCache[asm.pluginassemblyid] && !loadingKeys.has(key)) loadTypes(asm.pluginassemblyid);
-    }
+    if (!searching || (allTypesFlat && allStepsFlat) || searchLoading) return;
+    let cancelled = false;
+    setSearchLoading(true);
+    setSearchError(null);
+    Promise.all([fetchAllPluginTypes(connectionId), fetchAllSteps(connectionId)])
+      .then(([types, steps]) => {
+        if (cancelled) return;
+        setAllTypesFlat(types);
+        setAllStepsFlat(steps);
+      })
+      .catch((err) => {
+        if (!cancelled) setSearchError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setSearchLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searching, assemblies, typesCache]);
+  }, [searching, connectionId]);
 
-  useEffect(() => {
-    if (!searching) return;
-    for (const types of Object.values(typesCache)) {
-      for (const t of types) {
-        const key = nodeKey("type", t.plugintypeid);
-        if (!stepsCache[t.plugintypeid] && !loadingKeys.has(key)) loadSteps(t.plugintypeid);
+  // Independently match names against Assembly/Type/Step, then combine matches into the
+  // Assembly > Type > Step hierarchy for display — a non-matching ancestor is included only as
+  // context for a matched descendant (`matched: false`, rendered dimmer).
+  const searchRows = useMemo<SearchRow[]>(() => {
+    if (!searching || !assemblies) return [];
+    const asmById = new Map(assemblies.map((a) => [a.pluginassemblyid, a]));
+    const typeById = new Map((allTypesFlat ?? []).map((t) => [t.plugintypeid, t]));
+
+    interface TypeGroup {
+      type: PluginType;
+      matched: boolean;
+      steps: PluginStep[];
+    }
+    interface AsmGroup {
+      assembly: PluginAssembly;
+      matched: boolean;
+      types: Map<string, TypeGroup>;
+    }
+    const groups = new Map<string, AsmGroup>();
+    function ensureGroup(asm: PluginAssembly): AsmGroup {
+      let g = groups.get(asm.pluginassemblyid);
+      if (!g) {
+        g = { assembly: asm, matched: false, types: new Map() };
+        groups.set(asm.pluginassemblyid, g);
+      }
+      return g;
+    }
+    function ensureType(g: AsmGroup, t: PluginType): TypeGroup {
+      let tg = g.types.get(t.plugintypeid);
+      if (!tg) {
+        tg = { type: t, matched: false, steps: [] };
+        g.types.set(t.plugintypeid, tg);
+      }
+      return tg;
+    }
+
+    for (const asm of assemblies) {
+      if (assemblyMatches(asm)) ensureGroup(asm).matched = true;
+    }
+    for (const t of allTypesFlat ?? []) {
+      if (!typeMatches(t)) continue;
+      const asm = asmById.get(t._pluginassemblyid_value);
+      if (!asm) continue;
+      ensureType(ensureGroup(asm), t).matched = true;
+    }
+    for (const s of allStepsFlat ?? []) {
+      if (!stepMatches(s)) continue;
+      const t = typeById.get(s._eventhandler_value);
+      const asm = t && asmById.get(t._pluginassemblyid_value);
+      if (!t || !asm) continue;
+      ensureType(ensureGroup(asm), t).steps.push(s);
+    }
+
+    const rows: SearchRow[] = [];
+    const sortedGroups = [...groups.values()].sort((a, b) => a.assembly.name.localeCompare(b.assembly.name));
+    for (const g of sortedGroups) {
+      rows.push({
+        depth: 0,
+        kind: "assembly",
+        id: g.assembly.pluginassemblyid,
+        assemblyId: g.assembly.pluginassemblyid,
+        label: g.assembly.name,
+        matched: g.matched,
+      });
+      const sortedTypes = [...g.types.values()].sort((a, b) =>
+        pluginTypeLabel(a.type).localeCompare(pluginTypeLabel(b.type)),
+      );
+      for (const tg of sortedTypes) {
+        rows.push({
+          depth: 1,
+          kind: "type",
+          id: tg.type.plugintypeid,
+          assemblyId: g.assembly.pluginassemblyid,
+          typeId: tg.type.plugintypeid,
+          label: pluginTypeLabel(tg.type),
+          matched: tg.matched,
+        });
+        for (const s of tg.steps) {
+          rows.push({
+            depth: 2,
+            kind: "step",
+            id: s.sdkmessageprocessingstepid,
+            assemblyId: g.assembly.pluginassemblyid,
+            typeId: tg.type.plugintypeid,
+            label: `${s.sdkmessageid?.name ?? "?"} · ${STAGE_LABELS[s.stage] ?? s.stage}`,
+            matched: true,
+          });
+        }
       }
     }
+    return rows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searching, typesCache, stepsCache]);
+  }, [searching, q, assemblies, allTypesFlat, allStepsFlat]);
+
+  // Picking a dropdown result expands its ancestors (seeding their caches from the flat search
+  // data, so no extra fetch is needed) and scrolls the always-complete tree to that node.
+  function jumpTo(row: SearchRow) {
+    if (allTypesFlat && !typesCache[row.assemblyId]) {
+      const types = allTypesFlat.filter((t) => t._pluginassemblyid_value === row.assemblyId);
+      setTypesCache((c) => ({ ...c, [row.assemblyId]: types }));
+    }
+    if (row.typeId && allStepsFlat && !stepsCache[row.typeId]) {
+      const typeId = row.typeId;
+      const steps = allStepsFlat.filter((s) => s._eventhandler_value === typeId);
+      setStepsCache((c) => ({ ...c, [typeId]: steps }));
+    }
+    setExpanded((s) => {
+      const next = new Set(s);
+      next.add(nodeKey("assembly", row.assemblyId));
+      if (row.typeId) next.add(nodeKey("type", row.typeId));
+      return next;
+    });
+    onSelect(row.kind, row.id);
+    setSearchQuery("");
+    setPendingScrollKey(nodeKey(row.kind, row.id));
+  }
+
+  // The target row may not exist in the DOM yet right after jumpTo (its ancestor still needs a
+  // render pass to pick up the newly-expanded/cached state) — re-check on every relevant state
+  // change until it does, then scroll and stop.
+  useEffect(() => {
+    if (!pendingScrollKey) return;
+    const el = document.getElementById(pendingScrollKey);
+    if (el) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      setPendingScrollKey(null);
+    }
+  }, [pendingScrollKey, expanded, typesCache, stepsCache]);
 
   function toggle(key: string, loadFn: () => void, alreadyLoaded: boolean) {
     setExpanded((s) => {
@@ -225,7 +384,7 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
             + 注册程序集
           </button>
         </div>
-        <div className="px-2 pb-2">
+        <div className="relative px-2 pb-2">
           <input
             type="text"
             placeholder="模糊搜索 Assembly / Type / Step…"
@@ -233,8 +392,31 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
           />
-          {searching && loadingKeys.size > 0 && (
-            <p className="mt-1 text-[10px] text-gray-400">正在加载搜索范围内的数据…</p>
+          {searching && (
+            <div className="absolute inset-x-2 top-full z-20 mt-1 max-h-80 overflow-y-auto rounded-md border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-900">
+              {searchLoading && <p className="p-2 text-xs text-gray-400">正在搜索…</p>}
+              {searchError && <p className="p-2 text-xs text-red-500">{searchError}</p>}
+              {!searchLoading && !searchError && searchRows.length === 0 && (
+                <p className="p-2 text-xs text-gray-400">没有匹配的 Assembly / Type / Step。</p>
+              )}
+              {!searchLoading &&
+                searchRows.slice(0, MAX_SEARCH_ROWS).map((row) => (
+                  <button
+                    key={`${row.kind}:${row.id}`}
+                    onClick={() => jumpTo(row)}
+                    style={{ paddingLeft: 8 + row.depth * 14 }}
+                    className={`flex w-full items-center gap-1 truncate py-1 pr-2 text-left text-xs hover:bg-gray-100 dark:hover:bg-gray-800 ${
+                      row.matched ? "text-gray-900 dark:text-gray-100" : "text-gray-400 dark:text-gray-500"
+                    }`}
+                    title={row.label}
+                  >
+                    {row.kind === "assembly" ? "📦" : row.kind === "type" ? "🧩" : "⚙️"} {row.label}
+                  </button>
+                ))}
+              {searchRows.length > MAX_SEARCH_ROWS && (
+                <p className="px-2 py-1 text-[10px] text-gray-400">还有更多匹配项，请输入更精确的关键字缩小范围。</p>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -242,20 +424,14 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
         {errorByKey.root && <p className="p-2 text-xs text-red-600 dark:text-red-400">{errorByKey.root}</p>}
         {!assemblies && !errorByKey.root && <p className="p-2 text-xs text-gray-400">加载中…</p>}
         {assemblies && assemblies.length === 0 && <p className="p-2 text-xs text-gray-400">还没有注册任何程序集。</p>}
-        {searching && assemblies && assemblies.filter(assemblyHasMatch).length === 0 && loadingKeys.size === 0 && (
-          <p className="p-2 text-xs text-gray-400">没有匹配的 Assembly / Type / Step。</p>
-        )}
         <ul>
-          {assemblies
-            ?.filter((asm) => !searching || assemblyHasMatch(asm))
-            .map((asm) => {
+          {assemblies?.map((asm) => {
               const key = nodeKey("assembly", asm.pluginassemblyid);
-              const asmNameMatched = searching && assemblyMatches(asm);
-              const open = searching || expanded.has(key);
+              const open = expanded.has(key);
               const types = typesCache[asm.pluginassemblyid];
               return (
               <li key={asm.pluginassemblyid}>
-                <div className={`${rowBase} ${selectedKey === key ? rowSelected : ""}`}>
+                <div id={key} className={`${rowBase} ${selectedKey === key ? rowSelected : ""}`}>
                   <button onClick={() => toggle(key, () => loadTypes(asm.pluginassemblyid), !!types)}>
                     <Caret open={open} />
                   </button>
@@ -272,16 +448,13 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                     {loadingKeys.has(key) && <li className="p-1 text-xs text-gray-400">加载类型…</li>}
                     {errorByKey[key] && <li className="p-1 text-xs text-red-500">{errorByKey[key]}</li>}
                     {types && types.length === 0 && <li className="p-1 text-xs text-gray-400">没有插件类型。</li>}
-                    {types
-                      ?.filter((t) => !searching || asmNameMatched || typeHasMatch(t))
-                      .map((t) => {
+                    {types?.map((t) => {
                       const tKey = nodeKey("type", t.plugintypeid);
-                      const tNameMatched = searching && (asmNameMatched || typeMatches(t));
-                      const tOpen = searching || expanded.has(tKey);
+                      const tOpen = expanded.has(tKey);
                       const steps = stepsCache[t.plugintypeid];
                       return (
                         <li key={t.plugintypeid}>
-                          <div className={`${rowBase} ${selectedKey === tKey ? rowSelected : ""}`}>
+                          <div id={tKey} className={`${rowBase} ${selectedKey === tKey ? rowSelected : ""}`}>
                             <button onClick={() => toggle(tKey, () => loadSteps(t.plugintypeid), !!steps)}>
                               <Caret open={tOpen} />
                             </button>
@@ -305,16 +478,14 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                               {loadingKeys.has(tKey) && <li className="p-1 text-xs text-gray-400">加载 Step…</li>}
                               {errorByKey[tKey] && <li className="p-1 text-xs text-red-500">{errorByKey[tKey]}</li>}
                               {steps && steps.length === 0 && <li className="p-1 text-xs text-gray-400">没有 Step。</li>}
-                              {steps
-                                ?.filter((s) => !searching || tNameMatched || stepMatches(s))
-                                .map((s) => {
+                              {steps?.map((s) => {
                                 const sKey = nodeKey("step", s.sdkmessageprocessingstepid);
                                 const sOpen = expanded.has(sKey);
                                 const images = imagesCache[s.sdkmessageprocessingstepid];
                                 const entity = s.sdkmessagefilterid?.primaryobjecttypecode;
                                 return (
                                   <li key={s.sdkmessageprocessingstepid}>
-                                    <div className={`${rowBase} ${selectedKey === sKey ? rowSelected : ""}`}>
+                                    <div id={sKey} className={`${rowBase} ${selectedKey === sKey ? rowSelected : ""}`}>
                                       <button
                                         onClick={() =>
                                           toggle(sKey, () => loadImages(s.sdkmessageprocessingstepid), !!images)

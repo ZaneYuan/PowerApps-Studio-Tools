@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import {
@@ -52,6 +52,23 @@ export default function MetadataBrowser() {
   // const [expanded, setExpanded] = useState<{ key: string; data: unknown } | null>(null);
   // const [expandLoading, setExpandLoading] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const [entityListWidth, setEntityListWidth] = useState(288);
+
+  function handleResizeStart(e: ReactMouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = entityListWidth;
+    function onMove(ev: MouseEvent) {
+      setEntityListWidth(Math.min(720, Math.max(240, startWidth + (ev.clientX - startX))));
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
 
   useEffect(() => {
     if (!activeConnectionId) {
@@ -123,7 +140,7 @@ export default function MetadataBrowser() {
     void loadTab(entity, activeTabByEntity[entity.LogicalName] ?? "attributes");
   }
 
-  function closeEntityTab(logicalName: string, e: MouseEvent) {
+  function closeEntityTab(logicalName: string, e: ReactMouseEvent) {
     e.stopPropagation();
     setOpenEntities((prev) => {
       const idx = prev.findIndex((x) => x.LogicalName === logicalName);
@@ -197,8 +214,11 @@ export default function MetadataBrowser() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] gap-4">
-      <div className="flex w-72 shrink-0 flex-col rounded-lg border border-gray-200 dark:border-gray-800">
+    <div className="flex h-[calc(100vh-8rem)]">
+      <div
+        className="flex shrink-0 flex-col rounded-lg border border-gray-200 dark:border-gray-800"
+        style={{ width: entityListWidth }}
+      >
         <div className="border-b border-gray-200 p-2 dark:border-gray-800">
           <input
             type="text"
@@ -234,6 +254,12 @@ export default function MetadataBrowser() {
           </ul>
         </div>
       </div>
+
+      <div
+        onMouseDown={handleResizeStart}
+        className="mx-1 w-1.5 shrink-0 cursor-col-resize rounded hover:bg-blue-200 dark:hover:bg-blue-900/40"
+        title="拖动调整宽度"
+      />
 
       <div className="flex min-w-0 flex-1 flex-col">
         {openEntities.length > 0 && (

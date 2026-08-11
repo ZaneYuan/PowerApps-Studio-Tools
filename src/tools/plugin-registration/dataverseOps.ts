@@ -45,6 +45,36 @@ export async function fetchSteps(connectionId: string, pluginTypeId: string): Pr
   return res.value;
 }
 
+export interface PluginTypeFlat extends PluginType {
+  _pluginassemblyid_value: string;
+}
+
+/** Every plugin type org-wide in a single query, carrying its parent assembly id. Used only by
+ *  the tree's search dropdown, which needs to match names across the whole org — fetching this
+ *  once beats cascading a per-assembly fetchPluginTypes call for every assembly on screen. */
+export async function fetchAllPluginTypes(connectionId: string): Promise<PluginTypeFlat[]> {
+  const res = await fetchDataverse<{ value: PluginTypeFlat[] }>(
+    connectionId,
+    "plugintypes?$select=plugintypeid,typename,friendlyname,name,_pluginassemblyid_value&$orderby=typename",
+  );
+  return res.value;
+}
+
+export interface PluginStepFlat extends PluginStep {
+  _eventhandler_value: string;
+}
+
+/** Every step org-wide in a single query, carrying its parent plugin type id — same rationale
+ *  as fetchAllPluginTypes, for the search dropdown. */
+export async function fetchAllSteps(connectionId: string): Promise<PluginStepFlat[]> {
+  const res = await fetchDataverse<{ value: PluginStepFlat[] }>(
+    connectionId,
+    "sdkmessageprocessingsteps?$select=sdkmessageprocessingstepid,name,stage,mode,rank,statecode,statuscode,_eventhandler_value" +
+      "&$orderby=name&$expand=sdkmessageid($select=name),sdkmessagefilterid($select=primaryobjecttypecode)",
+  );
+  return res.value;
+}
+
 export async function fetchImages(connectionId: string, stepId: string): Promise<PluginStepImage[]> {
   const res = await fetchDataverse<{ value: PluginStepImage[] }>(
     connectionId,
