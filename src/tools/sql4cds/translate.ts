@@ -13,7 +13,7 @@ const GUID_RE =
  *  and validate everything else explicitly rather than trusting `any`. Shapes below were
  *  confirmed by running the real parser against representative SQL (JOIN/GROUP BY/aggregate/
  *  INSERT/UPDATE/DELETE), not guessed from docs. */
-interface SqlNode {
+export interface SqlNode {
   type: string;
   value?: unknown;
   operator?: string;

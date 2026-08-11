@@ -1,8 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
-import { parseSql } from "./translate";
+import { downloadTextFile } from "../../native/download";
+import { fetchEntityMeta } from "../../native/metadataService";
+import { literalToJsValue, parseSql, type SqlNode } from "./translate";
+import { deleteRow, insertRow, queryMatchingIds, updateRow, type MatchingIds } from "./writeOps";
+import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry, type WriteAction } from "./executionLog";
 
 const SAMPLE = `SELECT TOP 50 name, revenue, statecode
 FROM account
@@ -32,8 +36,43 @@ function OutputRow({ label, value }: { label: string; value: string | null }) {
   );
 }
 
+/** Display-only rendering of a literal AST node in the INSERT preview table — not used for
+ *  execution (writeOps.ts's buildRowBody works off the same nodes via literalToJsValue). */
+function describeLiteral(node: SqlNode): string {
+  if (node.type === "null") return "NULL";
+  return String(node.value);
+}
+
+function WriteResultTable({ results }: { results: Sql4CdsLogEntry[] }) {
+  const success = results.filter((r) => r.state === "success").length;
+  const error = results.length - success;
+  return (
+    <div className="overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
+      <div className="border-b border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
+        共 {results.length} 条，成功 {success}，失败 {error} — 执行日志已自动下载
+      </div>
+      <table className="w-full text-left text-sm">
+        <tbody>
+          {results.map((r, i) => (
+            <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+              <td className="px-3 py-1.5 font-mono text-xs">{r.key}</td>
+              <td className="px-3 py-1.5 text-xs">
+                {r.state === "success" ? (
+                  <span className="text-green-600 dark:text-green-400">成功{r.detail ? ` — ${r.detail}` : ""}</span>
+                ) : (
+                  <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function Sql4Cds() {
-  const { activeConnectionId } = useActiveConnection();
+  const { activeConnectionId, connections } = useActiveConnection();
   const [sql, setSql] = useState("");
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -46,6 +85,7 @@ export default function Sql4Cds() {
   const hasEntity = result.kind !== "error" && result.kind !== "empty";
   const entityLogicalName = hasEntity ? result.entityLogicalName : null;
   const entitySetGuess = hasEntity ? result.entitySetGuess : null;
+  const mutateFilter = result.kind === "mutate" ? result.filter : null;
 
   const entitySetMeta = useEntitySetName(activeConnectionId, entityLogicalName ?? "");
   const entitySet = entitySetMeta.entitySetName || entitySetGuess || "";
@@ -87,6 +127,134 @@ export default function Sql4Cds() {
 
   const columns = rows && rows.length > 0 ? Object.keys(rows[0]).filter((k) => !k.startsWith("@")) : [];
 
+  // --- write (INSERT/UPDATE/DELETE) execution state ---
+  const [writeRunning, setWriteRunning] = useState(false);
+  const [writeResults, setWriteResults] = useState<Sql4CdsLogEntry[] | null>(null);
+
+  useEffect(() => {
+    setWriteResults(null);
+  }, [sql]);
+
+  // UPDATE/DELETE always needs the matching record ids before it can run — auto-resolved as soon
+  // as the entity set and WHERE-derived $filter are known, same spirit as useEntitySetName above.
+  const [matchInfo, setMatchInfo] = useState<(MatchingIds & { primaryIdAttribute: string }) | null>(null);
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [matchError, setMatchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMatchInfo(null);
+    setMatchError(null);
+    if (result.kind !== "mutate" || !activeConnectionId || !entitySet || !entityLogicalName || mutateFilter === null) return;
+    let cancelled = false;
+    setMatchLoading(true);
+    fetchEntityMeta(activeConnectionId, entityLogicalName)
+      .then((meta) =>
+        queryMatchingIds(activeConnectionId, entitySet, meta.primaryIdAttribute, mutateFilter).then((m) => ({
+          ...m,
+          primaryIdAttribute: meta.primaryIdAttribute,
+        })),
+      )
+      .then((m) => {
+        if (!cancelled) setMatchInfo(m);
+      })
+      .catch((err) => {
+        if (!cancelled) setMatchError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setMatchLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [result.kind, activeConnectionId, entitySet, entityLogicalName, mutateFilter]);
+
+  function connectionName(): string {
+    return connections.find((c) => c.id === activeConnectionId)?.name ?? activeConnectionId ?? "";
+  }
+
+  function finishWrite(action: WriteAction, entity: string, entitySetName: string, startedAt: Date, entries: Sql4CdsLogEntry[]) {
+    const finishedAt = new Date();
+    const filename = sql4CdsLogFilename(action, entity, finishedAt);
+    const text = buildSql4CdsLogText({
+      startedAt,
+      finishedAt,
+      connectionName: connectionName(),
+      action,
+      entityLogicalName: entity,
+      entitySetName,
+      sql,
+      entries,
+    });
+    downloadTextFile(filename, text);
+    setWriteRunning(false);
+  }
+
+  async function handleInsert() {
+    if (!activeConnectionId || result.kind !== "insert" || !entitySet) return;
+    const rowCount = result.rows.length;
+    if (!confirm(`即将向 ${result.entityLogicalName} 插入 ${rowCount} 条新记录，确定吗？`)) return;
+
+    setWriteRunning(true);
+    setWriteResults([]);
+    const startedAt = new Date();
+    const entries: Sql4CdsLogEntry[] = [];
+
+    for (let i = 0; i < result.rows.length; i++) {
+      const key = `第 ${i + 1} 行`;
+      const columnValues: Record<string, unknown> = {};
+      result.columns.forEach((col, idx) => {
+        columnValues[col] = literalToJsValue(result.rows[i][idx]);
+      });
+      let entry: Sql4CdsLogEntry;
+      try {
+        const { newId } = await insertRow(activeConnectionId, result.entityLogicalName, entitySet, columnValues);
+        entry = { key, state: "success", detail: newId ?? undefined };
+      } catch (err) {
+        entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
+      }
+      entries.push(entry);
+      setWriteResults((r) => [...(r ?? []), entry]);
+    }
+
+    finishWrite("insert", result.entityLogicalName, entitySet, startedAt, entries);
+  }
+
+  async function handleMutate() {
+    if (!activeConnectionId || result.kind !== "mutate" || !entitySet || !matchInfo) return;
+    const ids = matchInfo.ids;
+    if (ids.length === 0) return;
+    const verb = result.action === "update" ? "更新" : "删除";
+    if (!confirm(`即将${verb} ${result.entityLogicalName} 的 ${ids.length} 条记录，确定吗？`)) return;
+
+    setWriteRunning(true);
+    setWriteResults([]);
+    const startedAt = new Date();
+    const entries: Sql4CdsLogEntry[] = [];
+
+    const columnValues =
+      result.action === "update" && result.setClauses
+        ? Object.fromEntries(result.setClauses.map((s) => [s.column, literalToJsValue(s.value)]))
+        : null;
+
+    for (const id of ids) {
+      let entry: Sql4CdsLogEntry;
+      try {
+        if (result.action === "update") {
+          await updateRow(activeConnectionId, result.entityLogicalName, entitySet, id, columnValues!);
+        } else {
+          await deleteRow(activeConnectionId, entitySet, id);
+        }
+        entry = { key: id, state: "success" };
+      } catch (err) {
+        entry = { key: id, state: "error", error: err instanceof Error ? err.message : String(err) };
+      }
+      entries.push(entry);
+      setWriteResults((r) => [...(r ?? []), entry]);
+    }
+
+    finishWrite(result.action, result.entityLogicalName, entitySet, startedAt, entries);
+  }
+
   if (!isNativeBridgeAvailable()) {
     return (
       <div className="max-w-xl rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
@@ -98,8 +266,9 @@ export default function Sql4Cds() {
   return (
     <div className="max-w-4xl space-y-6">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        支持 SELECT（含 JOIN / GROUP BY / 聚合函数，翻译成 FetchXML 执行）。INSERT / UPDATE / DELETE 即将支持。用
-        T-SQL 语法解析，翻译成 Dataverse Web API 查询后真实执行。
+        支持 SELECT（含 JOIN / GROUP BY / 聚合函数，翻译成 FetchXML 执行）、INSERT、UPDATE、DELETE。UPDATE/DELETE
+        必须带 WHERE 子句（不支持整表操作，请自己写恒真条件），执行前会弹窗二次确认，单次最多处理 500 条匹配记录并自动下载执行日志。用 T-SQL
+        语法解析，翻译成 Dataverse Web API 查询后真实执行。
       </div>
 
       <div>
@@ -223,13 +392,83 @@ export default function Sql4Cds() {
         </>
       )}
 
-      {(result.kind === "insert" || result.kind === "mutate") && (
-        <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
-          {result.kind === "insert"
-            ? `已识别为 INSERT（目标实体 ${result.entityLogicalName}，${result.rows.length} 行）`
-            : `已识别为 ${result.action === "update" ? "UPDATE" : "DELETE"}（目标实体 ${result.entityLogicalName}）`}
-          ，执行功能正在这次改动的下一部分实现中。
-        </div>
+      {result.kind === "insert" && (
+        <>
+          <div className="overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
+            <div className="border-b border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
+              待插入 {result.rows.length} 行
+            </div>
+            <table className="w-full text-left text-sm">
+              <thead className="bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+                <tr>
+                  {result.columns.map((c) => (
+                    <th key={c} className="px-3 py-2 font-mono">
+                      {c}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.rows.map((row, i) => (
+                  <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+                    {row.map((node, j) => (
+                      <td key={j} className="px-3 py-1.5 font-mono text-xs">
+                        {describeLiteral(node)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div>
+            <button
+              onClick={handleInsert}
+              disabled={!activeConnectionId || !entitySet || writeRunning}
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {writeRunning ? "执行中…" : `执行插入 (${result.rows.length} 行)`}
+            </button>
+            {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+          </div>
+
+          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} />}
+        </>
+      )}
+
+      {result.kind === "mutate" && (
+        <>
+          <OutputRow label="WHERE → $filter" value={result.filter} />
+
+          {matchLoading && <p className="text-xs text-gray-400">正在查询匹配的记录…</p>}
+          {matchError && (
+            <p className="text-xs text-red-600 dark:text-red-400">查询匹配记录失败：{matchError}</p>
+          )}
+          {matchInfo && (
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              匹配到 {matchInfo.totalCount} 条记录
+              {matchInfo.totalCount > matchInfo.ids.length
+                ? `，本次最多处理其中 ${matchInfo.ids.length} 条（超出部分请缩小 WHERE 范围后再次执行）`
+                : ""}
+            </p>
+          )}
+
+          <div>
+            <button
+              onClick={handleMutate}
+              disabled={!activeConnectionId || !matchInfo || matchInfo.ids.length === 0 || writeRunning}
+              className={`rounded-md px-4 py-2 text-sm font-medium text-white disabled:opacity-50 ${
+                result.action === "delete" ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"
+              }`}
+            >
+              {writeRunning ? "执行中…" : `执行${result.action === "update" ? "更新" : "删除"}`}
+            </button>
+            {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+          </div>
+
+          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} />}
+        </>
       )}
     </div>
   );
