@@ -10,6 +10,7 @@ public static class DataverseHandlers
         public string Method { get; set; } = "GET";
         public string Path { get; set; } = "";
         public JsonElement? Body { get; set; }
+        public bool IncludeFormattedValues { get; set; }
     }
 
     public static void Register(NativeBridge bridge, DataverseApiClient client)
@@ -18,7 +19,8 @@ public static class DataverseHandlers
         {
             var input = @params.Deserialize<RequestParams>(NativeBridge.JsonOptions)
                 ?? throw new ArgumentException("缺少请求参数");
-            var result = await client.RequestAsync(input.ConnectionId, input.Method, input.Path, input.Body);
+            var result = await client.RequestAsync(
+                input.ConnectionId, input.Method, input.Path, input.Body, input.IncludeFormattedValues);
             return result;
         });
     }

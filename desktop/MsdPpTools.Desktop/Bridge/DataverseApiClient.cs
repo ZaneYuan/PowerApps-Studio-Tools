@@ -25,7 +25,8 @@ public sealed class DataverseApiClient
         _store = store;
     }
 
-    public async Task<JsonElement?> RequestAsync(string connectionId, string method, string path, JsonElement? body)
+    public async Task<JsonElement?> RequestAsync(
+        string connectionId, string method, string path, JsonElement? body, bool includeFormattedValues = false)
     {
         var connection = _store.FindById(connectionId)
             ?? throw new InvalidOperationException("找不到该连接，可能已被删除。");
@@ -37,10 +38,17 @@ public sealed class DataverseApiClient
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.Add("OData-MaxVersion", "4.0");
         request.Headers.Add("OData-Version", "4.0");
-        // Without this, POST creates return 204 + empty body (new id only in the OData-EntityId
-        // response header). Plugin Registration needs the created record's id back inline to
-        // chain the next create, so ask Dataverse to return the full representation instead.
-        request.Headers.Add("Prefer", "return=representation");
+        // return=representation: without this, POST creates return 204 + empty body (new id only
+        // in the OData-EntityId response header). Plugin Registration needs the created record's
+        // id back inline to chain the next create, so ask for the full representation always.
+        // odata.include-annotations: opt-in per-call (Record Explorer) — adds FormattedValue
+        // (human-readable picklist/lookup labels) and lookuplogicalname (which entity a
+        // polymorphic lookup actually points to) annotations to the response. Left off by
+        // default since it adds extra `@...` keys other tools' result tables don't expect.
+        var prefer = includeFormattedValues
+            ? "return=representation,odata.include-annotations=\"OData.Community.Display.V1.FormattedValue,Microsoft.Dynamics.CRM.lookuplogicalname\""
+            : "return=representation";
+        request.Headers.Add("Prefer", prefer);
 
         if (body.HasValue)
         {

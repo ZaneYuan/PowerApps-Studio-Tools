@@ -63,16 +63,11 @@ export default function RecordExplorer() {
         .map((g) => ({ ...g, records: searchText.trim() ? g.records.filter((r) => recordMatches(r, searchText)) : g.records }))
         .filter((g) => g.records.length > 0)
     : [];
-  const level2Visible = graph
-    ? graph.level2
-        .map((g) => ({ ...g, items: searchText.trim() ? g.items.filter((i) => recordMatches(i.record, searchText)) : g.items }))
-        .filter((g) => g.items.length > 0)
-    : [];
 
   return (
     <div className="max-w-6xl space-y-4">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        输入实体 + GUID（或直接粘贴记录的 D365 表单 URL）加载一条记录，向上展示两级查找字段指向的完整记录，向下展示一级子表记录。系统自带的管理型字段/平台通用子表已过滤，自定义字段/关系始终保留。
+        输入实体 + GUID（或直接粘贴记录的 D365 表单 URL）加载一条记录，向上展示一级查找字段指向的完整记录（按目标记录最近修改时间排序，最多显示 5 个表），向下展示一级子表记录。系统自带的管理型字段/平台通用子表已过滤，自定义字段/关系始终保留。
       </div>
 
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
@@ -130,7 +125,7 @@ export default function RecordExplorer() {
           <div className="flex gap-1 border-b border-gray-200 dark:border-gray-800">
             {([
               ["current", "当前记录"],
-              ["up", `关联记录（向上）${searchText.trim() ? ` — ${level1Visible.length + level2Visible.length} 组命中` : ""}`],
+              ["up", `关联记录（向上）${searchText.trim() ? ` — ${level1Visible.length} 组命中` : ""}`],
               ["down", "子记录（向下）"],
             ] as [ViewTab, string][]).map(([key, label]) => (
               <button
@@ -150,55 +145,25 @@ export default function RecordExplorer() {
           {tab === "current" && <RecordCard snapshot={graph.current} searchText={searchText} defaultExpanded />}
 
           {tab === "up" && (
-            <div className="space-y-4">
-              <div>
-                <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">一级</h3>
-                {level1Visible.length === 0 ? (
-                  <p className="text-sm text-gray-400">{searchText.trim() ? "没有命中的一级关联记录。" : "没有可跟随的查找字段。"}</p>
-                ) : (
-                  <div className="space-y-3">
-                    {level1Visible.map((group) => (
-                      <div key={group.entityLogicalName}>
-                        <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">
-                          {group.entityLogicalName} ({group.records.length})
-                        </div>
-                        <div className="space-y-2">
-                          {group.records.map((r) => (
-                            <RecordCard key={r.id} snapshot={r} searchText={searchText} defaultExpanded />
-                          ))}
-                        </div>
+            <div>
+              {level1Visible.length === 0 ? (
+                <p className="text-sm text-gray-400">{searchText.trim() ? "没有命中的关联记录。" : "没有可跟随的查找字段。"}</p>
+              ) : (
+                <div className="space-y-3">
+                  {level1Visible.map((group) => (
+                    <div key={group.entityLogicalName}>
+                      <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">
+                        {group.entityLogicalName} ({group.records.length})
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div>
-                <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">二级</h3>
-                {level2Visible.length === 0 ? (
-                  <p className="text-sm text-gray-400">{searchText.trim() ? "没有命中的二级关联记录。" : "没有二级关联记录。"}</p>
-                ) : (
-                  <div className="space-y-3">
-                    {level2Visible.map((group) => (
-                      <div key={group.entityLogicalName}>
-                        <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">
-                          {group.entityLogicalName} ({group.items.length})
-                        </div>
-                        <div className="space-y-2">
-                          {group.items.map(({ record, via }) => (
-                            <RecordCard
-                              key={record.id}
-                              snapshot={record}
-                              searchText={searchText}
-                              defaultExpanded={false}
-                              subtitle={`${via.entityLogicalName} · ${via.primaryName}`}
-                            />
-                          ))}
-                        </div>
+                      <div className="space-y-2">
+                        {group.records.map((r) => (
+                          <RecordCard key={r.id} snapshot={r} searchText={searchText} defaultExpanded />
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

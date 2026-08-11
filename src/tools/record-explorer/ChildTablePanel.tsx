@@ -1,12 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { matchedFields } from "./search";
-import type { ChildGroup } from "./types";
-
-function cellValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
+import { displayFieldValue, type ChildGroup } from "./types";
 
 export default function ChildTablePanel({ groups, searchText }: { groups: ChildGroup[]; searchText: string }) {
   const filtered = useMemo(() => {
@@ -90,7 +84,7 @@ export default function ChildTablePanel({ groups, searchText }: { groups: ChildG
                           matched.has(c) ? "bg-yellow-200 dark:bg-yellow-500/40" : ""
                         }`}
                       >
-                        {cellValue(row.fields[c])}
+                        {displayFieldValue(c, row.fields[c], row.formattedFields)}
                       </td>
                     ))}
                   </tr>

@@ -1,23 +1,15 @@
 import { useEffect, useState } from "react";
 import { matchedFields } from "./search";
-import type { RecordSnapshot } from "./types";
-
-function formatValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
+import { displayFieldValue, type RecordSnapshot } from "./types";
 
 export default function RecordCard({
   snapshot,
   searchText,
   defaultExpanded,
-  subtitle,
 }: {
   snapshot: RecordSnapshot;
   searchText: string;
   defaultExpanded: boolean;
-  subtitle?: string;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const matched = matchedFields(snapshot, searchText);
@@ -41,20 +33,19 @@ export default function RecordCard({
         </span>
         <span className="shrink-0 text-xs text-gray-400">{expanded ? "收起 ▲" : "展开 ▼"}</span>
       </button>
-      {subtitle && <div className="px-3 pb-1 text-xs text-gray-400">来自：{subtitle}</div>}
       {expanded && (
-        <div className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-3 gap-y-1 border-t border-gray-100 px-3 py-2 text-xs dark:border-gray-800">
+        <div className="grid grid-cols-1 gap-3 border-t border-gray-100 px-3 py-2 text-xs dark:border-gray-800 sm:grid-cols-2 lg:grid-cols-3">
           {fieldEntries.map(([field, value]) => (
-            <div key={field} className="contents">
+            <div key={field} className="min-w-0">
               <div className="truncate font-mono text-gray-400" title={field}>
                 {field}
               </div>
-              <div className={`min-w-0 break-all ${matched.has(field) ? "rounded bg-yellow-200 px-1 dark:bg-yellow-500/40" : ""}`}>
-                {formatValue(value)}
+              <div className={`break-all ${matched.has(field) ? "rounded bg-yellow-200 px-1 dark:bg-yellow-500/40" : ""}`}>
+                {displayFieldValue(field, value, snapshot.formattedFields)}
               </div>
             </div>
           ))}
-          {fieldEntries.length === 0 && <div className="col-span-2 text-gray-400">没有非空字段。</div>}
+          {fieldEntries.length === 0 && <div className="col-span-full text-gray-400">没有非空字段。</div>}
         </div>
       )}
     </div>

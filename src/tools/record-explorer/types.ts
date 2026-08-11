@@ -2,29 +2,24 @@ export interface RecordSnapshot {
   entityLogicalName: string;
   id: string;
   primaryName: string;
-  /** Raw field values only — no FormattedValue conversion, same as every other tool in this
-   *  project. Lookup fields are keyed by their plain attribute logical name (not `_x_value`),
-   *  the underscore/`_value` unwrapping happens once in dataverseOps.ts. */
+  /** Raw field values, keyed by plain attribute logical name (not `_x_value` — the underscore/
+   *  `_value` unwrapping happens once in dataverseOps.ts). */
   fields: Record<string, unknown>;
+  /** field -> human-readable label from the server's FormattedValue annotation (Lookup,
+   *  OptionSet/Picklist, Money, dates...) — only present for fields the server actually
+   *  annotated, requires requesting `Prefer: odata.include-annotations`. Use displayFieldValue()
+   *  below rather than reading this directly. */
+  formattedFields: Record<string, string>;
+  /** Lookup attribute -> the actual target entity logical name, from the server's
+   *  lookuplogicalname annotation. Lets polymorphic lookups (customerid, regardingobjectid —
+   *  which can point at more than one entity type) be resolved per-record instead of skipped
+   *  outright, since the annotation says exactly which entity *this* record's value points to. */
+  lookupTargetEntity: Record<string, string>;
 }
 
 export interface ParentGroup {
   entityLogicalName: string;
   records: RecordSnapshot[];
-}
-
-/** A level-2 parent record plus a breadcrumb back to the level-1 record it was reached
- *  through — Level 1/2 are displayed as two flat, independently-filterable sections rather
- *  than a nested tree (avoids "keep an unmatched ancestor visible just to reach a matching
- *  descendant" complexity). */
-export interface Level2Record {
-  record: RecordSnapshot;
-  via: { entityLogicalName: string; primaryName: string };
-}
-
-export interface ParentGroupLevel2 {
-  entityLogicalName: string;
-  items: Level2Record[];
 }
 
 export interface ChildGroup {
@@ -37,8 +32,17 @@ export interface ChildGroup {
 export interface RecordGraph {
   current: RecordSnapshot;
   level1: ParentGroup[];
-  level2: ParentGroupLevel2[];
   children: ChildGroup[];
+}
+
+/** "Label (raw)" for any field the server returned a FormattedValue annotation for; falls back
+ *  to the raw value alone when there's no annotation (most scalar fields, or when annotations
+ *  weren't requested) or when the label and raw value are identical. */
+export function displayFieldValue(field: string, value: unknown, formattedFields: Record<string, string>): string {
+  if (value === null || value === undefined) return "";
+  const raw = typeof value === "object" ? JSON.stringify(value) : String(value);
+  const formatted = formattedFields[field];
+  return formatted && formatted !== raw ? `${formatted} (${raw})` : raw;
 }
 
 /** Lookup attributes never worth following "up" — pure record-administration lookups present
