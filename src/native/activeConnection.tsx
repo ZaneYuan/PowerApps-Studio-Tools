@@ -23,6 +23,13 @@ interface ActiveConnectionContextValue {
 
 const ActiveConnectionContext = createContext<ActiveConnectionContextValue | null>(null);
 
+/** Set by ToolPanel to bind one open tab's tools to that tab's own connection instead of the
+ *  single global one — `undefined` means "no override, use the global value" (the Home page and
+ *  any context outside a tab). This is what lets two tabs of the same tool run against two
+ *  different connections simultaneously: every tool component keeps calling useActiveConnection()
+ *  exactly as before, but the id it reads is transparently swapped per tab via this context. */
+export const TabConnectionContext = createContext<string | null | undefined>(undefined);
+
 const STORAGE_KEY = "msdpptools.activeConnectionId";
 
 export function ActiveConnectionProvider({ children }: { children: ReactNode }) {
@@ -68,5 +75,11 @@ export function ActiveConnectionProvider({ children }: { children: ReactNode }) 
 export function useActiveConnection(): ActiveConnectionContextValue {
   const ctx = useContext(ActiveConnectionContext);
   if (!ctx) throw new Error("useActiveConnection 必须在 ActiveConnectionProvider 内使用");
-  return ctx;
+  const tabOverride = useContext(TabConnectionContext);
+  if (tabOverride === undefined) return ctx;
+  // Inside a tab: activeConnectionId reflects *this tab's* bound connection. setActiveConnectionId
+  // still targets the global/pending value (only the sidebar's "open a new tab" flow and the
+  // connection switcher's own no-tab-focused state use the setter directly) — no tool page calls
+  // it today, so this is only reachable if one starts to.
+  return { ...ctx, activeConnectionId: tabOverride };
 }

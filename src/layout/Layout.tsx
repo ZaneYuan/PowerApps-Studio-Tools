@@ -6,25 +6,25 @@ import TabBar from "./TabBar";
 import ToolPanel from "./ToolPanel";
 
 export default function Layout() {
-  const { openTabs, activeTabId } = useTabManager();
+  const { openTabs, activeTabKey } = useTabManager();
 
   return (
-    <div className="flex min-h-screen bg-gray-50 dark:bg-gray-950">
-      <aside className="hidden w-64 shrink-0 border-r border-gray-200 dark:border-gray-800 md:block">
+    <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-950">
+      <aside className="hidden w-64 shrink-0 overflow-y-auto border-r border-gray-200 dark:border-gray-800 md:block">
         <Sidebar />
       </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <TabBar />
-        <main className="min-w-0 flex-1 overflow-auto p-6 md:p-10">
-          <div style={{ display: activeTabId === null ? "block" : "none" }}>
+        <main className="min-h-0 min-w-0 flex-1 overflow-auto p-6 md:p-10">
+          <div style={{ display: activeTabKey === null ? "block" : "none" }}>
             <Home />
           </div>
-          {openTabs.map((id) => {
-            const tool = getToolById(id);
+          {openTabs.map((tab) => {
+            const tool = getToolById(tab.toolId);
             if (!tool) return null;
             return (
-              <div key={id} style={{ display: activeTabId === id ? "block" : "none" }}>
-                <ToolPanel tool={tool} />
+              <div key={tab.tabKey} style={{ display: activeTabKey === tab.tabKey ? "block" : "none" }}>
+                <ToolPanel tool={tool} tabKey={tab.tabKey} connectionId={tab.connectionId} />
               </div>
             );
           })}

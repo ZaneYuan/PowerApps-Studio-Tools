@@ -108,7 +108,7 @@ export default function RecordExplorer() {
         >
           {loading ? "加载中…" : "加载"}
         </button>
-        {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个当前连接。</span>}
+        {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
       </div>
 
       {error && (

@@ -182,7 +182,7 @@ export default function DataMigration() {
   if (!activeConnectionId) {
     return (
       <div className="max-w-xl rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-        请先在左侧侧边栏顶部选择一个"当前连接"（数据来源），没有连接的话先去"我的连接"里添加。
+        请先在左侧侧边栏顶部选择一个"我的连接"（数据来源），没有连接的话先去"我的连接"里添加。
       </div>
     );
   }

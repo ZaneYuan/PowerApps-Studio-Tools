@@ -1,3 +1,4 @@
+import { useActiveConnection } from "../native/activeConnection";
 import { useTabManager } from "../native/tabs";
 import { getToolById } from "../tools/registry";
 
@@ -9,26 +10,31 @@ const tabCls = (active: boolean) =>
   }`;
 
 export default function TabBar() {
-  const { openTabs, activeTabId, openTab, closeTab, activateHome } = useTabManager();
+  const { openTabs, activeTabKey, activateTab, closeTab, activateHome } = useTabManager();
+  const { connections } = useActiveConnection();
 
   return (
-    <div className="flex items-center overflow-x-auto border-b border-gray-200 bg-white px-2 dark:border-gray-800 dark:bg-gray-950">
-      <button onClick={activateHome} className={tabCls(activeTabId === null)}>
+    <div className="flex flex-wrap items-center border-b border-gray-200 bg-white px-2 dark:border-gray-800 dark:bg-gray-950">
+      <button onClick={activateHome} className={tabCls(activeTabKey === null)}>
         🧰 工具列表
       </button>
-      {openTabs.map((id) => {
-        const tool = getToolById(id);
+      {openTabs.map((tab) => {
+        const tool = getToolById(tab.toolId);
         if (!tool) return null;
+        const connectionName = tab.connectionId ? connections.find((c) => c.id === tab.connectionId)?.name : null;
         return (
-          <div key={id} className={`group ${tabCls(activeTabId === id)}`}>
-            <button onClick={() => openTab(id)} className="flex items-center gap-1.5">
+          <div key={tab.tabKey} className={`group ${tabCls(activeTabKey === tab.tabKey)}`}>
+            <button onClick={() => activateTab(tab.tabKey)} className="flex items-center gap-1.5">
               <span>{tool.icon}</span>
-              <span className="max-w-[10rem] truncate">{tool.name}</span>
+              <span className="max-w-[14rem] truncate">
+                {tool.name}
+                {connectionName && <span className="text-gray-400">（{connectionName}）</span>}
+              </span>
             </button>
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                closeTab(id);
+                closeTab(tab.tabKey);
               }}
               className="ml-1 rounded px-1 text-xs text-gray-400 opacity-0 hover:bg-gray-200 hover:text-gray-700 group-hover:opacity-100 dark:hover:bg-gray-800 dark:hover:text-gray-200"
               title="关闭"

@@ -1,10 +1,13 @@
 import { tools, getCategories } from "../tools/registry";
+import { useActiveConnection } from "../native/activeConnection";
 import { useTabManager } from "../native/tabs";
 import ConnectionSwitcher from "./ConnectionSwitcher";
 
 export default function Sidebar() {
   const categories = getCategories();
-  const { activeTabId, openTab, activateHome } = useTabManager();
+  const { activeConnectionId } = useActiveConnection();
+  const { openTabs, activeTabKey, openTab, activateHome } = useTabManager();
+  const activeToolId = openTabs.find((t) => t.tabKey === activeTabKey)?.toolId ?? null;
 
   return (
     <nav className="flex h-full flex-col overflow-y-auto">
@@ -29,9 +32,9 @@ export default function Sidebar() {
                 .map((tool) => (
                   <li key={tool.id}>
                     <button
-                      onClick={() => openTab(tool.id)}
+                      onClick={() => openTab(tool.id, activeConnectionId)}
                       className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
-                        activeTabId === tool.id
+                        activeToolId === tool.id
                           ? "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
                           : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
                       }`}
