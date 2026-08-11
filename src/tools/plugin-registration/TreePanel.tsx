@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { fetchAssemblies, fetchImages, fetchPluginTypes, fetchSteps } from "./dataverseOps";
 import {
   IMAGE_TYPE_LABELS,
@@ -61,6 +61,24 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
   const [searchQuery, setSearchQuery] = useState("");
   const searching = searchQuery.trim().length > 0;
   const q = searchQuery.trim().toLowerCase();
+
+  // Rows that support double-click-to-edit also have a plain onClick (select/load detail) — a
+  // real double-click fires two native `click` events before the `dblclick`, so without this
+  // both the select handler's own request AND the edit handler's fire together. Delaying the
+  // single-click action lets a following dblclick cancel it instead.
+  const clickTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  function debouncedClick(key: string, action: () => void) {
+    const pending = clickTimers.current[key];
+    if (pending) {
+      clearTimeout(pending);
+      delete clickTimers.current[key];
+      return;
+    }
+    clickTimers.current[key] = setTimeout(() => {
+      delete clickTimers.current[key];
+      action();
+    }, 250);
+  }
 
   function assemblyMatches(asm: PluginAssembly): boolean {
     return asm.name.toLowerCase().includes(q);
@@ -306,7 +324,9 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                                       </button>
                                       <button
                                         className="min-w-0 flex-1 truncate text-left"
-                                        onClick={() => onSelect("step", s.sdkmessageprocessingstepid)}
+                                        onClick={() =>
+                                          debouncedClick(sKey, () => onSelect("step", s.sdkmessageprocessingstepid))
+                                        }
                                         onDoubleClick={() =>
                                           onEditStep(s.sdkmessageprocessingstepid, t.plugintypeid, pluginTypeLabel(t))
                                         }
@@ -348,7 +368,11 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                                             <li key={img.sdkmessageprocessingstepimageid}>
                                               <button
                                                 className={`${rowBase} ${selectedKey === iKey ? rowSelected : ""}`}
-                                                onClick={() => onSelect("image", img.sdkmessageprocessingstepimageid)}
+                                                onClick={() =>
+                                                  debouncedClick(iKey, () =>
+                                                    onSelect("image", img.sdkmessageprocessingstepimageid),
+                                                  )
+                                                }
                                                 onDoubleClick={() =>
                                                   onEditImage(img.sdkmessageprocessingstepimageid, s.sdkmessageprocessingstepid)
                                                 }
