@@ -19,12 +19,16 @@ export default function AttributePicker({
   onToggle: (name: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [showChecked, setShowChecked] = useState(true);
+  const [showUnchecked, setShowUnchecked] = useState(true);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return options;
-    return options.filter((a) => a.toLowerCase().includes(q));
-  }, [options, query]);
+    return options.filter((a) => {
+      if (q && !a.toLowerCase().includes(q)) return false;
+      return selected.has(a) ? showChecked : showUnchecked;
+    });
+  }, [options, query, selected, showChecked, showUnchecked]);
 
   return (
     <div>
@@ -36,6 +40,16 @@ export default function AttributePicker({
         onChange={(e) => setQuery(e.target.value)}
         className={`${inputCls} mb-1.5`}
       />
+      <div className="mb-1.5 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+        <label className="inline-flex items-center gap-1">
+          <input type="checkbox" checked={showChecked} onChange={(e) => setShowChecked(e.target.checked)} />
+          已勾选
+        </label>
+        <label className="inline-flex items-center gap-1">
+          <input type="checkbox" checked={showUnchecked} onChange={(e) => setShowUnchecked(e.target.checked)} />
+          未勾选
+        </label>
+      </div>
       <div className="max-h-32 overflow-y-auto rounded-md border border-gray-200 p-2 text-xs dark:border-gray-700">
         {filtered.length === 0 && <p className="text-gray-400">没有匹配的字段。</p>}
         {filtered.map((a) => (

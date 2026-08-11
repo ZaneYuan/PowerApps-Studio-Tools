@@ -439,6 +439,10 @@ export async function deleteTypeCascade(connectionId: string, pluginTypeId: stri
   await deleteDataverse(connectionId, `plugintypes(${pluginTypeId})`);
 }
 
+/** Not wired to any UI button — deleting a whole assembly cascades through every type/step/image
+ *  under it, which is too easy to trigger by accident from a tree view. Kept here in case a
+ *  more deliberate flow (e.g. a confirmation dialog that names every affected step) is added
+ *  later; delete the assembly's types individually via deleteTypeCascade in the meantime. */
 export async function deleteAssemblyCascade(connectionId: string, assemblyId: string): Promise<void> {
   const types = await fetchPluginTypes(connectionId, assemblyId);
   for (const type of types) {

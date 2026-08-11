@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import TreePanel, { type TreePanelHandle } from "./TreePanel";
@@ -6,7 +6,6 @@ import StepRegisterDialog from "./StepRegisterDialog";
 import ImageRegisterDialog from "./ImageRegisterDialog";
 import AssemblyRegisterDialog from "./AssemblyRegisterDialog";
 import {
-  deleteAssemblyCascade,
   deleteImage,
   deleteStepCascade,
   deleteTypeCascade,
@@ -112,6 +111,23 @@ export default function PluginRegistration() {
   const [actionBusy, setActionBusy] = useState(false);
 
   const [dialog, setDialog] = useState<DialogState>(null);
+
+  const [treeWidth, setTreeWidth] = useState(384);
+
+  function handleResizeStart(e: ReactMouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = treeWidth;
+    function onMove(ev: MouseEvent) {
+      setTreeWidth(Math.min(720, Math.max(240, startWidth + (ev.clientX - startX))));
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
 
   async function loadDetail(kind: TreeNodeKind, id: string) {
     if (!activeConnectionId) return;
@@ -220,23 +236,6 @@ export default function PluginRegistration() {
     }
   }
 
-  async function handleDeleteAssembly() {
-    if (!activeConnectionId || !selected || selected.kind !== "assembly") return;
-    if (!confirm("删除该程序集会连带删除它下面所有的 PluginType / Step / Image。确定继续？")) return;
-    setActionBusy(true);
-    setActionError(null);
-    try {
-      await deleteAssemblyCascade(activeConnectionId, selected.id);
-      treeRef.current?.reloadRoot();
-      setSelected(null);
-      setDetail(null);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
   if (!isNativeBridgeAvailable()) {
     return (
       <div className="max-w-xl rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
@@ -256,10 +255,11 @@ export default function PluginRegistration() {
   const stepEnabled = selected?.kind === "step" && (detail as { statecode?: number } | null)?.statecode === 0;
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] gap-4">
+    <div className="flex h-[calc(100vh-8rem)]">
       <TreePanel
         ref={treeRef}
         connectionId={activeConnectionId}
+        width={treeWidth}
         selectedKey={selected ? nodeKey(selected.kind, selected.id) : null}
         onSelect={handleSelect}
         onAddAssembly={() => setDialog({ kind: "assembly" })}
@@ -267,6 +267,12 @@ export default function PluginRegistration() {
         onAddImage={(stepId, messageName, primaryEntity) => setDialog({ kind: "image", stepId, messageName, primaryEntity })}
         onEditStep={handleEditStep}
         onEditImage={handleEditImage}
+      />
+
+      <div
+        onMouseDown={handleResizeStart}
+        className="mx-1 w-1.5 shrink-0 cursor-col-resize rounded hover:bg-blue-200 dark:hover:bg-blue-900/40"
+        title="拖动调整宽度"
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-auto rounded-lg border border-gray-200 p-3 dark:border-gray-800">
@@ -313,28 +319,25 @@ export default function PluginRegistration() {
                 编辑（或双击树节点）
               </button>
             )}
-            <button
-              onClick={
-                selected.kind === "assembly"
-                  ? handleDeleteAssembly
-                  : selected.kind === "type"
+            {/* Assembly delete is deliberately not exposed here — cascades through every type/
+                step/image under it, too easy to trigger by accident. See deleteAssemblyCascade's
+                doc comment in dataverseOps.ts. */}
+            {selected.kind !== "assembly" && (
+              <button
+                onClick={
+                  selected.kind === "type"
                     ? handleDeleteType
                     : selected.kind === "step"
                       ? handleDeleteStep
                       : handleDeleteImage
-              }
-              disabled={actionBusy || detailLoading}
-              className="rounded-md border border-red-300 px-3 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20"
-            >
-              删除
-              {selected.kind === "assembly"
-                ? " Assembly"
-                : selected.kind === "type"
-                  ? " PluginType"
-                  : selected.kind === "step"
-                    ? " Step"
-                    : " Image"}
-            </button>
+                }
+                disabled={actionBusy || detailLoading}
+                className="rounded-md border border-red-300 px-3 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20"
+              >
+                删除
+                {selected.kind === "type" ? " PluginType" : selected.kind === "step" ? " Step" : " Image"}
+              </button>
+            )}
           </div>
         )}
 

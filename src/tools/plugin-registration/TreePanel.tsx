@@ -24,6 +24,7 @@ export interface TreePanelHandle {
 
 interface TreePanelProps {
   connectionId: string;
+  width: number;
   selectedKey: string | null;
   onSelect: (kind: TreeNodeKind, id: string) => void;
   onAddAssembly: () => void;
@@ -42,7 +43,7 @@ function Caret({ open }: { open: boolean }) {
 }
 
 const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel(
-  { connectionId, selectedKey, onSelect, onAddAssembly, onAddStep, onAddImage, onEditStep, onEditImage },
+  { connectionId, width, selectedKey, onSelect, onAddAssembly, onAddStep, onAddImage, onEditStep, onEditImage },
   ref,
 ) {
   const [assemblies, setAssemblies] = useState<PluginAssembly[] | null>(null);
@@ -54,6 +55,30 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loadingKeys, setLoadingKeys] = useState<Set<string>>(new Set());
   const [errorByKey, setErrorByKey] = useState<Record<string, string>>({});
+
+  // Fuzzy search across Assembly/Type/Step names — see the eager-load effects below for why
+  // matches aren't limited to whatever's already expanded.
+  const [searchQuery, setSearchQuery] = useState("");
+  const searching = searchQuery.trim().length > 0;
+  const q = searchQuery.trim().toLowerCase();
+
+  function assemblyMatches(asm: PluginAssembly): boolean {
+    return asm.name.toLowerCase().includes(q);
+  }
+  function typeMatches(t: PluginType): boolean {
+    return pluginTypeLabel(t).toLowerCase().includes(q) || t.typename.toLowerCase().includes(q);
+  }
+  function stepMatches(s: PluginStep): boolean {
+    return s.name.toLowerCase().includes(q);
+  }
+  function typeHasMatch(t: PluginType): boolean {
+    if (typeMatches(t)) return true;
+    return !!stepsCache[t.plugintypeid]?.some(stepMatches);
+  }
+  function assemblyHasMatch(asm: PluginAssembly): boolean {
+    if (assemblyMatches(asm)) return true;
+    return !!typesCache[asm.pluginassemblyid]?.some(typeHasMatch);
+  }
 
   function withLoading(key: string, fn: () => Promise<void>) {
     setLoadingKeys((s) => new Set(s).add(key));
@@ -105,6 +130,29 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
     });
   }
 
+  // While searching, eagerly load every type (and then every type's steps) so a match can be
+  // found beyond whatever the user already happened to expand — normally these only load on
+  // demand when a node is expanded, which would make search useless for anything still collapsed.
+  useEffect(() => {
+    if (!searching || !assemblies) return;
+    for (const asm of assemblies) {
+      const key = nodeKey("assembly", asm.pluginassemblyid);
+      if (!typesCache[asm.pluginassemblyid] && !loadingKeys.has(key)) loadTypes(asm.pluginassemblyid);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searching, assemblies, typesCache]);
+
+  useEffect(() => {
+    if (!searching) return;
+    for (const types of Object.values(typesCache)) {
+      for (const t of types) {
+        const key = nodeKey("type", t.plugintypeid);
+        if (!stepsCache[t.plugintypeid] && !loadingKeys.has(key)) loadSteps(t.plugintypeid);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searching, typesCache, stepsCache]);
+
   function toggle(key: string, loadFn: () => void, alreadyLoaded: boolean) {
     setExpanded((s) => {
       const next = new Set(s);
@@ -148,26 +196,46 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
   }));
 
   return (
-    <div className="flex w-96 shrink-0 flex-col rounded-lg border border-gray-200 dark:border-gray-800">
-      <div className="flex items-center justify-between border-b border-gray-200 p-2 dark:border-gray-800">
-        <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Assembly / Type / Step / Image</span>
-        <button
-          onClick={onAddAssembly}
-          className="rounded border border-blue-300 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
-        >
-          + 注册程序集
-        </button>
+    <div className="flex shrink-0 flex-col rounded-lg border border-gray-200 dark:border-gray-800" style={{ width }}>
+      <div className="border-b border-gray-200 dark:border-gray-800">
+        <div className="flex items-center justify-between p-2">
+          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Assembly / Type / Step / Image</span>
+          <button
+            onClick={onAddAssembly}
+            className="rounded border border-blue-300 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
+          >
+            + 注册程序集
+          </button>
+        </div>
+        <div className="px-2 pb-2">
+          <input
+            type="text"
+            placeholder="模糊搜索 Assembly / Type / Step…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+          />
+          {searching && loadingKeys.size > 0 && (
+            <p className="mt-1 text-[10px] text-gray-400">正在加载搜索范围内的数据…</p>
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-1">
         {errorByKey.root && <p className="p-2 text-xs text-red-600 dark:text-red-400">{errorByKey.root}</p>}
         {!assemblies && !errorByKey.root && <p className="p-2 text-xs text-gray-400">加载中…</p>}
         {assemblies && assemblies.length === 0 && <p className="p-2 text-xs text-gray-400">还没有注册任何程序集。</p>}
+        {searching && assemblies && assemblies.filter(assemblyHasMatch).length === 0 && loadingKeys.size === 0 && (
+          <p className="p-2 text-xs text-gray-400">没有匹配的 Assembly / Type / Step。</p>
+        )}
         <ul>
-          {assemblies?.map((asm) => {
-            const key = nodeKey("assembly", asm.pluginassemblyid);
-            const open = expanded.has(key);
-            const types = typesCache[asm.pluginassemblyid];
-            return (
+          {assemblies
+            ?.filter((asm) => !searching || assemblyHasMatch(asm))
+            .map((asm) => {
+              const key = nodeKey("assembly", asm.pluginassemblyid);
+              const asmNameMatched = searching && assemblyMatches(asm);
+              const open = searching || expanded.has(key);
+              const types = typesCache[asm.pluginassemblyid];
+              return (
               <li key={asm.pluginassemblyid}>
                 <div className={`${rowBase} ${selectedKey === key ? rowSelected : ""}`}>
                   <button onClick={() => toggle(key, () => loadTypes(asm.pluginassemblyid), !!types)}>
@@ -186,9 +254,12 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                     {loadingKeys.has(key) && <li className="p-1 text-xs text-gray-400">加载类型…</li>}
                     {errorByKey[key] && <li className="p-1 text-xs text-red-500">{errorByKey[key]}</li>}
                     {types && types.length === 0 && <li className="p-1 text-xs text-gray-400">没有插件类型。</li>}
-                    {types?.map((t) => {
+                    {types
+                      ?.filter((t) => !searching || asmNameMatched || typeHasMatch(t))
+                      .map((t) => {
                       const tKey = nodeKey("type", t.plugintypeid);
-                      const tOpen = expanded.has(tKey);
+                      const tNameMatched = searching && (asmNameMatched || typeMatches(t));
+                      const tOpen = searching || expanded.has(tKey);
                       const steps = stepsCache[t.plugintypeid];
                       return (
                         <li key={t.plugintypeid}>
@@ -216,7 +287,9 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                               {loadingKeys.has(tKey) && <li className="p-1 text-xs text-gray-400">加载 Step…</li>}
                               {errorByKey[tKey] && <li className="p-1 text-xs text-red-500">{errorByKey[tKey]}</li>}
                               {steps && steps.length === 0 && <li className="p-1 text-xs text-gray-400">没有 Step。</li>}
-                              {steps?.map((s) => {
+                              {steps
+                                ?.filter((s) => !searching || tNameMatched || stepMatches(s))
+                                .map((s) => {
                                 const sKey = nodeKey("step", s.sdkmessageprocessingstepid);
                                 const sOpen = expanded.has(sKey);
                                 const images = imagesCache[s.sdkmessageprocessingstepid];
