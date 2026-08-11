@@ -12,6 +12,18 @@ export interface PluginType {
   name: string | null;
 }
 
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `friendlyname` is meant to be a human-readable label, but plugins registered by some tools
+ *  (seen in practice against a real org) end up with `friendlyname` literally set to the
+ *  plugintype's own GUID — showing that verbatim in the tree is worse than useless. When it
+ *  looks like a GUID, prefer the assembly-qualified `name`/`typename` instead (still not
+ *  "friendly", but at least it's the actual class name a developer recognizes). */
+export function pluginTypeLabel(t: PluginType): string {
+  if (t.friendlyname && !GUID_RE.test(t.friendlyname)) return t.friendlyname;
+  return t.name || t.typename;
+}
+
 export interface SdkMessageRef {
   name: string;
 }

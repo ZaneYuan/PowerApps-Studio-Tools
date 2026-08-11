@@ -1,5 +1,6 @@
 import { callNative } from "../../native/bridge";
 import { getBindNavigationProperty } from "../../native/navProperty";
+import { withSelectRetry } from "../../native/withSelectRetry";
 import type { PluginAssembly, PluginStep, PluginStepImage, PluginType } from "./types";
 
 async function fetchDataverse<T>(connectionId: string, path: string): Promise<T> {
@@ -79,12 +80,29 @@ export interface StepDetail {
   _sdkmessageprocessingstepsecureconfigid_value?: string | null;
 }
 
+const STEP_DETAIL_FIELDS = [
+  "name",
+  "stage",
+  "mode",
+  "rank",
+  "statecode",
+  "statuscode",
+  "filteringattributes",
+  "configuration",
+  "supporteddeployment",
+  // Lookup fields — $select requires the `_..._value` form, not the bare attribute name (a
+  // bare `eventhandler` 400s with "Could not find a property named 'eventhandler'").
+  "_eventhandler_value",
+  "_sdkmessageprocessingstepsecureconfigid_value",
+];
+
 export async function fetchStepDetail(connectionId: string, stepId: string): Promise<StepDetail> {
-  return fetchDataverse<StepDetail>(
-    connectionId,
-    `sdkmessageprocessingsteps(${stepId})` +
-      `?$select=name,stage,mode,rank,statecode,statuscode,filteringattributes,configuration,supporteddeployment,eventhandler,sdkmessageprocessingstepsecureconfigid` +
-      `&$expand=sdkmessageid($select=name),sdkmessagefilterid($select=primaryobjecttypecode)`,
+  return withSelectRetry(STEP_DETAIL_FIELDS, (fields) =>
+    fetchDataverse<StepDetail>(
+      connectionId,
+      `sdkmessageprocessingsteps(${stepId})?$select=${fields.join(",")}` +
+        `&$expand=sdkmessageid($select=name),sdkmessagefilterid($select=primaryobjecttypecode)`,
+    ),
   );
 }
 
@@ -98,10 +116,19 @@ export interface ImageDetail {
   _sdkmessageprocessingstepid_value?: string | null;
 }
 
+const IMAGE_DETAIL_FIELDS = [
+  "name",
+  "entityalias",
+  "imagetype",
+  "messagepropertyname",
+  "attributes1",
+  // Lookup to the parent step — same `_..._value` requirement as StepDetail's eventhandler.
+  "_sdkmessageprocessingstepid_value",
+];
+
 export async function fetchImageDetail(connectionId: string, imageId: string): Promise<ImageDetail> {
-  return fetchDataverse<ImageDetail>(
-    connectionId,
-    `sdkmessageprocessingstepimages(${imageId})?$select=name,entityalias,imagetype,messagepropertyname,attributes1,sdkmessageprocessingstepid`,
+  return withSelectRetry(IMAGE_DETAIL_FIELDS, (fields) =>
+    fetchDataverse<ImageDetail>(connectionId, `sdkmessageprocessingstepimages(${imageId})?$select=${fields.join(",")}`),
   );
 }
 

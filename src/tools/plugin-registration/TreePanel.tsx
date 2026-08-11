@@ -6,6 +6,7 @@ import {
   STAGE_LABELS,
   STEP_STATE_LABELS,
   nodeKey,
+  pluginTypeLabel,
   type PluginAssembly,
   type PluginStep,
   type PluginStepImage,
@@ -200,10 +201,10 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                               onClick={() => onSelect("type", t.plugintypeid)}
                               title={t.typename}
                             >
-                              🧩 {t.friendlyname || t.name || t.typename}
+                              🧩 {pluginTypeLabel(t)}
                             </button>
                             <button
-                              onClick={() => onAddStep(t.plugintypeid, t.friendlyname || t.typename)}
+                              onClick={() => onAddStep(t.plugintypeid, pluginTypeLabel(t))}
                               className="shrink-0 px-1 text-xs text-blue-500 hover:underline"
                               title="注册 Step"
                             >
@@ -234,7 +235,7 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                                         className="min-w-0 flex-1 truncate text-left"
                                         onClick={() => onSelect("step", s.sdkmessageprocessingstepid)}
                                         onDoubleClick={() =>
-                                          onEditStep(s.sdkmessageprocessingstepid, t.plugintypeid, t.friendlyname || t.name || t.typename)
+                                          onEditStep(s.sdkmessageprocessingstepid, t.plugintypeid, pluginTypeLabel(t))
                                         }
                                         title={`${s.name}（双击编辑）`}
                                       >
