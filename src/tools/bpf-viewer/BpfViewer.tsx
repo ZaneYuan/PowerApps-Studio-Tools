@@ -44,7 +44,7 @@ function buildDiagramRows(graph: BpfGraph): DiagramRow[] {
       if (!stage) break;
       visited.add(currentId);
       stages.push(stage);
-      const outs = outgoing.get(currentId) ?? [];
+      const outs: Edge[] = outgoing.get(currentId) ?? [];
       for (let i = 1; i < outs.length; i++) {
         if (!visited.has(outs[i].toStageId)) branchQueue.push({ startId: outs[i].toStageId, fromEdge: outs[i] });
       }
