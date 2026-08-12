@@ -17,11 +17,24 @@ export interface Step {
   isRequired: boolean;
 }
 
+/** A workflow/action fired by this stage (Power Apps' native designer shows these under
+ *  "Triggered Process") — not a data-collection step, so kept separate from Step. */
+export interface TriggeredProcess {
+  id: string;
+  /** The workflow/action's uniquename, e.g. "RegisterToUwe" — already human-readable, no
+   *  extra lookup needed. */
+  uniqueName: string;
+  /** "STAGEENTER" | "STAGEEXIT" as authored — surfaced as-is since it's plain, self-describing
+   *  English rather than an opaque numeric code. */
+  triggerEvent: string;
+}
+
 export interface Stage {
   id: string;
   name: string;
   entityName: string;
   steps: Step[];
+  triggeredProcesses: TriggeredProcess[];
 }
 
 export type EdgeKind = "default" | "condition";

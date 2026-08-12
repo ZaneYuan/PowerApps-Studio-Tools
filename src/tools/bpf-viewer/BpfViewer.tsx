@@ -192,7 +192,10 @@ export default function BpfViewer() {
                           }`}
                         >
                           <div className="font-medium text-gray-900 dark:text-gray-100">{stage.name}</div>
-                          <div className="text-gray-400">{stage.steps.length} 步</div>
+                          <div className="text-gray-400">
+                            {stage.steps.length} 步
+                            {stage.triggeredProcesses.length > 0 && ` · ${stage.triggeredProcesses.length} 个触发流程`}
+                          </div>
                         </button>
                         {j < row.stages.length - 1 && <span className="text-gray-300">→</span>}
                       </div>
@@ -235,6 +238,30 @@ export default function BpfViewer() {
                     ))}
                   </tbody>
                 </table>
+              )}
+
+              <div className="border-t border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 dark:border-gray-800 dark:text-gray-300">
+                触发的流程/操作（Triggered Process）
+              </div>
+              {selectedStage.triggeredProcesses.length === 0 ? (
+                <p className="p-3 text-xs text-gray-400">这个阶段没有触发任何流程/操作。</p>
+              ) : (
+                <ul className="divide-y divide-gray-100 dark:divide-gray-800">
+                  {selectedStage.triggeredProcesses.map((tp) => (
+                    <li key={tp.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                      <span className="text-gray-900 dark:text-gray-100">{tp.uniqueName || "(未命名)"}</span>
+                      {tp.triggerEvent && (
+                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                          {tp.triggerEvent === "STAGEENTER"
+                            ? "阶段进入时"
+                            : tp.triggerEvent === "STAGEEXIT"
+                              ? "阶段退出时"
+                              : tp.triggerEvent}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
           )}

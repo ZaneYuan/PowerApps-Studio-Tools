@@ -1,4 +1,4 @@
-import type { BpfGraph, Edge, Stage, Step } from "./types";
+import type { BpfGraph, Edge, Stage, Step, TriggeredProcess } from "./types";
 
 /** Loose shape of one node in the `Microsoft.Crm.Workflow.ObjectModel` tree stored in a BPF's
  *  `clientdata` — confirmed live against a real org (contoso-dev's "Example Quotation Process"),
@@ -21,6 +21,11 @@ interface RawNode {
   isProcessRequired?: boolean;
   // ControlStep
   dataFieldName?: string;
+  // ActionStep — a workflow/action fired on stage enter/exit (Power Apps' native designer
+  // shows these under "Triggered Process"). uniqueName is already the human-readable name
+  // (e.g. "RegisterToUwe"), so no extra lookup is needed.
+  uniqueName?: string;
+  triggerEvents?: { eventName?: string }[];
   // ConditionBranchStep → conditionExpression (BinaryExpression / EntityAttributeExpression /
   // PrimitiveExpression) — field name is "conditionOperatoroperator", not "operatoroperator".
   conditionExpression?: RawNode;
@@ -83,12 +88,23 @@ function buildStep(stepNode: RawNode): Step {
   };
 }
 
+function buildTriggeredProcess(actionNode: RawNode): TriggeredProcess {
+  return {
+    id: actionNode.id ?? "",
+    uniqueName: typeof actionNode.uniqueName === "string" ? actionNode.uniqueName : "",
+    triggerEvent: actionNode.triggerEvents?.[0]?.eventName ?? "",
+  };
+}
+
 function buildStage(stageNode: RawNode, entityName: string, notes: string[]): Stage {
   const name = labelOf(stageNode);
   const steps: Step[] = [];
+  const triggeredProcesses: TriggeredProcess[] = [];
   for (const child of childList(stageNode)) {
     if (classIs(child, "StepStep")) {
       steps.push(buildStep(child));
+    } else if (classIs(child, "ActionStep")) {
+      triggeredProcesses.push(buildTriggeredProcess(child));
     } else if (classIs(child, "ConditionStep")) {
       continue; // collected separately by collectConditionEdges, not part of the step list
     } else if (child.__class) {
@@ -100,6 +116,7 @@ function buildStage(stageNode: RawNode, entityName: string, notes: string[]): St
     name,
     entityName,
     steps,
+    triggeredProcesses,
   };
 }
 
