@@ -7,6 +7,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <!-- Output exe / Windows Explorer "Details" metadata only — the C# namespace, project
+         folder, and .csproj/.slnx file names deliberately stay MsdPpTools(.Desktop) to avoid
+         a much larger, riskier rename across every path reference. -->
+    <AssemblyName>PowerAppsStudioTools</AssemblyName>
+    <Product>Power Apps Studio &amp; Tools</Product>
+    <AssemblyTitle>Power Apps Studio &amp; Tools</AssemblyTitle>
+    <Description>Open-source desktop toolbox for Power Apps / Dataverse / Dynamics 365 admins and developers.</Description>
   </PropertyGroup>
 
   <ItemGroup>

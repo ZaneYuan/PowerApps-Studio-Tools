@@ -23,7 +23,7 @@ export function buildImportLogText(params: ImportLogParams): string {
   const error = params.entries.filter((e) => e.state === "error").length;
 
   const lines = [
-    "MSD365 PP Tools — 数据迁移执行日志",
+    "Power Apps Studio & Tools — 数据迁移执行日志",
     `开始时间: ${params.startedAt.toISOString()}`,
     `结束时间: ${params.finishedAt.toISOString()}`,
     `实体: ${params.entityLogicalName} (${params.entitySetName})`,

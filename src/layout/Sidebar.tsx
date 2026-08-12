@@ -14,7 +14,7 @@ export default function Sidebar() {
       <button onClick={activateHome} className="flex items-center gap-2 px-4 pb-1 pt-4 text-left">
         <span className="text-xl">🧰</span>
         <span className="text-base font-semibold text-gray-900 dark:text-gray-100">
-          MSD365 PP Tools
+          Power Apps Studio & Tools
         </span>
       </button>
 

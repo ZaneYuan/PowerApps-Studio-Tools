@@ -30,7 +30,7 @@ export function buildSql4CdsLogText(params: Sql4CdsLogParams): string {
   const error = params.entries.filter((e) => e.state === "error").length;
 
   const lines = [
-    "MSD365 PP Tools — SQL4CDS 执行日志",
+    "Power Apps Studio & Tools — SQL4CDS 执行日志",
     `开始时间: ${params.startedAt.toISOString()}`,
     `结束时间: ${params.finishedAt.toISOString()}`,
     `操作: ${ACTION_LABELS[params.action]}`,

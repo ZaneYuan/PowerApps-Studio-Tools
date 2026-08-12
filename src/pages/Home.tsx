@@ -9,7 +9,7 @@ export default function Home() {
   return (
     <div>
       <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
-        MSD365 Power Platform 工具箱
+        Power Apps Studio & Tools
       </h1>
       <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
         为 Dataverse / Power Platform 日常开发整理的小工具集合。

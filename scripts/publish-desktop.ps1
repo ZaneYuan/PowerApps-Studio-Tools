@@ -6,7 +6,7 @@ Builds a standalone, double-click-runnable local copy of the desktop shell:
   setup in MainWindow.xaml.cs's #else branch.
 
 Usage: powershell -File scripts\publish-desktop.ps1
-Output: publish\MsdPpTools.Desktop\MsdPpTools.Desktop.exe
+Output: publish\MsdPpTools.Desktop\PowerAppsStudioTools.exe
 #>
 
 $ErrorActionPreference = "Stop"
@@ -33,7 +33,7 @@ $wwwroot = Join-Path $publishDir "wwwroot"
 if (Test-Path $wwwroot) { Remove-Item $wwwroot -Recurse -Force }
 Copy-Item (Join-Path $repoRoot "dist") $wwwroot -Recurse
 
-$exe = Join-Path $publishDir "MsdPpTools.Desktop.exe"
+$exe = Join-Path $publishDir "PowerAppsStudioTools.exe"
 if (-not (Test-Path $exe)) { throw "Expected exe not found at $exe" }
 
 Write-Host ""
