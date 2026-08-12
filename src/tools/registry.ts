@@ -74,6 +74,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./ribbon-workbench/RibbonWorkbench")),
   },
   {
+    id: "bpf-viewer",
+    name: "BPF 流程查看器",
+    description: "只读查看 Business Process Flow 的阶段/步骤/条件分支（模拟 Power Apps 的 BPF 设计器视图）。仅桌面版可用。",
+    category: "数据 & Solution",
+    icon: "🧭",
+    Component: lazy(() => import("./bpf-viewer/BpfViewer")),
+  },
+  {
     id: "record-explorer",
     name: "关联记录浏览器",
     description: "输入实体+GUID，展示一级查找字段记录（最多 5 个表）、一级子表记录，支持模糊搜索过滤+高亮。仅桌面版可用。",
