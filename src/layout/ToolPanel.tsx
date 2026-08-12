@@ -40,7 +40,7 @@ export default function ToolPanel({
             <span className="text-2xl">{tool.icon}</span>
             <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{tool.name}</h1>
           </div>
-          {isNativeBridgeAvailable() && (
+          {isNativeBridgeAvailable() && tool.connectionScoped !== false && (
             <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
               本页连接
               <select

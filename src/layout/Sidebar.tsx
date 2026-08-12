@@ -32,7 +32,7 @@ export default function Sidebar() {
                 .map((tool) => (
                   <li key={tool.id}>
                     <button
-                      onClick={() => openTab(tool.id, activeConnectionId)}
+                      onClick={() => openTab(tool.id, tool.connectionScoped === false ? null : activeConnectionId)}
                       className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
                         activeToolId === tool.id
                           ? "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"

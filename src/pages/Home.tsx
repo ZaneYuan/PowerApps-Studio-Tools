@@ -24,7 +24,7 @@ export default function Home() {
           {tools.map((tool) => (
             <button
               key={tool.id}
-              onClick={() => openTab(tool.id, activeConnectionId)}
+              onClick={() => openTab(tool.id, tool.connectionScoped === false ? null : activeConnectionId)}
               className="rounded-lg border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-300 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-blue-700"
             >
               <div className="flex items-center gap-2">

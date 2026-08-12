@@ -14,6 +14,7 @@ export const tools: ToolDefinition[] = [
     description: "管理 Dataverse 连接（交互式登录 / Client Secret），登录后可用 WhoAmI 验证连通性。仅桌面版可用。",
     category: "连接管理",
     icon: "🔌",
+    connectionScoped: false,
     Component: lazy(() => import("./connections/ConnectionsPage")),
   },
   {
