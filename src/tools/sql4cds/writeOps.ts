@@ -86,19 +86,18 @@ export async function deleteRow(connectionId: string, entitySetName: string, id:
 }
 
 export interface MatchingIds {
-  /** Capped at 500 — the actual set of ids UPDATE/DELETE will process this run. */
+  /** Capped at 5000 — the actual set of ids UPDATE/DELETE will process this run. */
   ids: string[];
   /** The real total match count (via a separate $count=true&$top=1 call — never
    *  `/$count?$filter=`, per this project's documented OData conventions), which can be larger
-   *  than `ids.length` when the WHERE clause matches more than the 500-row execution cap. */
+   *  than `ids.length` when the WHERE clause matches more than the 5000-row execution cap. */
   totalCount: number;
 }
 
 /** Resolves which records an UPDATE/DELETE's WHERE clause matches — Dataverse's Web API has no
  *  bulk "UPDATE/DELETE ... WHERE" endpoint, so every mutate statement must first find the target
- *  ids and then write them one at a time (see updateRow/deleteRow). Capped at 500 per run to
- *  bound a single execution — matches this project's existing $top convention (data-migration's
- *  own row cap options top out at 500 too). */
+ *  ids and then write them one at a time (see updateRow/deleteRow). Capped at 5000 per run to
+ *  bound a single execution. */
 export async function queryMatchingIds(
   connectionId: string,
   entitySetName: string,
@@ -109,7 +108,7 @@ export async function queryMatchingIds(
     callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
       connectionId,
       method: "GET",
-      path: `${entitySetName}?$select=${primaryIdAttribute}&$filter=${filter}&$top=500`,
+      path: `${entitySetName}?$select=${primaryIdAttribute}&$filter=${filter}&$top=5000`,
     }),
     callNative<{ "@odata.count"?: number }>("dataverse.request", {
       connectionId,

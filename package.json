@@ -11,6 +11,14 @@
     "publish:desktop": "powershell -ExecutionPolicy Bypass -File scripts/publish-desktop.ps1"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.8",
+    "@lezer/highlight": "^1.2.3",
+    "codemirror": "^6.0.2",
     "diff": "^9.0.0",
     "jszip": "^3.10.1",
     "node-sql-parser": "^5.4.0",

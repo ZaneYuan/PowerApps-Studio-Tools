@@ -3,18 +3,16 @@ import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
 import { downloadTextFile } from "../../native/download";
-import { fetchEntityMeta } from "../../native/metadataService";
+import { fetchAttributes, fetchEntityList, fetchEntityMeta } from "../../native/metadataService";
 import { literalToJsValue, parseSql, type SqlNode } from "./translate";
 import { deleteRow, insertRow, queryMatchingIds, updateRow, type MatchingIds } from "./writeOps";
 import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry, type WriteAction } from "./executionLog";
+import SqlEditor from "./SqlEditor";
 
 const SAMPLE = `SELECT TOP 50 name, revenue, statecode
 FROM account
 WHERE statecode = 0 AND (name LIKE 'Contoso%' OR telephone1 IS NOT NULL)
 ORDER BY name`;
-
-const inputCls =
-  "w-full rounded-md border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 
 function OutputRow({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
@@ -47,16 +45,16 @@ function WriteResultTable({ results }: { results: Sql4CdsLogEntry[] }) {
   const success = results.filter((r) => r.state === "success").length;
   const error = results.length - success;
   return (
-    <div className="overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-      <div className="border-b border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
+    <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
+      <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
         共 {results.length} 条，成功 {success}，失败 {error} — 执行日志已自动下载
       </div>
       <table className="w-full text-left text-sm">
         <tbody>
           {results.map((r, i) => (
             <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-              <td className="px-3 py-1.5 font-mono text-xs">{r.key}</td>
-              <td className="px-3 py-1.5 text-xs">
+              <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
+              <td className="whitespace-nowrap px-3 py-1.5 text-xs">
                 {r.state === "success" ? (
                   <span className="text-green-600 dark:text-green-400">成功{r.detail ? ` — ${r.detail}` : ""}</span>
                 ) : (
@@ -89,6 +87,55 @@ export default function Sql4Cds() {
 
   const entitySetMeta = useEntitySetName(activeConnectionId, entityLogicalName ?? "");
   const entitySet = entitySetMeta.entitySetName || entitySetGuess || "";
+
+  // --- SQL editor autocomplete schema: all entity logical names (for table-name completion,
+  // fetched once per connection) plus the current statement's table's columns (fetched lazily as
+  // the FROM/INTO/UPDATE table becomes known) — both via metadataService's existing caches, so
+  // switching between tables already visited in this session is instant. ---
+  const [editorTables, setEditorTables] = useState<string[]>([]);
+  const [editorColumns, setEditorColumns] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    if (!activeConnectionId) {
+      setEditorTables([]);
+      return;
+    }
+    let cancelled = false;
+    fetchEntityList(activeConnectionId)
+      .then((names) => {
+        if (!cancelled) setEditorTables(names);
+      })
+      .catch(() => {
+        if (!cancelled) setEditorTables([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConnectionId]);
+
+  useEffect(() => {
+    if (!activeConnectionId || !entityLogicalName || editorColumns[entityLogicalName]) return;
+    let cancelled = false;
+    fetchAttributes(activeConnectionId, entityLogicalName)
+      .then((attrs) => {
+        if (!cancelled) {
+          setEditorColumns((prev) => ({ ...prev, [entityLogicalName]: attrs.map((a) => a.logicalName) }));
+        }
+      })
+      .catch(() => {
+        /* autocomplete is best-effort — just falls back to the bare table name with no columns */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConnectionId, entityLogicalName, editorColumns]);
+
+  const editorSchema = useMemo(() => {
+    const schema: Record<string, string[]> = {};
+    for (const table of editorTables) schema[table] = editorColumns[table] ?? [];
+    if (entityLogicalName && !schema[entityLogicalName]) schema[entityLogicalName] = editorColumns[entityLogicalName] ?? [];
+    return schema;
+  }, [editorTables, editorColumns, entityLogicalName]);
 
   const path = useMemo(() => {
     if (!entitySet) return "";
@@ -130,9 +177,15 @@ export default function Sql4Cds() {
   // --- write (INSERT/UPDATE/DELETE) execution state ---
   const [writeRunning, setWriteRunning] = useState(false);
   const [writeResults, setWriteResults] = useState<Sql4CdsLogEntry[] | null>(null);
+  // Anything that goes wrong outside the per-row try/catch below (bad literal, download
+  // failure, ...) used to become an unhandled promise rejection: writeRunning never got reset,
+  // so the button stayed stuck on "执行中…" forever with no visible error. Every write handler
+  // now runs its whole body in try/catch/finally so that can't happen — see handleInsert/handleMutate.
+  const [writeError, setWriteError] = useState<string | null>(null);
 
   useEffect(() => {
     setWriteResults(null);
+    setWriteError(null);
   }, [sql]);
 
   // UPDATE/DELETE always needs the matching record ids before it can run — auto-resolved as soon
@@ -186,7 +239,6 @@ export default function Sql4Cds() {
       entries,
     });
     downloadTextFile(filename, text);
-    setWriteRunning(false);
   }
 
   async function handleInsert() {
@@ -196,27 +248,39 @@ export default function Sql4Cds() {
 
     setWriteRunning(true);
     setWriteResults([]);
+    setWriteError(null);
     const startedAt = new Date();
     const entries: Sql4CdsLogEntry[] = [];
 
-    for (let i = 0; i < result.rows.length; i++) {
-      const key = `第 ${i + 1} 行`;
-      const columnValues: Record<string, unknown> = {};
-      result.columns.forEach((col, idx) => {
-        columnValues[col] = literalToJsValue(result.rows[i][idx]);
-      });
-      let entry: Sql4CdsLogEntry;
-      try {
-        const { newId } = await insertRow(activeConnectionId, result.entityLogicalName, entitySet, columnValues);
-        entry = { key, state: "success", detail: newId ?? undefined };
-      } catch (err) {
-        entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
+    // Whole body wrapped in try/finally: previously the per-row literalToJsValue() conversion
+    // ran outside any try/catch, so a bad literal threw an unhandled rejection that skipped
+    // finishWrite entirely — writeRunning stayed true forever (button stuck on "执行中…",
+    // disabled, no visible error). Now any such failure is caught and shown, and writeRunning
+    // is always released.
+    try {
+      for (let i = 0; i < result.rows.length; i++) {
+        const key = `第 ${i + 1} 行`;
+        let entry: Sql4CdsLogEntry;
+        try {
+          const columnValues: Record<string, unknown> = {};
+          result.columns.forEach((col, idx) => {
+            columnValues[col] = literalToJsValue(result.rows[i][idx]);
+          });
+          const { newId } = await insertRow(activeConnectionId, result.entityLogicalName, entitySet, columnValues);
+          entry = { key, state: "success", detail: newId ?? undefined };
+        } catch (err) {
+          entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
+        }
+        entries.push(entry);
+        setWriteResults((r) => [...(r ?? []), entry]);
       }
-      entries.push(entry);
-      setWriteResults((r) => [...(r ?? []), entry]);
-    }
 
-    finishWrite("insert", result.entityLogicalName, entitySet, startedAt, entries);
+      finishWrite("insert", result.entityLogicalName, entitySet, startedAt, entries);
+    } catch (err) {
+      setWriteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWriteRunning(false);
+    }
   }
 
   async function handleMutate() {
@@ -228,31 +292,39 @@ export default function Sql4Cds() {
 
     setWriteRunning(true);
     setWriteResults([]);
+    setWriteError(null);
     const startedAt = new Date();
     const entries: Sql4CdsLogEntry[] = [];
 
-    const columnValues =
-      result.action === "update" && result.setClauses
-        ? Object.fromEntries(result.setClauses.map((s) => [s.column, literalToJsValue(s.value)]))
-        : null;
+    // See handleInsert for why the whole body is wrapped in try/finally.
+    try {
+      const columnValues =
+        result.action === "update" && result.setClauses
+          ? Object.fromEntries(result.setClauses.map((s) => [s.column, literalToJsValue(s.value)]))
+          : null;
 
-    for (const id of ids) {
-      let entry: Sql4CdsLogEntry;
-      try {
-        if (result.action === "update") {
-          await updateRow(activeConnectionId, result.entityLogicalName, entitySet, id, columnValues!);
-        } else {
-          await deleteRow(activeConnectionId, entitySet, id);
+      for (const id of ids) {
+        let entry: Sql4CdsLogEntry;
+        try {
+          if (result.action === "update") {
+            await updateRow(activeConnectionId, result.entityLogicalName, entitySet, id, columnValues!);
+          } else {
+            await deleteRow(activeConnectionId, entitySet, id);
+          }
+          entry = { key: id, state: "success" };
+        } catch (err) {
+          entry = { key: id, state: "error", error: err instanceof Error ? err.message : String(err) };
         }
-        entry = { key: id, state: "success" };
-      } catch (err) {
-        entry = { key: id, state: "error", error: err instanceof Error ? err.message : String(err) };
+        entries.push(entry);
+        setWriteResults((r) => [...(r ?? []), entry]);
       }
-      entries.push(entry);
-      setWriteResults((r) => [...(r ?? []), entry]);
-    }
 
-    finishWrite(result.action, result.entityLogicalName, entitySet, startedAt, entries);
+      finishWrite(result.action, result.entityLogicalName, entitySet, startedAt, entries);
+    } catch (err) {
+      setWriteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWriteRunning(false);
+    }
   }
 
   if (!isNativeBridgeAvailable()) {
@@ -267,7 +339,7 @@ export default function Sql4Cds() {
     <div className="max-w-4xl space-y-6">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         支持 SELECT（含 JOIN / GROUP BY / 聚合函数，翻译成 FetchXML 执行）、INSERT、UPDATE、DELETE。UPDATE/DELETE
-        必须带 WHERE 子句（不支持整表操作，请自己写恒真条件），执行前会弹窗二次确认，单次最多处理 500 条匹配记录并自动下载执行日志。用 T-SQL
+        必须带 WHERE 子句（不支持整表操作，请自己写恒真条件），执行前会弹窗二次确认，单次最多处理 5000 条匹配记录并自动下载执行日志。用 T-SQL
         语法解析，翻译成 Dataverse Web API 查询后真实执行。
       </div>
 
@@ -278,13 +350,12 @@ export default function Sql4Cds() {
             填充示例
           </button>
         </div>
-        <textarea
+        <SqlEditor
           value={sql}
-          onChange={(e) => setSql(e.target.value)}
-          rows={6}
-          spellCheck={false}
+          onChange={setSql}
+          schema={editorSchema}
+          defaultTable={entityLogicalName ?? undefined}
           placeholder="SELECT name FROM account WHERE statecode = 0"
-          className={inputCls}
         />
       </div>
 
@@ -359,16 +430,16 @@ export default function Sql4Cds() {
           )}
 
           {rows && (
-            <div className="overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-              <div className="border-b border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
+            <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
+              <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
                 {rows.length} 行
               </div>
               {rows.length > 0 && (
                 <table className="w-full text-left text-sm">
-                  <thead className="sticky top-0 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+                  <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
                     <tr>
                       {columns.map((c) => (
-                        <th key={c} className="px-3 py-2 font-mono">
+                        <th key={c} className="whitespace-nowrap px-3 py-2 font-mono">
                           {c}
                         </th>
                       ))}
@@ -378,7 +449,7 @@ export default function Sql4Cds() {
                     {rows.map((row, i) => (
                       <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
                         {columns.map((c) => (
-                          <td key={c} className="px-3 py-1.5 font-mono text-xs">
+                          <td key={c} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
                             {typeof row[c] === "object" ? JSON.stringify(row[c]) : String(row[c] ?? "")}
                           </td>
                         ))}
@@ -394,15 +465,15 @@ export default function Sql4Cds() {
 
       {result.kind === "insert" && (
         <>
-          <div className="overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-            <div className="border-b border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
+          <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
+            <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
               待插入 {result.rows.length} 行
             </div>
             <table className="w-full text-left text-sm">
-              <thead className="bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+              <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
                 <tr>
                   {result.columns.map((c) => (
-                    <th key={c} className="px-3 py-2 font-mono">
+                    <th key={c} className="whitespace-nowrap px-3 py-2 font-mono">
                       {c}
                     </th>
                   ))}
@@ -412,7 +483,7 @@ export default function Sql4Cds() {
                 {result.rows.map((row, i) => (
                   <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
                     {row.map((node, j) => (
-                      <td key={j} className="px-3 py-1.5 font-mono text-xs">
+                      <td key={j} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
                         {describeLiteral(node)}
                       </td>
                     ))}
@@ -432,6 +503,12 @@ export default function Sql4Cds() {
             </button>
             {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
+
+          {writeError && (
+            <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
+              {writeError}
+            </pre>
+          )}
 
           {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} />}
         </>
@@ -466,6 +543,12 @@ export default function Sql4Cds() {
             </button>
             {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
+
+          {writeError && (
+            <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
+              {writeError}
+            </pre>
+          )}
 
           {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} />}
         </>

@@ -57,6 +57,26 @@ export function invalidateEntityMeta(connectionId: string, logicalName: string):
 export function clearEntityMetaCache(): void {
   cache.clear();
   attributeCache.clear();
+  entityListCache.clear();
+}
+
+/** All entity logical names for a connection, cached per-connection — used for SQL4CDS's
+ *  table-name autocomplete. EntityDefinitions doesn't support $orderby (confirmed against a live
+ *  org), so results are sorted client-side instead. */
+const entityListCache = new Map<string, string[]>();
+
+export async function fetchEntityList(connectionId: string): Promise<string[]> {
+  const cached = entityListCache.get(connectionId);
+  if (cached) return cached;
+
+  const res = await callNative<{ value: { LogicalName: string }[] }>("dataverse.request", {
+    connectionId,
+    method: "GET",
+    path: "EntityDefinitions?$select=LogicalName",
+  });
+  const names = res.value.map((e) => e.LogicalName).sort();
+  entityListCache.set(connectionId, names);
+  return names;
 }
 
 /** All of an entity's attributes (excluding "Virtual" — compound/image-type fields that either
