@@ -1,5 +1,5 @@
 import { callNative } from "../../native/bridge";
-import { fetchAttributes, fetchEntityMeta } from "../../native/metadataService";
+import { fetchAttributes, fetchEntityMeta, type ManyToManyInfo } from "../../native/metadataService";
 import { buildLookupRelationshipMap } from "../../native/navProperty";
 
 /** Builds one write payload from a plain column→value map, resolving Lookup-typed columns to
@@ -100,6 +100,84 @@ export async function deleteRow(connectionId: string, entitySetName: string, id:
     connectionId,
     method: "DELETE",
     path: `${entitySetName}(${id})`,
+  });
+}
+
+/** Dataverse attribute logical names are conventionally all-lowercase with underscores, but a
+ *  user writing INSERT/DELETE against an intersect entity by hand often uses a display-ish
+ *  PascalCase name instead — normalize before comparing so "ProductId" still matches "productid".
+ *  Deliberately doesn't try to guess across an actually-missing prefix (e.g. "PaymentFrequencyId"
+ *  for the real "contoso_paymentfrequencyid" won't match) — resolveIntersectRowValues's error names
+ *  the real attribute instead of silently associating the wrong pair. */
+function normalizeColumnName(name: string): string {
+  return name.toLowerCase().replace(/_/g, "");
+}
+
+export interface IntersectRowValues {
+  entity1Value: string;
+  entity2Value: string;
+}
+
+/** Resolves one row's column→value map (an INSERT VALUES row, or a DELETE's matched-record
+ *  column values) to the two relationship-side values association/disassociation needs. Throws a
+ *  clear, actionable error naming the real attribute names if a column doesn't match either side
+ *  of the relationship — silently ignoring an unrecognized column would associate/disassociate
+ *  the wrong pair instead of failing loudly. */
+export function resolveIntersectRowValues(rel: ManyToManyInfo, columnValues: Record<string, unknown>): IntersectRowValues {
+  const target1 = normalizeColumnName(rel.entity1IntersectAttribute);
+  const target2 = normalizeColumnName(rel.entity2IntersectAttribute);
+  let entity1Value: string | undefined;
+  let entity2Value: string | undefined;
+
+  for (const [col, value] of Object.entries(columnValues)) {
+    const norm = normalizeColumnName(col);
+    if (norm === target1) entity1Value = String(value);
+    else if (norm === target2) entity2Value = String(value);
+  }
+
+  if (entity1Value === undefined || entity2Value === undefined) {
+    throw new Error(
+      `"${rel.intersectEntityName}" 是一个多对多关联表（${rel.entity1LogicalName} ↔ ${rel.entity2LogicalName}），` +
+        `不是普通实体，只认这两个字段名：${rel.entity1IntersectAttribute}（对应 ${rel.entity1LogicalName} 的记录 id）、` +
+        `${rel.entity2IntersectAttribute}（对应 ${rel.entity2LogicalName} 的记录 id），请照着这两个名字改列名。`,
+    );
+  }
+  return { entity1Value, entity2Value };
+}
+
+/** Associates two records via the relationship's $ref endpoint — the only way to write to an
+ *  intersect entity's Web API EntitySet (a plain POST 400s, see ManyToManyInfo's doc comment).
+ *  `environmentUrl` (from ConnectionDto, already exposed to the JS side) is needed because
+ *  `@odata.id` must be an absolute URL per Dataverse's Web API contract for association requests.
+ *  Confirmed against contoso-dev: `contoso_paymentfrequency_product` (contoso_paymentfrequency ↔ product,
+ *  via contoso_paymentfrequencyid/productid) associates correctly through this endpoint after the
+ *  same INSERT that 400'd as a plain POST. */
+export async function insertIntersectRow(
+  connectionId: string,
+  environmentUrl: string,
+  rel: ManyToManyInfo,
+  values: IntersectRowValues,
+): Promise<void> {
+  const [meta1, meta2] = await Promise.all([
+    fetchEntityMeta(connectionId, rel.entity1LogicalName),
+    fetchEntityMeta(connectionId, rel.entity2LogicalName),
+  ]);
+  await callNative("dataverse.request", {
+    connectionId,
+    method: "POST",
+    path: `${meta1.entitySetName}(${values.entity1Value})/${rel.entity1NavigationPropertyName}/$ref`,
+    body: { "@odata.id": `${environmentUrl.replace(/\/$/, "")}/api/data/v9.2/${meta2.entitySetName}(${values.entity2Value})` },
+  });
+}
+
+/** Disassociates two records — the DELETE counterpart of insertIntersectRow. No body/environmentUrl
+ *  needed: the second record's id goes directly in the URL, per Dataverse's disassociate contract. */
+export async function deleteIntersectRow(connectionId: string, rel: ManyToManyInfo, values: IntersectRowValues): Promise<void> {
+  const meta1 = await fetchEntityMeta(connectionId, rel.entity1LogicalName);
+  await callNative("dataverse.request", {
+    connectionId,
+    method: "DELETE",
+    path: `${meta1.entitySetName}(${values.entity1Value})/${rel.entity1NavigationPropertyName}(${values.entity2Value})/$ref`,
   });
 }
 

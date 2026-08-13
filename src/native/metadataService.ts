@@ -13,6 +13,22 @@ export interface AttributeMeta {
   isCustomAttribute: boolean;
 }
 
+/** A Many-to-Many relationship's intersect entity — its Web API EntitySet accepts GET (plain
+ *  queries work fine) but not a normal POST/PATCH/DELETE with field values; those 400 with
+ *  "Invalid property ... was found" because the intersect entity's two lookup columns aren't
+ *  ordinary writable properties. Writes have to go through the relationship's $ref associate/
+ *  disassociate endpoints instead (see writeOps.ts's insertIntersectRow/deleteIntersectRow),
+ *  which need exactly the fields captured here. */
+export interface ManyToManyInfo {
+  intersectEntityName: string;
+  entity1LogicalName: string;
+  entity1IntersectAttribute: string;
+  entity1NavigationPropertyName: string;
+  entity2LogicalName: string;
+  entity2IntersectAttribute: string;
+  entity2NavigationPropertyName: string;
+}
+
 /** Keyed by `${connectionId}:${logicalName}` — the real EntitySetName/PrimaryIdAttribute from
  *  metadata, shared across every tool that needs to turn a logical entity name into a Web API
  *  collection path. Replaces each tool guessing with its own naive-pluralization heuristic
@@ -58,6 +74,66 @@ export function clearEntityMetaCache(): void {
   cache.clear();
   attributeCache.clear();
   entityListCache.clear();
+  manyToManyCache.clear();
+}
+
+/** Cached like the rest of this module (`null` is a valid cached value — "confirmed not an
+ *  intersect entity" — so presence is checked via `.has()`, not truthiness). */
+const manyToManyCache = new Map<string, ManyToManyInfo | null>();
+
+/** Returns the N:N relationship definition if `entityLogicalName` is an intersect entity, or
+ *  `null` for an ordinary entity. `IsIntersect` is checked first as a cheap short-circuit — most
+ *  entities aren't intersect entities and don't need the second (relationship-lookup) call.
+ *  `RelationshipDefinitions/.../ManyToManyRelationshipMetadata?$filter=IntersectEntityName eq ...`
+ *  finds the relationship without needing to already know either side's logical name (confirmed
+ *  against a live org — the alternative, `EntityDefinitions(LogicalName='<oneSide>')/
+ *  ManyToManyRelationships`, requires knowing one side up front, which we don't). */
+export async function fetchManyToManyInfo(connectionId: string, entityLogicalName: string): Promise<ManyToManyInfo | null> {
+  const trimmed = entityLogicalName.trim();
+  const key = cacheKey(connectionId, trimmed);
+  if (manyToManyCache.has(key)) return manyToManyCache.get(key)!;
+
+  const entityDef = await callNative<{ IsIntersect: boolean }>("dataverse.request", {
+    connectionId,
+    method: "GET",
+    path: `EntityDefinitions(LogicalName='${trimmed}')?$select=IsIntersect`,
+  });
+  if (!entityDef.IsIntersect) {
+    manyToManyCache.set(key, null);
+    return null;
+  }
+
+  const res = await callNative<{
+    value: {
+      Entity1LogicalName: string;
+      Entity1IntersectAttribute: string;
+      Entity1NavigationPropertyName: string;
+      Entity2LogicalName: string;
+      Entity2IntersectAttribute: string;
+      Entity2NavigationPropertyName: string;
+    }[];
+  }>("dataverse.request", {
+    connectionId,
+    method: "GET",
+    path:
+      "RelationshipDefinitions/Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata" +
+      `?$filter=IntersectEntityName eq '${trimmed}'` +
+      "&$select=Entity1LogicalName,Entity1IntersectAttribute,Entity1NavigationPropertyName,Entity2LogicalName,Entity2IntersectAttribute,Entity2NavigationPropertyName",
+  });
+  const rel = res.value[0];
+  const info: ManyToManyInfo | null = rel
+    ? {
+        intersectEntityName: trimmed,
+        entity1LogicalName: rel.Entity1LogicalName,
+        entity1IntersectAttribute: rel.Entity1IntersectAttribute,
+        entity1NavigationPropertyName: rel.Entity1NavigationPropertyName,
+        entity2LogicalName: rel.Entity2LogicalName,
+        entity2IntersectAttribute: rel.Entity2IntersectAttribute,
+        entity2NavigationPropertyName: rel.Entity2NavigationPropertyName,
+      }
+    : null;
+  manyToManyCache.set(key, info);
+  return info;
 }
 
 /** All entity logical names for a connection, cached per-connection — used for SQL4CDS's

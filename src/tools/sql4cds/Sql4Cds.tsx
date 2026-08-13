@@ -3,9 +3,17 @@ import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
 import { downloadTextFile } from "../../native/download";
-import { fetchAttributes, fetchEntityList, fetchEntityMeta } from "../../native/metadataService";
+import { fetchAttributes, fetchEntityList, fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { literalToJsValue, parseSql, type InsertResult, type MutateResult, type SqlNode } from "./translate";
-import { deleteRow, insertRow, queryMatchingIds, updateRow, type MatchingIds } from "./writeOps";
+import {
+  deleteRow,
+  insertIntersectRow,
+  insertRow,
+  queryMatchingIds,
+  resolveIntersectRowValues,
+  updateRow,
+  type MatchingIds,
+} from "./writeOps";
 import {
   buildSql4CdsBatchLogText,
   buildSql4CdsLogText,
@@ -243,6 +251,12 @@ export default function Sql4Cds() {
     return connections.find((c) => c.id === activeConnectionId)?.name ?? activeConnectionId ?? "";
   }
 
+  /** Needed for insertIntersectRow's `@odata.id` — see its doc comment for why that has to be an
+   *  absolute URL. Already exposed on ConnectionDto, no extra bridge call needed. */
+  function environmentUrl(): string | undefined {
+    return connections.find((c) => c.id === activeConnectionId)?.environmentUrl;
+  }
+
   function finishWrite(action: WriteAction, entity: string, entitySetName: string, startedAt: Date, entries: Sql4CdsLogEntry[]) {
     const finishedAt = new Date();
     const filename = sql4CdsLogFilename(action, entity, finishedAt);
@@ -276,6 +290,14 @@ export default function Sql4Cds() {
     // disabled, no visible error). Now any such failure is caught and shown, and writeRunning
     // is always released.
     try {
+      // An N:N intersect entity's Web API EntitySet 400s on a plain POST ("Invalid property ...
+      // was found") — confirmed against contoso-dev inserting into contoso_paymentfrequency_product.
+      // Detected once up front; every row below goes through insertIntersectRow's $ref endpoint
+      // instead of the normal insertRow POST when this is set.
+      const manyToMany = await fetchManyToManyInfo(activeConnectionId, result.entityLogicalName);
+      const envUrl = environmentUrl();
+      if (manyToMany && !envUrl) throw new Error("找不到当前连接的环境 URL。");
+
       for (let i = 0; i < result.rows.length; i++) {
         const key = `第 ${i + 1} 行`;
         let entry: Sql4CdsLogEntry;
@@ -284,8 +306,14 @@ export default function Sql4Cds() {
           result.columns.forEach((col, idx) => {
             columnValues[col] = literalToJsValue(result.rows[i][idx]);
           });
-          const { newId } = await insertRow(activeConnectionId, result.entityLogicalName, entitySet, columnValues);
-          entry = { key, state: "success", detail: newId ?? undefined };
+          if (manyToMany) {
+            const values = resolveIntersectRowValues(manyToMany, columnValues);
+            await insertIntersectRow(activeConnectionId, envUrl!, manyToMany, values);
+            entry = { key, state: "success" };
+          } else {
+            const { newId } = await insertRow(activeConnectionId, result.entityLogicalName, entitySet, columnValues);
+            entry = { key, state: "success", detail: newId ?? undefined };
+          }
         } catch (err) {
           entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
         }
@@ -316,6 +344,17 @@ export default function Sql4Cds() {
 
     // See handleInsert for why the whole body is wrapped in try/finally.
     try {
+      // Associating/disassociating an N:N intersect entity goes through a completely different
+      // API shape (see writeOps.ts's insertIntersectRow) than an ordinary PATCH/DELETE, and
+      // there's no per-relationship-record field to UPDATE in the first place — reject explicitly
+      // rather than let every row 400 with a confusing "Invalid property" error.
+      const manyToMany = await fetchManyToManyInfo(activeConnectionId, result.entityLogicalName);
+      if (manyToMany) {
+        throw new Error(
+          `"${result.entityLogicalName}" 是多对多关联表（${manyToMany.entity1LogicalName} ↔ ${manyToMany.entity2LogicalName}），暂不支持对它执行 UPDATE/DELETE（关联表本身没有可更新字段；取消关联需要走专门的关联/取消关联接口，这个功能还没做）。`,
+        );
+      }
+
       const columnValues =
         result.action === "update" && result.setClauses
           ? Object.fromEntries(result.setClauses.map((s) => [s.column, literalToJsValue(s.value)]))
@@ -372,8 +411,14 @@ export default function Sql4Cds() {
         try {
           const meta = await fetchEntityMeta(activeConnectionId, stmt.entityLogicalName);
           entitySetName = meta.entitySetName;
+          // See handleInsert/handleMutate for why intersect entities need this — same detection,
+          // same $ref-based insert path, same "not supported" rejection for update/delete.
+          const manyToMany = await fetchManyToManyInfo(activeConnectionId, stmt.entityLogicalName);
 
           if (stmt.kind === "insert") {
+            const envUrl = manyToMany ? environmentUrl() : undefined;
+            if (manyToMany && !envUrl) throw new Error("找不到当前连接的环境 URL。");
+
             for (let r = 0; r < stmt.rows.length; r++) {
               const key = `语句 ${i + 1} · 第 ${r + 1} 行`;
               let entry: Sql4CdsLogEntry;
@@ -382,8 +427,14 @@ export default function Sql4Cds() {
                 stmt.columns.forEach((col, idx) => {
                   columnValues[col] = literalToJsValue(stmt.rows[r][idx]);
                 });
-                const { newId } = await insertRow(activeConnectionId, stmt.entityLogicalName, entitySetName, columnValues);
-                entry = { key, state: "success", detail: newId ?? undefined };
+                if (manyToMany) {
+                  const values = resolveIntersectRowValues(manyToMany, columnValues);
+                  await insertIntersectRow(activeConnectionId, envUrl!, manyToMany, values);
+                  entry = { key, state: "success" };
+                } else {
+                  const { newId } = await insertRow(activeConnectionId, stmt.entityLogicalName, entitySetName, columnValues);
+                  entry = { key, state: "success", detail: newId ?? undefined };
+                }
               } catch (err) {
                 entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
               }
@@ -391,6 +442,11 @@ export default function Sql4Cds() {
               setWriteResults((r2) => [...(r2 ?? []), entry]);
             }
           } else {
+            if (manyToMany) {
+              throw new Error(
+                `"${stmt.entityLogicalName}" 是多对多关联表（${manyToMany.entity1LogicalName} ↔ ${manyToMany.entity2LogicalName}），暂不支持对它执行 UPDATE/DELETE。`,
+              );
+            }
             const { ids } = await queryMatchingIds(activeConnectionId, entitySetName, meta.primaryIdAttribute, stmt.filter);
             const columnValues =
               stmt.action === "update" && stmt.setClauses
