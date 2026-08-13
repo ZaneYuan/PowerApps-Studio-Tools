@@ -22,7 +22,25 @@ export async function buildRowBody(
 
   const body: Record<string, unknown> = {};
   for (const [col, value] of Object.entries(columnValues)) {
-    const isLookup = typeByName.get(col.toLowerCase()) === "Lookup";
+    const attrType = typeByName.get(col.toLowerCase());
+
+    // T-SQL has no boolean literal distinct from BIT's 0/1, so a value written as bare 0/1
+    // parses as a plain SQL number — literalToJsValue faithfully passes that through as a JS
+    // number, which JSON-serializes as 1/0. Dataverse's actual Boolean (two-option) fields
+    // reject that outright ("Cannot convert the literal '1' to the expected type
+    // 'Edm.Boolean'"), confirmed against a live org — coerce to a real JSON boolean here instead.
+    if (attrType === "Boolean") {
+      if (value === null || value === undefined || typeof value === "boolean") {
+        body[col] = value;
+      } else if (typeof value === "number") {
+        body[col] = value !== 0;
+      } else {
+        throw new Error(`字段 "${col}" 是布尔类型，请写 0/1（不要加引号）或 NULL，收到的值是: ${JSON.stringify(value)}`);
+      }
+      continue;
+    }
+
+    const isLookup = attrType === "Lookup";
     if (!isLookup) {
       body[col] = value;
       continue;
