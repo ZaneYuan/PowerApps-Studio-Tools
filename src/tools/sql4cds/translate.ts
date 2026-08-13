@@ -165,9 +165,17 @@ function quoteString(raw: string): string {
   return `'${raw.replace(/'/g, "''")}'`;
 }
 
+/** T-SQL's `N'...'` national/Unicode string literals (used throughout this tool's own INSERT
+ *  samples for CJK text) parse to AST type "var_string", not "single_quote_string" — confirmed
+ *  by running node-sql-parser directly (`N'卓越'` → `{type: "var_string", value: "卓越"}`, prefix
+ *  and quotes already stripped). Treated identically to a plain quoted string everywhere below. */
+function isStringLiteral(node: SqlNode): boolean {
+  return node.type === "single_quote_string" || node.type === "string" || node.type === "var_string";
+}
+
 function formatLiteral(node: SqlNode): string {
   if (node.type === "number") return String(node.value);
-  if (node.type === "single_quote_string" || node.type === "string") {
+  if (isStringLiteral(node)) {
     const raw = String(node.value);
     return GUID_RE.test(raw) ? raw : quoteString(raw);
   }
@@ -179,7 +187,7 @@ function formatLiteral(node: SqlNode): string {
  *  XML attribute values need no SQL-style quoting, just XML-escaping (done by the serializer). */
 function formatFxLiteral(node: SqlNode): string {
   if (node.type === "number") return String(node.value);
-  if (node.type === "single_quote_string" || node.type === "string") return String(node.value);
+  if (isStringLiteral(node)) return String(node.value);
   if (node.type === "bool") return node.value ? "1" : "0";
   throw new Error(`不支持的字面量类型: ${node.type}`);
 }
@@ -188,7 +196,7 @@ function formatFxLiteral(node: SqlNode): string {
  *  from formatLiteral/formatFxLiteral, which both produce *query-string* text. */
 export function literalToJsValue(node: SqlNode): string | number | boolean | null {
   if (node.type === "number") return node.value as number;
-  if (node.type === "single_quote_string" || node.type === "string") return node.value as string;
+  if (isStringLiteral(node)) return node.value as string;
   if (node.type === "bool") return node.value as boolean;
   if (node.type === "null") return null;
   throw new Error(`不支持的字面量类型: ${node.type}`);
