@@ -10,7 +10,7 @@ import type { AttributeInfo, EntityMeta, RowImportStatus } from "./types";
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 
-const TOP_OPTIONS = [25, 50, 100, 250, 500];
+const TOP_OPTIONS = [25, 50, 100, 250, 500, 1000, 2500, 5000];
 
 const STATUS_LABELS: Record<RowImportStatus["state"], string> = {
   pending: "",
