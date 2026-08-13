@@ -210,7 +210,18 @@ function formatFxLiteral(node: SqlNode): string {
 /** Converts a literal AST node to a plain JS value for a write payload (INSERT/UPDATE) — distinct
  *  from formatLiteral/formatFxLiteral, which both produce *query-string* text. */
 export function literalToJsValue(node: SqlNode): string | number | boolean | null {
-  if (node.type === "number") return node.value as number;
+  // node-sql-parser's `.value` for a "number" node is only a real JS number when the literal has
+  // no decimal point (e.g. `421320001`, `0`) — confirmed by running the parser directly. A
+  // literal WITH a decimal point (e.g. `12699.00`) comes back as a STRING instead (presumably to
+  // avoid losing trailing zeros / precision through a float round-trip). The old `node.value as
+  // number` here was a bare type assertion, not a conversion — TypeScript trusted it, but at
+  // runtime a Money/Decimal value like `12699.00` was silently a string all along, which is
+  // exactly the "1" this tool sent for Boolean fields' problem all over again but one layer
+  // deeper: Dataverse's Edm.Decimal/Money fields reject a quoted-string number by default
+  // ("Cannot convert ... 'Edm.Decimal' ... conflict ... 'IEEE754Compatible' false/true"), while
+  // Edm.Int32 fields (Integer/Picklist) tolerate it — which is why only Money/Decimal columns
+  // ever surfaced this. `Number(...)` makes the conversion real instead of asserted.
+  if (node.type === "number") return Number(node.value);
   if (isStringLiteral(node)) return node.value as string;
   if (node.type === "bool") return node.value as boolean;
   if (node.type === "null") return null;

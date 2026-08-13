@@ -35,20 +35,7 @@ public sealed class DataverseApiClient
         var url = $"{connection.EnvironmentUrl}/api/data/v9.2/{path.TrimStart('/')}";
         using var request = new HttpRequestMessage(new HttpMethod(method), url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
-        // IEEE754Compatible=false: per the OData v4 spec, Edm.Decimal/Edm.Int64 values are
-        // string-encoded by default (arbitrary precision / 64-bit ints can't round-trip through
-        // JSON numbers losslessly) unless the client opts out via this parameter. Without it,
-        // Dataverse expects Decimal/Money fields as quoted strings — SQL4CDS sends them as plain
-        // JSON numbers, which 400s with "Cannot convert ... 'Edm.Decimal' ... conflict ...
-        // 'IEEE754Compatible' false/true". Setting this only on Accept (as a first attempt) did
-        // NOT fix writes — confirmed against contoso-dev, still 400ing after that change shipped —
-        // because Accept negotiates the *response* format; the *request body*'s format is
-        // governed by Content-Type instead, which needs the same parameter (added below, once a
-        // body exists). Both are set here for symmetry/correctness even though only Content-Type
-        // turned out to matter for writes.
-        var accept = new MediaTypeWithQualityHeaderValue("application/json");
-        accept.Parameters.Add(new NameValueHeaderValue("IEEE754Compatible", "false"));
-        request.Headers.Accept.Add(accept);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.Add("OData-MaxVersion", "4.0");
         request.Headers.Add("OData-Version", "4.0");
         // return=representation: without this, POST creates return 204 + empty body (new id only
@@ -66,9 +53,6 @@ public sealed class DataverseApiClient
         if (body.HasValue)
         {
             request.Content = new StringContent(body.Value.GetRawText(), Encoding.UTF8, "application/json");
-            // See the Accept-header comment above: this is the one that actually matters for
-            // writes, since it's the request body's own format declaration.
-            request.Content.Headers.ContentType!.Parameters.Add(new NameValueHeaderValue("IEEE754Compatible", "false"));
         }
 
         using var response = await Http.SendAsync(request);
