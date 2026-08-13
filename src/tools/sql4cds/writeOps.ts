@@ -2,6 +2,28 @@ import { callNative } from "../../native/bridge";
 import { fetchAttributes, fetchEntityMeta, type ManyToManyInfo } from "../../native/metadataService";
 import { buildLookupRelationshipMap } from "../../native/navProperty";
 
+/** Now that Sql4Cds.tsx fires several row writes concurrently instead of one at a time (see
+ *  concurrency.ts's runConcurrent), hitting Dataverse's service protection limit (HTTP 429) on an
+ *  occasional request is an expected outcome, not a bug — retrying with backoff belongs here
+ *  rather than in every caller, since it's a property of "writing one row", not of the loop that
+ *  drives it. A 429 means the request was rejected *before* it took effect, so retrying never
+ *  risks a duplicate write. DataverseApiClient.cs's error message is the literal string
+ *  `Dataverse 请求失败 (429): ...` — that's the only signal available here (no structured status
+ *  code or Retry-After header crosses the native bridge), so this uses a fixed exponential
+ *  backoff instead of honoring a real Retry-After. */
+async function withRetryOn429<T>(fn: () => Promise<T>): Promise<T> {
+  const delaysMs = [1000, 2000, 4000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt >= delaysMs.length || !message.includes("请求失败 (429)")) throw err;
+      await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+    }
+  }
+}
+
 /** Builds one write payload from a plain column→value map, resolving Lookup-typed columns to
  *  `{navProp}@odata.bind` — same approach as data-migration's `importRow`
  *  (src/tools/data-migration/dataverseOps.ts), generalized to take an explicit value map instead
@@ -68,12 +90,14 @@ export async function insertRow(
   columnValues: Record<string, unknown>,
 ): Promise<{ newId: string | null }> {
   const body = await buildRowBody(connectionId, entityLogicalName, columnValues);
-  const created = await callNative<Record<string, unknown>>("dataverse.request", {
-    connectionId,
-    method: "POST",
-    path: entitySetName,
-    body,
-  });
+  const created = await withRetryOn429(() =>
+    callNative<Record<string, unknown>>("dataverse.request", {
+      connectionId,
+      method: "POST",
+      path: entitySetName,
+      body,
+    }),
+  );
   const idField = `${entityLogicalName}id`;
   const newId = typeof created[idField] === "string" ? (created[idField] as string) : null;
   return { newId };
@@ -87,20 +111,24 @@ export async function updateRow(
   columnValues: Record<string, unknown>,
 ): Promise<void> {
   const body = await buildRowBody(connectionId, entityLogicalName, columnValues);
-  await callNative("dataverse.request", {
-    connectionId,
-    method: "PATCH",
-    path: `${entitySetName}(${id})`,
-    body,
-  });
+  await withRetryOn429(() =>
+    callNative("dataverse.request", {
+      connectionId,
+      method: "PATCH",
+      path: `${entitySetName}(${id})`,
+      body,
+    }),
+  );
 }
 
 export async function deleteRow(connectionId: string, entitySetName: string, id: string): Promise<void> {
-  await callNative("dataverse.request", {
-    connectionId,
-    method: "DELETE",
-    path: `${entitySetName}(${id})`,
-  });
+  await withRetryOn429(() =>
+    callNative("dataverse.request", {
+      connectionId,
+      method: "DELETE",
+      path: `${entitySetName}(${id})`,
+    }),
+  );
 }
 
 /** Dataverse attribute logical names are conventionally all-lowercase with underscores, but a
@@ -162,23 +190,27 @@ export async function insertIntersectRow(
     fetchEntityMeta(connectionId, rel.entity1LogicalName),
     fetchEntityMeta(connectionId, rel.entity2LogicalName),
   ]);
-  await callNative("dataverse.request", {
-    connectionId,
-    method: "POST",
-    path: `${meta1.entitySetName}(${values.entity1Value})/${rel.entity1NavigationPropertyName}/$ref`,
-    body: { "@odata.id": `${environmentUrl.replace(/\/$/, "")}/api/data/v9.2/${meta2.entitySetName}(${values.entity2Value})` },
-  });
+  await withRetryOn429(() =>
+    callNative("dataverse.request", {
+      connectionId,
+      method: "POST",
+      path: `${meta1.entitySetName}(${values.entity1Value})/${rel.entity1NavigationPropertyName}/$ref`,
+      body: { "@odata.id": `${environmentUrl.replace(/\/$/, "")}/api/data/v9.2/${meta2.entitySetName}(${values.entity2Value})` },
+    }),
+  );
 }
 
 /** Disassociates two records — the DELETE counterpart of insertIntersectRow. No body/environmentUrl
  *  needed: the second record's id goes directly in the URL, per Dataverse's disassociate contract. */
 export async function deleteIntersectRow(connectionId: string, rel: ManyToManyInfo, values: IntersectRowValues): Promise<void> {
   const meta1 = await fetchEntityMeta(connectionId, rel.entity1LogicalName);
-  await callNative("dataverse.request", {
-    connectionId,
-    method: "DELETE",
-    path: `${meta1.entitySetName}(${values.entity1Value})/${rel.entity1NavigationPropertyName}(${values.entity2Value})/$ref`,
-  });
+  await withRetryOn429(() =>
+    callNative("dataverse.request", {
+      connectionId,
+      method: "DELETE",
+      path: `${meta1.entitySetName}(${values.entity1Value})/${rel.entity1NavigationPropertyName}(${values.entity2Value})/$ref`,
+    }),
+  );
 }
 
 export interface MatchingIds {

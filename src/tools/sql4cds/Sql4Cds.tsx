@@ -4,6 +4,7 @@ import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
 import { downloadTextFile } from "../../native/download";
 import { fetchAttributes, fetchEntityList, fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
+import { runConcurrent } from "./concurrency";
 import { literalToJsValue, parseSql, type InsertResult, type MutateResult, type SqlNode } from "./translate";
 import {
   deleteRow,
@@ -29,6 +30,14 @@ const SAMPLE = `SELECT TOP 50 name, revenue, statecode
 FROM account
 WHERE statecode = 0 AND (name LIKE 'Contoso%' OR telephone1 IS NOT NULL)
 ORDER BY name`;
+
+// Dataverse's default service protection limit is 52 concurrent requests per user — this default
+// stays well under that (leaving headroom for whatever else the same user's token is doing) while
+// still giving a large batch a meaningful speedup over one request at a time. writeOps.ts retries
+// individual requests on HTTP 429 with backoff, so an occasional throttle at higher concurrency
+// values doesn't turn into a failed row.
+const DEFAULT_WRITE_CONCURRENCY = 8;
+const MAX_WRITE_CONCURRENCY = 20;
 
 function OutputRow({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
@@ -63,6 +72,31 @@ function describeStatement(stmt: InsertResult | MutateResult): string {
   if (stmt.kind === "insert") return `INSERT INTO ${stmt.entityLogicalName}（${stmt.rows.length} 行）`;
   const verb = stmt.action === "update" ? "UPDATE" : "DELETE";
   return `${verb} ${stmt.entityLogicalName} WHERE ${stmt.filter}`;
+}
+
+function ConcurrencyInput({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: number;
+  onChange: (next: number) => void;
+  disabled: boolean;
+}) {
+  return (
+    <label className="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+      并发数
+      <input
+        type="number"
+        min={1}
+        max={MAX_WRITE_CONCURRENCY}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Math.min(MAX_WRITE_CONCURRENCY, Math.max(1, Number(e.target.value) || 1)))}
+        className="w-14 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-xs text-gray-900 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+      />
+    </label>
+  );
 }
 
 function WriteResultTable({ results, stopped }: { results: Sql4CdsLogEntry[]; stopped?: boolean }) {
@@ -216,6 +250,7 @@ export default function Sql4Cds() {
   // batch there's a small, unavoidable "one more row" lag after clicking it.
   const stopRequestedRef = useRef(false);
   const [writeStopped, setWriteStopped] = useState(false);
+  const [writeConcurrency, setWriteConcurrency] = useState(DEFAULT_WRITE_CONCURRENCY);
 
   function handleStopWrite() {
     stopRequestedRef.current = true;
@@ -322,32 +357,36 @@ export default function Sql4Cds() {
       const envUrl = environmentUrl();
       if (manyToMany && !envUrl) throw new Error("找不到当前连接的环境 URL。");
 
-      for (let i = 0; i < result.rows.length; i++) {
-        if (stopRequestedRef.current) {
-          stopped = true;
-          setWriteStopped(true);
-          break;
-        }
-        const key = `第 ${i + 1} 行`;
-        let entry: Sql4CdsLogEntry;
-        try {
-          const columnValues: Record<string, unknown> = {};
-          result.columns.forEach((col, idx) => {
-            columnValues[col] = literalToJsValue(result.rows[i][idx]);
-          });
-          if (manyToMany) {
-            const values = resolveIntersectRowValues(manyToMany, columnValues);
-            await insertIntersectRow(activeConnectionId, envUrl!, manyToMany, values);
-            entry = { key, state: "success" };
-          } else {
-            const { newId } = await insertRow(activeConnectionId, result.entityLogicalName, entitySet, columnValues);
-            entry = { key, state: "success", detail: newId ?? undefined };
+      await runConcurrent(
+        result.rows,
+        writeConcurrency,
+        async (row, i) => {
+          const key = `第 ${i + 1} 行`;
+          let entry: Sql4CdsLogEntry;
+          try {
+            const columnValues: Record<string, unknown> = {};
+            result.columns.forEach((col, idx) => {
+              columnValues[col] = literalToJsValue(row[idx]);
+            });
+            if (manyToMany) {
+              const values = resolveIntersectRowValues(manyToMany, columnValues);
+              await insertIntersectRow(activeConnectionId, envUrl!, manyToMany, values);
+              entry = { key, state: "success" };
+            } else {
+              const { newId } = await insertRow(activeConnectionId, result.entityLogicalName, entitySet, columnValues);
+              entry = { key, state: "success", detail: newId ?? undefined };
+            }
+          } catch (err) {
+            entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
           }
-        } catch (err) {
-          entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
-        }
-        entries.push(entry);
-        setWriteResults((r) => [...(r ?? []), entry]);
+          entries.push(entry);
+          setWriteResults((r) => [...(r ?? []), entry]);
+        },
+        () => stopRequestedRef.current,
+      );
+      if (stopRequestedRef.current) {
+        stopped = true;
+        setWriteStopped(true);
       }
 
       finishWrite("insert", result.entityLogicalName, entitySet, startedAt, entries, stopped);
@@ -392,25 +431,29 @@ export default function Sql4Cds() {
           ? Object.fromEntries(result.setClauses.map((s) => [s.column, literalToJsValue(s.value)]))
           : null;
 
-      for (const id of ids) {
-        if (stopRequestedRef.current) {
-          stopped = true;
-          setWriteStopped(true);
-          break;
-        }
-        let entry: Sql4CdsLogEntry;
-        try {
-          if (result.action === "update") {
-            await updateRow(activeConnectionId, result.entityLogicalName, entitySet, id, columnValues!);
-          } else {
-            await deleteRow(activeConnectionId, entitySet, id);
+      await runConcurrent(
+        ids,
+        writeConcurrency,
+        async (id) => {
+          let entry: Sql4CdsLogEntry;
+          try {
+            if (result.action === "update") {
+              await updateRow(activeConnectionId, result.entityLogicalName, entitySet, id, columnValues!);
+            } else {
+              await deleteRow(activeConnectionId, entitySet, id);
+            }
+            entry = { key: id, state: "success" };
+          } catch (err) {
+            entry = { key: id, state: "error", error: err instanceof Error ? err.message : String(err) };
           }
-          entry = { key: id, state: "success" };
-        } catch (err) {
-          entry = { key: id, state: "error", error: err instanceof Error ? err.message : String(err) };
-        }
-        entries.push(entry);
-        setWriteResults((r) => [...(r ?? []), entry]);
+          entries.push(entry);
+          setWriteResults((r) => [...(r ?? []), entry]);
+        },
+        () => stopRequestedRef.current,
+      );
+      if (stopRequestedRef.current) {
+        stopped = true;
+        setWriteStopped(true);
       }
 
       finishWrite(result.action, result.entityLogicalName, entitySet, startedAt, entries, stopped);
@@ -464,32 +507,36 @@ export default function Sql4Cds() {
             const envUrl = manyToMany ? environmentUrl() : undefined;
             if (manyToMany && !envUrl) throw new Error("找不到当前连接的环境 URL。");
 
-            for (let r = 0; r < stmt.rows.length; r++) {
-              if (stopRequestedRef.current) {
-                stopped = true;
-                setWriteStopped(true);
-                break;
-              }
-              const key = `语句 ${i + 1} · 第 ${r + 1} 行`;
-              let entry: Sql4CdsLogEntry;
-              try {
-                const columnValues: Record<string, unknown> = {};
-                stmt.columns.forEach((col, idx) => {
-                  columnValues[col] = literalToJsValue(stmt.rows[r][idx]);
-                });
-                if (manyToMany) {
-                  const values = resolveIntersectRowValues(manyToMany, columnValues);
-                  await insertIntersectRow(activeConnectionId, envUrl!, manyToMany, values);
-                  entry = { key, state: "success" };
-                } else {
-                  const { newId } = await insertRow(activeConnectionId, stmt.entityLogicalName, entitySetName, columnValues);
-                  entry = { key, state: "success", detail: newId ?? undefined };
+            await runConcurrent(
+              stmt.rows,
+              writeConcurrency,
+              async (row, r) => {
+                const key = `语句 ${i + 1} · 第 ${r + 1} 行`;
+                let entry: Sql4CdsLogEntry;
+                try {
+                  const columnValues: Record<string, unknown> = {};
+                  stmt.columns.forEach((col, idx) => {
+                    columnValues[col] = literalToJsValue(row[idx]);
+                  });
+                  if (manyToMany) {
+                    const values = resolveIntersectRowValues(manyToMany, columnValues);
+                    await insertIntersectRow(activeConnectionId, envUrl!, manyToMany, values);
+                    entry = { key, state: "success" };
+                  } else {
+                    const { newId } = await insertRow(activeConnectionId, stmt.entityLogicalName, entitySetName, columnValues);
+                    entry = { key, state: "success", detail: newId ?? undefined };
+                  }
+                } catch (err) {
+                  entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
                 }
-              } catch (err) {
-                entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
-              }
-              entries.push(entry);
-              setWriteResults((r2) => [...(r2 ?? []), entry]);
+                entries.push(entry);
+                setWriteResults((r2) => [...(r2 ?? []), entry]);
+              },
+              () => stopRequestedRef.current,
+            );
+            if (stopRequestedRef.current) {
+              stopped = true;
+              setWriteStopped(true);
             }
           } else {
             if (manyToMany) {
@@ -503,26 +550,30 @@ export default function Sql4Cds() {
                 ? Object.fromEntries(stmt.setClauses.map((s) => [s.column, literalToJsValue(s.value)]))
                 : null;
 
-            for (const id of ids) {
-              if (stopRequestedRef.current) {
-                stopped = true;
-                setWriteStopped(true);
-                break;
-              }
-              const key = `语句 ${i + 1} · ${id}`;
-              let entry: Sql4CdsLogEntry;
-              try {
-                if (stmt.action === "update") {
-                  await updateRow(activeConnectionId, stmt.entityLogicalName, entitySetName, id, columnValues!);
-                } else {
-                  await deleteRow(activeConnectionId, entitySetName, id);
+            await runConcurrent(
+              ids,
+              writeConcurrency,
+              async (id) => {
+                const key = `语句 ${i + 1} · ${id}`;
+                let entry: Sql4CdsLogEntry;
+                try {
+                  if (stmt.action === "update") {
+                    await updateRow(activeConnectionId, stmt.entityLogicalName, entitySetName, id, columnValues!);
+                  } else {
+                    await deleteRow(activeConnectionId, entitySetName, id);
+                  }
+                  entry = { key, state: "success" };
+                } catch (err) {
+                  entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
                 }
-                entry = { key, state: "success" };
-              } catch (err) {
-                entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
-              }
-              entries.push(entry);
-              setWriteResults((r2) => [...(r2 ?? []), entry]);
+                entries.push(entry);
+                setWriteResults((r2) => [...(r2 ?? []), entry]);
+              },
+              () => stopRequestedRef.current,
+            );
+            if (stopRequestedRef.current) {
+              stopped = true;
+              setWriteStopped(true);
             }
           }
         } catch (err) {
@@ -578,7 +629,8 @@ export default function Sql4Cds() {
         支持 SELECT（含 JOIN / GROUP BY / 聚合函数，翻译成 FetchXML 执行）、INSERT、UPDATE、DELETE。UPDATE/DELETE
         必须带 WHERE 子句（不支持整表操作，请自己写恒真条件），执行前会弹窗二次确认，单次最多处理 5000 条匹配记录并自动下载执行日志。用 T-SQL
         语法解析，翻译成 Dataverse Web API 查询后真实执行。支持用分号分隔粘贴多条 INSERT/UPDATE/DELETE 语句一次性批量执行（可以跨不同的表），
-        执行日志会合并成一份文件；批量里暂不支持 SELECT。
+        执行日志会合并成一份文件；批量里暂不支持 SELECT。写入按并发数（默认 {DEFAULT_WRITE_CONCURRENCY}，可调）同时发多个请求，比逐条执行快；单个请求遇到
+        Dataverse 限流（429）会自动退避重试。
       </div>
 
       <div>
@@ -731,7 +783,7 @@ export default function Sql4Cds() {
             </table>
           </div>
 
-          <div>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={handleInsert}
               disabled={!activeConnectionId || !entitySet || writeRunning}
@@ -742,12 +794,13 @@ export default function Sql4Cds() {
             {writeRunning && (
               <button
                 onClick={handleStopWrite}
-                className="ml-2 rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                className="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
               >
                 停止
               </button>
             )}
-            {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+            <ConcurrencyInput value={writeConcurrency} onChange={setWriteConcurrency} disabled={writeRunning} />
+            {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
 
           {writeError && (
@@ -777,7 +830,7 @@ export default function Sql4Cds() {
             </p>
           )}
 
-          <div>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={handleMutate}
               disabled={!activeConnectionId || !matchInfo || matchInfo.ids.length === 0 || writeRunning}
@@ -790,12 +843,13 @@ export default function Sql4Cds() {
             {writeRunning && (
               <button
                 onClick={handleStopWrite}
-                className="ml-2 rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                className="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
               >
                 停止
               </button>
             )}
-            {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+            <ConcurrencyInput value={writeConcurrency} onChange={setWriteConcurrency} disabled={writeRunning} />
+            {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
 
           {writeError && (
@@ -826,7 +880,7 @@ export default function Sql4Cds() {
             </table>
           </div>
 
-          <div>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={handleBatch}
               disabled={!activeConnectionId || writeRunning}
@@ -837,12 +891,13 @@ export default function Sql4Cds() {
             {writeRunning && (
               <button
                 onClick={handleStopWrite}
-                className="ml-2 rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                className="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
               >
                 停止
               </button>
             )}
-            {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+            <ConcurrencyInput value={writeConcurrency} onChange={setWriteConcurrency} disabled={writeRunning} />
+            {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
 
           {writeError && (
