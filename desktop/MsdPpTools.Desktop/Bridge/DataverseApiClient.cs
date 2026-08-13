@@ -35,7 +35,16 @@ public sealed class DataverseApiClient
         var url = $"{connection.EnvironmentUrl}/api/data/v9.2/{path.TrimStart('/')}";
         using var request = new HttpRequestMessage(new HttpMethod(method), url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        // IEEE754Compatible=false: per the OData v4 spec, Edm.Decimal/Edm.Int64 values are
+        // string-encoded by default (arbitrary precision / 64-bit ints can't round-trip through
+        // JSON numbers losslessly) unless the client opts out via this Accept parameter. Without
+        // it, Dataverse expects Decimal/Money fields as quoted strings on write — SQL4CDS sends
+        // them as plain JSON numbers (confirmed against contoso-dev: POSTing a Decimal field as a
+        // bare number 400s with "Cannot convert ... 'Edm.Decimal' ... conflict ...
+        // 'IEEE754Compatible' false/true" until this parameter is set).
+        var accept = new MediaTypeWithQualityHeaderValue("application/json");
+        accept.Parameters.Add(new NameValueHeaderValue("IEEE754Compatible", "false"));
+        request.Headers.Accept.Add(accept);
         request.Headers.Add("OData-MaxVersion", "4.0");
         request.Headers.Add("OData-Version", "4.0");
         // return=representation: without this, POST creates return 204 + empty body (new id only

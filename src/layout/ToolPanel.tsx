@@ -3,6 +3,7 @@ import { isNativeBridgeAvailable } from "../native/bridge";
 import { TabConnectionContext, useActiveConnection } from "../native/activeConnection";
 import { useTabManager } from "../native/tabs";
 import type { ToolDefinition } from "../tools/types";
+import ToolErrorBoundary from "./ToolErrorBoundary";
 
 const selectCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -61,9 +62,11 @@ export default function ToolPanel({
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{tool.description}</p>
 
         <div className="mt-6">
-          <Suspense fallback={<div className="text-sm text-gray-400">加载中…</div>}>
-            <Component />
-          </Suspense>
+          <ToolErrorBoundary toolName={tool.name}>
+            <Suspense fallback={<div className="text-sm text-gray-400">加载中…</div>}>
+              <Component />
+            </Suspense>
+          </ToolErrorBoundary>
         </div>
       </div>
     </TabConnectionContext.Provider>

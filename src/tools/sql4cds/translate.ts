@@ -701,13 +701,27 @@ export function parseSql(sql: string): ParsedStatement {
   if (!sql.trim()) return { kind: "empty" };
 
   const parser = new Parser();
-  let ast: { type: string };
+  let astResult: unknown;
   try {
-    ast = parser.astify(sql, { database: "transactsql" }) as unknown as { type: string };
+    astResult = parser.astify(sql, { database: "transactsql" });
   } catch (err) {
     return { kind: "error", error: err instanceof Error ? err.message : String(err) };
   }
 
+  // Multiple `;`-separated statements astify to an array instead of a single statement object —
+  // confirmed by running the parser directly. Reading `.type` off that array is `undefined`, and
+  // the fallback branch below used to call `.toUpperCase()` on it unconditionally, throwing an
+  // uncaught TypeError straight out of a useMemo call (Sql4Cds.tsx) with no error boundary above
+  // it — the whole app went blank instead of showing an error. This tool only ever executes one
+  // statement per run, so reject multi-statement input explicitly instead.
+  if (Array.isArray(astResult)) {
+    return {
+      kind: "error",
+      error: `一次只能执行一条 SQL 语句（检测到 ${astResult.length} 条，用分号分隔）。请每次只粘贴/执行一条语句。`,
+    };
+  }
+
+  const ast = astResult as { type: string };
   if (ast.type === "select") return parseSelect(ast as unknown as SelectAst);
   if (ast.type === "insert") return parseInsert(ast as unknown as InsertAst);
   if (ast.type === "update") return parseUpdate(ast as unknown as UpdateAst);
