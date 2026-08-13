@@ -28,7 +28,7 @@ public partial class MainWindow : Window
 
         _bridge = new NativeBridge(Browser.CoreWebView2);
         _bridge.Register("ping", _ => Task.FromResult<object?>(new { message = "pong", time = DateTimeOffset.Now }));
-        ConnectionHandlers.Register(_bridge, _connectionStore);
+        ConnectionHandlers.Register(_bridge, _connectionStore, _authService);
         AuthHandlers.Register(_bridge, _authService);
         DataverseHandlers.Register(_bridge, _dataverseClient);
         DialogHandlers.Register(_bridge);

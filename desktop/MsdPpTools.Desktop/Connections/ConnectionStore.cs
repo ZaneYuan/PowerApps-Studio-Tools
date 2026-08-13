@@ -50,6 +50,19 @@ public sealed class ConnectionStore
         return connection;
     }
 
+    public Connection Update(Connection connection)
+    {
+        var all = Load();
+        var index = all.FindIndex(c => c.Id == connection.Id);
+        if (index < 0)
+        {
+            throw new InvalidOperationException("找不到该连接，可能已被删除。");
+        }
+        all[index] = connection;
+        Save(all);
+        return connection;
+    }
+
     public void Remove(string id)
     {
         var all = Load();

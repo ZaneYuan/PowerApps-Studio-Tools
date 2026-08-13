@@ -24,6 +24,15 @@ public sealed class AuthService
         _store = store;
     }
 
+    /// <summary>Drops a connection's cached token — call after editing a connection's auth
+    /// fields (environment URL / tenant / client id / secret / certificate), otherwise
+    /// GetTokenAsync would keep returning a token acquired under the old identity/audience
+    /// until it naturally expires.</summary>
+    public void InvalidateToken(string connectionId)
+    {
+        _tokenCache.Remove(connectionId);
+    }
+
     /// <summary>Returns a cached token for the connection if it's still valid for at least two
     /// more minutes, otherwise acquires a new one (silently from the persisted cache when
     /// possible, falling back to an interactive prompt only when required).</summary>

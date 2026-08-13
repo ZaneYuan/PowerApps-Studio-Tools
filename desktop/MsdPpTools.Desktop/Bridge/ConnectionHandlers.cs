@@ -1,10 +1,13 @@
 using System.Text.Json;
+using MsdPpTools.Desktop.Auth;
 using MsdPpTools.Desktop.Connections;
 
 namespace MsdPpTools.Desktop.Bridge;
 
 /// <summary>Registers the connections.* bridge methods. Secrets never leave this process —
-/// list/add responses only ever carry a hasSecret flag, never the encrypted or plaintext value.</summary>
+/// list/add/update responses only ever carry a hasSecret flag, never the encrypted or plaintext
+/// value; correspondingly, an empty secret field on update means "leave it unchanged", not
+/// "clear it" — there's no way for the JS side to send back a secret it was never given.</summary>
 public static class ConnectionHandlers
 {
     private sealed record ConnectionDto(
@@ -18,7 +21,7 @@ public static class ConnectionHandlers
         string? CertificateFilePath,
         bool HasCertificatePassword);
 
-    private sealed class AddConnectionParams
+    private class AddConnectionParams
     {
         public string Name { get; set; } = "";
         public string EnvironmentUrl { get; set; } = "";
@@ -30,12 +33,17 @@ public static class ConnectionHandlers
         public string? CertificatePassword { get; set; }
     }
 
+    private sealed class UpdateConnectionParams : AddConnectionParams
+    {
+        public string Id { get; set; } = "";
+    }
+
     private sealed class IdParams
     {
         public string Id { get; set; } = "";
     }
 
-    public static void Register(NativeBridge bridge, ConnectionStore store)
+    public static void Register(NativeBridge bridge, ConnectionStore store, AuthService authService)
     {
         bridge.Register("connections.list", _ =>
         {
@@ -71,6 +79,39 @@ public static class ConnectionHandlers
 
             store.Add(connection);
             return Task.FromResult<object?>(ToDto(connection));
+        });
+
+        bridge.Register("connections.update", @params =>
+        {
+            var input = @params.Deserialize<UpdateConnectionParams>(NativeBridge.JsonOptions)
+                ?? throw new ArgumentException("缺少连接参数");
+
+            var existing = store.FindById(input.Id)
+                ?? throw new InvalidOperationException("找不到该连接，可能已被删除。");
+
+            if (!Enum.TryParse<ConnectionAuthType>(input.AuthType, ignoreCase: true, out var authType))
+            {
+                throw new ArgumentException($"未知的认证方式: {input.AuthType}");
+            }
+
+            existing.Name = input.Name;
+            existing.EnvironmentUrl = input.EnvironmentUrl.TrimEnd('/');
+            existing.AuthType = authType;
+            existing.TenantId = input.TenantId;
+            existing.ClientId = input.ClientId;
+            existing.CertificateFilePath = input.CertificateFilePath;
+            if (!string.IsNullOrEmpty(input.ClientSecret))
+            {
+                existing.EncryptedClientSecret = SecretProtector.Protect(input.ClientSecret);
+            }
+            if (!string.IsNullOrEmpty(input.CertificatePassword))
+            {
+                existing.EncryptedCertificatePassword = SecretProtector.Protect(input.CertificatePassword);
+            }
+
+            store.Update(existing);
+            authService.InvalidateToken(existing.Id);
+            return Task.FromResult<object?>(ToDto(existing));
         });
 
         bridge.Register("connections.remove", @params =>

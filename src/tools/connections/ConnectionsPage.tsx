@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
-import { useActiveConnection } from "../../native/activeConnection";
+import { useActiveConnection, type ConnectionDto } from "../../native/activeConnection";
 import { parseConnectionString } from "./connectionString";
 
 type AuthTypeInput = "interactive" | "clientSecret" | "certificate";
@@ -51,6 +51,143 @@ interface PasswordLoginState {
 
 const emptyPasswordLogin: PasswordLoginState = { open: false, username: "", password: "" };
 
+function authTypeToInput(authType: ConnectionDto["authType"]): AuthTypeInput {
+  if (authType === "ClientSecret") return "clientSecret";
+  if (authType === "Certificate") return "certificate";
+  return "interactive";
+}
+
+/** The auth-type-dependent field set shared by "添加连接" and the inline edit form below —
+ *  extracted so both stay in sync instead of drifting as two hand-copied field lists.
+ *  `secretsOptional` (edit mode) only changes the secret fields' placeholder text: a saved
+ *  connection's secret is never sent back to the JS side (see ConnectionHandlers.cs's ToDto), so
+ *  leaving the field blank on edit means "keep the existing one", not "clear it". */
+function ConnectionFormFields({
+  values,
+  onChange,
+  onPickCertificate,
+  secretsOptional,
+}: {
+  values: FormState;
+  onChange: (patch: Partial<FormState>) => void;
+  onPickCertificate: () => void;
+  secretsOptional?: boolean;
+}) {
+  return (
+    <>
+      <input
+        type="text"
+        placeholder="连接名称"
+        value={values.name}
+        onChange={(e) => onChange({ name: e.target.value })}
+        required
+        className={inputCls}
+      />
+      <input
+        type="text"
+        placeholder="环境 URL，例如 https://xxx.crm5.dynamics.com"
+        value={values.environmentUrl}
+        onChange={(e) => onChange({ environmentUrl: e.target.value })}
+        required
+        className={inputCls}
+      />
+      <select value={values.authType} onChange={(e) => onChange({ authType: e.target.value as AuthTypeInput })} className={inputCls}>
+        <option value="interactive">交互式登录（用户本人登录，原生支持 MFA / 条件访问）</option>
+        <option value="clientSecret">Client Secret（应用身份）</option>
+        <option value="certificate">证书认证（应用身份，.pfx 文件）</option>
+      </select>
+
+      {values.authType === "interactive" && (
+        <>
+          <p className="text-xs text-gray-400">
+            交互式登录需要一个在目标环境所在租户里注册好的 App Registration（"Mobile and desktop applications"平台、redirect
+            URI <code>http://localhost</code>、允许 public client flow、并已同意 Dynamics CRM API 的委托权限）——先问问这个环境的管理员是不是已经有现成的可以直接用，没有的话去
+            Entra 后台自己注册一个。这里没有默认值：不同租户各自有各自的 App Registration，同一个 Client ID 只在它注册所在的那个租户里能用。
+          </p>
+          <input
+            type="text"
+            placeholder="Tenant ID（必填，例如 contoso.onmicrosoft.com 或租户 GUID）"
+            value={values.tenantId}
+            onChange={(e) => onChange({ tenantId: e.target.value })}
+            required
+            className={inputCls}
+          />
+          <input
+            type="text"
+            placeholder="Client ID（必填）"
+            value={values.clientId}
+            onChange={(e) => onChange({ clientId: e.target.value })}
+            required
+            className={inputCls}
+          />
+        </>
+      )}
+
+      {values.authType === "clientSecret" && (
+        <>
+          <input
+            type="text"
+            placeholder="Tenant ID"
+            value={values.tenantId}
+            onChange={(e) => onChange({ tenantId: e.target.value })}
+            className={inputCls}
+          />
+          <input
+            type="text"
+            placeholder="Client ID"
+            value={values.clientId}
+            onChange={(e) => onChange({ clientId: e.target.value })}
+            className={inputCls}
+          />
+          <input
+            type="password"
+            placeholder={secretsOptional ? "Client Secret（留空 = 不修改已保存的密钥）" : "Client Secret"}
+            value={values.clientSecret}
+            onChange={(e) => onChange({ clientSecret: e.target.value })}
+            className={inputCls}
+          />
+        </>
+      )}
+
+      {values.authType === "certificate" && (
+        <>
+          <input
+            type="text"
+            placeholder="Tenant ID"
+            value={values.tenantId}
+            onChange={(e) => onChange({ tenantId: e.target.value })}
+            className={inputCls}
+          />
+          <input
+            type="text"
+            placeholder="Client ID"
+            value={values.clientId}
+            onChange={(e) => onChange({ clientId: e.target.value })}
+            className={inputCls}
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onPickCertificate}
+              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+            >
+              选择证书文件 (.pfx)
+            </button>
+            <span className="truncate text-xs text-gray-500 dark:text-gray-400">{values.certificateFilePath || "未选择文件"}</span>
+          </div>
+          <input
+            type="password"
+            placeholder={secretsOptional ? "证书密码（留空 = 不修改已保存的密钥）" : "证书密码"}
+            value={values.certificatePassword}
+            onChange={(e) => onChange({ certificatePassword: e.target.value })}
+            className={inputCls}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
 export default function ConnectionsPage() {
   const available = isNativeBridgeAvailable();
   const { connections, refreshConnections } = useActiveConnection();
@@ -60,6 +197,11 @@ export default function ConnectionsPage() {
   const [connectionString, setConnectionString] = useState("");
   const [connectionStringWarnings, setConnectionStringWarnings] = useState<string[]>([]);
   const [passwordLogin, setPasswordLogin] = useState<Record<string, PasswordLoginState>>({});
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<FormState>(emptyForm);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
 
   async function handleAdd(e: FormEvent) {
     e.preventDefault();
@@ -97,19 +239,67 @@ export default function ConnectionsPage() {
     setConnectionStringWarnings(parsed.warnings);
   }
 
-  async function handlePickCertificateFile() {
+  async function pickCertificateFile(): Promise<string | null> {
     const result = await callNative<{ filePath: string | null; fileName: string | null }>("dialog.pickFile", {
       title: "选择证书文件 (.pfx)",
       filter: "证书文件 (*.pfx;*.p12)|*.pfx;*.p12|所有文件 (*.*)|*.*",
     });
-    if (result.filePath) {
-      setForm((f) => ({ ...f, certificateFilePath: result.filePath! }));
-    }
+    return result.filePath;
+  }
+
+  async function handlePickCertificateFile() {
+    const filePath = await pickCertificateFile();
+    if (filePath) setForm((f) => ({ ...f, certificateFilePath: filePath }));
+  }
+
+  async function handlePickCertificateFileForEdit() {
+    const filePath = await pickCertificateFile();
+    if (filePath) setEditForm((f) => ({ ...f, certificateFilePath: filePath }));
   }
 
   async function handleRemove(id: string) {
     await callNative("connections.remove", { id });
     await refreshConnections();
+  }
+
+  function handleStartEdit(c: ConnectionDto) {
+    setEditForm({
+      name: c.name,
+      environmentUrl: c.environmentUrl,
+      authType: authTypeToInput(c.authType),
+      tenantId: c.tenantId ?? "",
+      clientId: c.clientId ?? "",
+      clientSecret: "",
+      certificateFilePath: c.certificateFilePath ?? "",
+      certificatePassword: "",
+    });
+    setEditError(null);
+    setEditingId(c.id);
+  }
+
+  async function handleSaveEdit(e: FormEvent, id: string) {
+    e.preventDefault();
+    setEditError(null);
+    setEditSaving(true);
+    try {
+      await callNative("connections.update", {
+        id,
+        name: editForm.name,
+        environmentUrl: editForm.environmentUrl,
+        authType: editForm.authType,
+        tenantId: editForm.tenantId || undefined,
+        clientId: editForm.clientId || undefined,
+        clientSecret: editForm.clientSecret || undefined,
+        certificateFilePath: editForm.certificateFilePath || undefined,
+        certificatePassword: editForm.certificatePassword || undefined,
+      });
+      await refreshConnections();
+      setEditingId(null);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEditSaving(false);
+    }
   }
 
   async function handleWhoAmI(id: string, credentials?: { username: string; password: string }) {
@@ -188,6 +378,12 @@ export default function ConnectionsPage() {
                       </button>
                     )}
                     <button
+                      onClick={() => (editingId === c.id ? setEditingId(null) : handleStartEdit(c))}
+                      className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+                    >
+                      {editingId === c.id ? "取消编辑" : "编辑"}
+                    </button>
+                    <button
                       onClick={() => handleRemove(c.id)}
                       className="text-xs text-gray-400 hover:text-red-500"
                     >
@@ -195,6 +391,37 @@ export default function ConnectionsPage() {
                     </button>
                   </div>
                 </div>
+
+                {editingId === c.id && (
+                  <form
+                    onSubmit={(e) => handleSaveEdit(e, c.id)}
+                    className="mt-3 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-950"
+                  >
+                    <ConnectionFormFields
+                      values={editForm}
+                      onChange={(patch) => setEditForm((f) => ({ ...f, ...patch }))}
+                      onPickCertificate={handlePickCertificateFileForEdit}
+                      secretsOptional
+                    />
+                    {editError && <p className="text-xs text-red-600 dark:text-red-400">{editError}</p>}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="submit"
+                        disabled={editSaving}
+                        className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        {editSaving ? "保存中…" : "保存"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingId(null)}
+                        className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </form>
+                )}
 
                 {c.authType === "Interactive" && passwordLogin[c.id]?.open && (
                   <div className="mt-2 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2 dark:border-gray-800 dark:bg-gray-950">
@@ -278,121 +505,11 @@ export default function ConnectionsPage() {
       <form onSubmit={handleAdd} className="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-gray-800">
         <h2 className="text-sm font-medium text-gray-700 dark:text-gray-300">添加连接</h2>
 
-        <input
-          type="text"
-          placeholder="连接名称"
-          value={form.name}
-          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          required
-          className={inputCls}
+        <ConnectionFormFields
+          values={form}
+          onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+          onPickCertificate={handlePickCertificateFile}
         />
-        <input
-          type="text"
-          placeholder="环境 URL，例如 https://xxx.crm5.dynamics.com"
-          value={form.environmentUrl}
-          onChange={(e) => setForm((f) => ({ ...f, environmentUrl: e.target.value }))}
-          required
-          className={inputCls}
-        />
-        <select
-          value={form.authType}
-          onChange={(e) => setForm((f) => ({ ...f, authType: e.target.value as AuthTypeInput }))}
-          className={inputCls}
-        >
-          <option value="interactive">交互式登录（用户本人登录，原生支持 MFA / 条件访问）</option>
-          <option value="clientSecret">Client Secret（应用身份）</option>
-          <option value="certificate">证书认证（应用身份，.pfx 文件）</option>
-        </select>
-
-        {form.authType === "interactive" && (
-          <>
-            <p className="text-xs text-gray-400">
-              交互式登录需要一个在目标环境所在租户里注册好的 App Registration（"Mobile and desktop applications"平台、redirect
-              URI <code>http://localhost</code>、允许 public client flow、并已同意 Dynamics CRM API 的委托权限）——先问问这个环境的管理员是不是已经有现成的可以直接用，没有的话去
-              Entra 后台自己注册一个。这里没有默认值：不同租户各自有各自的 App Registration，同一个 Client ID 只在它注册所在的那个租户里能用。
-            </p>
-            <input
-              type="text"
-              placeholder="Tenant ID（必填，例如 contoso.onmicrosoft.com 或租户 GUID）"
-              value={form.tenantId}
-              onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value }))}
-              required
-              className={inputCls}
-            />
-            <input
-              type="text"
-              placeholder="Client ID（必填）"
-              value={form.clientId}
-              onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))}
-              required
-              className={inputCls}
-            />
-          </>
-        )}
-
-        {form.authType === "clientSecret" && (
-          <>
-            <input
-              type="text"
-              placeholder="Tenant ID"
-              value={form.tenantId}
-              onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value }))}
-              className={inputCls}
-            />
-            <input
-              type="text"
-              placeholder="Client ID"
-              value={form.clientId}
-              onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))}
-              className={inputCls}
-            />
-            <input
-              type="password"
-              placeholder="Client Secret"
-              value={form.clientSecret}
-              onChange={(e) => setForm((f) => ({ ...f, clientSecret: e.target.value }))}
-              className={inputCls}
-            />
-          </>
-        )}
-
-        {form.authType === "certificate" && (
-          <>
-            <input
-              type="text"
-              placeholder="Tenant ID"
-              value={form.tenantId}
-              onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value }))}
-              className={inputCls}
-            />
-            <input
-              type="text"
-              placeholder="Client ID"
-              value={form.clientId}
-              onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))}
-              className={inputCls}
-            />
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handlePickCertificateFile}
-                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-              >
-                选择证书文件 (.pfx)
-              </button>
-              <span className="truncate text-xs text-gray-500 dark:text-gray-400">
-                {form.certificateFilePath || "未选择文件"}
-              </span>
-            </div>
-            <input
-              type="password"
-              placeholder="证书密码"
-              value={form.certificatePassword}
-              onChange={(e) => setForm((f) => ({ ...f, certificatePassword: e.target.value }))}
-              className={inputCls}
-            />
-          </>
-        )}
 
         {formError && <p className="text-xs text-red-600 dark:text-red-400">{formError}</p>}
 
