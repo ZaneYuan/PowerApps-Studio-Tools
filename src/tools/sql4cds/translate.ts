@@ -139,7 +139,22 @@ export interface EmptyResult {
   kind: "empty";
 }
 
-export type ParsedStatement = SelectSimpleResult | SelectComplexResult | InsertResult | MutateResult | ErrorResult | EmptyResult;
+export interface BatchResult {
+  kind: "batch";
+  /** Every statement in the batch, in source order. INSERT/UPDATE/DELETE only — a batch can span
+   *  multiple tables (each statement carries its own entity/entitySetGuess), but SELECT isn't
+   *  supported here since there's no single result shape to render for a read+write mix. */
+  statements: (InsertResult | MutateResult)[];
+}
+
+export type ParsedStatement =
+  | SelectSimpleResult
+  | SelectComplexResult
+  | InsertResult
+  | MutateResult
+  | ErrorResult
+  | EmptyResult
+  | BatchResult;
 
 const COMPARISON_OPERATORS: Record<string, string> = {
   "=": "eq",
@@ -697,6 +712,14 @@ function parseDelete(ast: DeleteAst): ParsedStatement {
   }
 }
 
+function parseOneStatement(ast: { type: string }): ParsedStatement {
+  if (ast.type === "select") return parseSelect(ast as unknown as SelectAst);
+  if (ast.type === "insert") return parseInsert(ast as unknown as InsertAst);
+  if (ast.type === "update") return parseUpdate(ast as unknown as UpdateAst);
+  if (ast.type === "delete") return parseDelete(ast as unknown as DeleteAst);
+  return { kind: "error", error: `不支持的语句类型 "${ast.type.toUpperCase()}"（只支持 SELECT / INSERT / UPDATE / DELETE）。` };
+}
+
 export function parseSql(sql: string): ParsedStatement {
   if (!sql.trim()) return { kind: "empty" };
 
@@ -709,22 +732,29 @@ export function parseSql(sql: string): ParsedStatement {
   }
 
   // Multiple `;`-separated statements astify to an array instead of a single statement object —
-  // confirmed by running the parser directly. Reading `.type` off that array is `undefined`, and
-  // the fallback branch below used to call `.toUpperCase()` on it unconditionally, throwing an
-  // uncaught TypeError straight out of a useMemo call (Sql4Cds.tsx) with no error boundary above
-  // it — the whole app went blank instead of showing an error. This tool only ever executes one
-  // statement per run, so reject multi-statement input explicitly instead.
+  // confirmed by running the parser directly. Reading `.type` off that array used to be
+  // `undefined` and the old fallback branch called `.toUpperCase()` on it unconditionally,
+  // throwing an uncaught TypeError straight out of a useMemo call (Sql4Cds.tsx) with no error
+  // boundary above it — the whole app went blank instead of showing an error. Now handled
+  // explicitly: a batch of INSERT/UPDATE/DELETE statements is executed in order (each keeps its
+  // own entity, so it's fine for a batch to span multiple tables); SELECT isn't supported in a
+  // batch since there's no single result shape to render for a read+write mix.
   if (Array.isArray(astResult)) {
-    return {
-      kind: "error",
-      error: `一次只能执行一条 SQL 语句（检测到 ${astResult.length} 条，用分号分隔）。请每次只粘贴/执行一条语句。`,
-    };
+    if (astResult.length === 0) return { kind: "empty" };
+    if (astResult.length === 1) return parseOneStatement(astResult[0] as { type: string });
+
+    const parsed = astResult.map((a) => parseOneStatement(a as { type: string }));
+    for (let i = 0; i < parsed.length; i++) {
+      const p = parsed[i];
+      if (p.kind === "insert" || p.kind === "mutate") continue;
+      if (p.kind === "error") return { kind: "error", error: `第 ${i + 1} 条语句解析失败：${p.error}` };
+      return {
+        kind: "error",
+        error: `批量执行只支持 INSERT / UPDATE / DELETE 的组合，第 ${i + 1} 条不是这三种语句之一，请单独执行或从批量里删除。`,
+      };
+    }
+    return { kind: "batch", statements: parsed as (InsertResult | MutateResult)[] };
   }
 
-  const ast = astResult as { type: string };
-  if (ast.type === "select") return parseSelect(ast as unknown as SelectAst);
-  if (ast.type === "insert") return parseInsert(ast as unknown as InsertAst);
-  if (ast.type === "update") return parseUpdate(ast as unknown as UpdateAst);
-  if (ast.type === "delete") return parseDelete(ast as unknown as DeleteAst);
-  return { kind: "error", error: `不支持的语句类型 "${ast.type.toUpperCase()}"（只支持 SELECT / INSERT / UPDATE / DELETE）。` };
+  return parseOneStatement(astResult as { type: string });
 }

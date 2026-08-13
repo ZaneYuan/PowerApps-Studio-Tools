@@ -4,9 +4,17 @@ import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
 import { downloadTextFile } from "../../native/download";
 import { fetchAttributes, fetchEntityList, fetchEntityMeta } from "../../native/metadataService";
-import { literalToJsValue, parseSql, type SqlNode } from "./translate";
+import { literalToJsValue, parseSql, type InsertResult, type MutateResult, type SqlNode } from "./translate";
 import { deleteRow, insertRow, queryMatchingIds, updateRow, type MatchingIds } from "./writeOps";
-import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry, type WriteAction } from "./executionLog";
+import {
+  buildSql4CdsBatchLogText,
+  buildSql4CdsLogText,
+  sql4CdsBatchLogFilename,
+  sql4CdsLogFilename,
+  type Sql4CdsBatchStatementLog,
+  type Sql4CdsLogEntry,
+  type WriteAction,
+} from "./executionLog";
 import SqlEditor from "./SqlEditor";
 
 const SAMPLE = `SELECT TOP 50 name, revenue, statecode
@@ -39,6 +47,14 @@ function OutputRow({ label, value }: { label: string; value: string | null }) {
 function describeLiteral(node: SqlNode): string {
   if (node.type === "null") return "NULL";
   return String(node.value);
+}
+
+/** One-line human summary of a batch statement — shared by the preview list and the execution
+ *  log (Sql4CdsBatchStatementLog.summary), so they can't drift apart. */
+function describeStatement(stmt: InsertResult | MutateResult): string {
+  if (stmt.kind === "insert") return `INSERT INTO ${stmt.entityLogicalName}（${stmt.rows.length} 行）`;
+  const verb = stmt.action === "update" ? "UPDATE" : "DELETE";
+  return `${verb} ${stmt.entityLogicalName} WHERE ${stmt.filter}`;
 }
 
 function WriteResultTable({ results }: { results: Sql4CdsLogEntry[] }) {
@@ -78,9 +94,11 @@ export default function Sql4Cds() {
 
   const result = useMemo(() => parseSql(sql), [sql]);
 
-  // Every non-error/non-empty statement kind carries entityLogicalName/entitySetGuess — narrow
-  // once here instead of repeating the `"entityLogicalName" in result` check at every use site.
-  const hasEntity = result.kind !== "error" && result.kind !== "empty";
+  // Every non-error/non-empty/non-batch statement kind carries entityLogicalName/entitySetGuess —
+  // narrow once here instead of repeating the `"entityLogicalName" in result` check at every use
+  // site. A batch spans one entity per statement (possibly several different ones), so it has no
+  // single entity to show here — each statement resolves its own inside handleBatch.
+  const hasEntity = result.kind !== "error" && result.kind !== "empty" && result.kind !== "batch";
   const entityLogicalName = hasEntity ? result.entityLogicalName : null;
   const entitySetGuess = hasEntity ? result.entitySetGuess : null;
   const mutateFilter = result.kind === "mutate" ? result.filter : null;
@@ -327,6 +345,113 @@ export default function Sql4Cds() {
     }
   }
 
+  // Batch mode: several `;`-separated INSERT/UPDATE/DELETE statements, possibly against
+  // different tables — each resolves its own entitySetName/matching-ids here (unlike the single-
+  // statement handlers above, which reuse the entitySet/matchInfo already resolved by the
+  // top-level useEffects, since those only ever track one entity at a time). All rows across all
+  // statements land in one merged log instead of one download per statement.
+  async function handleBatch() {
+    if (!activeConnectionId || result.kind !== "batch") return;
+    const statements = result.statements;
+
+    const preview = statements.map((s, i) => `${i + 1}. ${describeStatement(s)}`).join("\n");
+    if (!confirm(`即将依次执行 ${statements.length} 条语句：\n${preview}\n\n具体影响行数将在执行过程中依次查询/写入。确定吗？`)) return;
+
+    setWriteRunning(true);
+    setWriteResults([]);
+    setWriteError(null);
+    const startedAt = new Date();
+    const statementLogs: Sql4CdsBatchStatementLog[] = [];
+
+    try {
+      for (let i = 0; i < statements.length; i++) {
+        const stmt = statements[i];
+        const entries: Sql4CdsLogEntry[] = [];
+        let entitySetName = stmt.entitySetGuess;
+
+        try {
+          const meta = await fetchEntityMeta(activeConnectionId, stmt.entityLogicalName);
+          entitySetName = meta.entitySetName;
+
+          if (stmt.kind === "insert") {
+            for (let r = 0; r < stmt.rows.length; r++) {
+              const key = `语句 ${i + 1} · 第 ${r + 1} 行`;
+              let entry: Sql4CdsLogEntry;
+              try {
+                const columnValues: Record<string, unknown> = {};
+                stmt.columns.forEach((col, idx) => {
+                  columnValues[col] = literalToJsValue(stmt.rows[r][idx]);
+                });
+                const { newId } = await insertRow(activeConnectionId, stmt.entityLogicalName, entitySetName, columnValues);
+                entry = { key, state: "success", detail: newId ?? undefined };
+              } catch (err) {
+                entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
+              }
+              entries.push(entry);
+              setWriteResults((r2) => [...(r2 ?? []), entry]);
+            }
+          } else {
+            const { ids } = await queryMatchingIds(activeConnectionId, entitySetName, meta.primaryIdAttribute, stmt.filter);
+            const columnValues =
+              stmt.action === "update" && stmt.setClauses
+                ? Object.fromEntries(stmt.setClauses.map((s) => [s.column, literalToJsValue(s.value)]))
+                : null;
+
+            for (const id of ids) {
+              const key = `语句 ${i + 1} · ${id}`;
+              let entry: Sql4CdsLogEntry;
+              try {
+                if (stmt.action === "update") {
+                  await updateRow(activeConnectionId, stmt.entityLogicalName, entitySetName, id, columnValues!);
+                } else {
+                  await deleteRow(activeConnectionId, entitySetName, id);
+                }
+                entry = { key, state: "success" };
+              } catch (err) {
+                entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
+              }
+              entries.push(entry);
+              setWriteResults((r2) => [...(r2 ?? []), entry]);
+            }
+          }
+        } catch (err) {
+          // A failure resolving the entity/matching-ids for this whole statement (not a single
+          // row) — record one entry so it's still visible in the log instead of silently skipped.
+          const entry: Sql4CdsLogEntry = {
+            key: `语句 ${i + 1}`,
+            state: "error",
+            error: err instanceof Error ? err.message : String(err),
+          };
+          entries.push(entry);
+          setWriteResults((r2) => [...(r2 ?? []), entry]);
+        }
+
+        statementLogs.push({
+          index: i + 1,
+          action: stmt.kind === "insert" ? "insert" : stmt.action,
+          entityLogicalName: stmt.entityLogicalName,
+          entitySetName,
+          summary: describeStatement(stmt),
+          entries,
+        });
+      }
+
+      const finishedAt = new Date();
+      const text = buildSql4CdsBatchLogText({
+        startedAt,
+        finishedAt,
+        connectionName: connectionName(),
+        sql,
+        statements: statementLogs,
+      });
+      downloadTextFile(sql4CdsBatchLogFilename(finishedAt), text);
+    } catch (err) {
+      setWriteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWriteRunning(false);
+    }
+  }
+
   if (!isNativeBridgeAvailable()) {
     return (
       <div className="max-w-xl rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
@@ -340,7 +465,8 @@ export default function Sql4Cds() {
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         支持 SELECT（含 JOIN / GROUP BY / 聚合函数，翻译成 FetchXML 执行）、INSERT、UPDATE、DELETE。UPDATE/DELETE
         必须带 WHERE 子句（不支持整表操作，请自己写恒真条件），执行前会弹窗二次确认，单次最多处理 5000 条匹配记录并自动下载执行日志。用 T-SQL
-        语法解析，翻译成 Dataverse Web API 查询后真实执行。
+        语法解析，翻译成 Dataverse Web API 查询后真实执行。支持用分号分隔粘贴多条 INSERT/UPDATE/DELETE 语句一次性批量执行（可以跨不同的表），
+        执行日志会合并成一份文件；批量里暂不支持 SELECT。
       </div>
 
       <div>
@@ -540,6 +666,45 @@ export default function Sql4Cds() {
               }`}
             >
               {writeRunning ? "执行中…" : `执行${result.action === "update" ? "更新" : "删除"}`}
+            </button>
+            {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+          </div>
+
+          {writeError && (
+            <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
+              {writeError}
+            </pre>
+          )}
+
+          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} />}
+        </>
+      )}
+
+      {result.kind === "batch" && (
+        <>
+          <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
+            <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+              批量执行 {result.statements.length} 条语句
+            </div>
+            <table className="w-full text-left text-sm">
+              <tbody>
+                {result.statements.map((s, i) => (
+                  <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-gray-400">{i + 1}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{describeStatement(s)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div>
+            <button
+              onClick={handleBatch}
+              disabled={!activeConnectionId || writeRunning}
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {writeRunning ? "执行中…" : `执行全部 (${result.statements.length} 条语句)`}
             </button>
             {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>

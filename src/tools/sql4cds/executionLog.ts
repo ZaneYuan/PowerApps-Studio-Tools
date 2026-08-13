@@ -51,3 +51,70 @@ export function sql4CdsLogFilename(action: WriteAction, entityLogicalName: strin
   const ts = finishedAt.toISOString().replace(/[:.]/g, "-");
   return `sql4cds-${action}-${entityLogicalName}-${ts}.txt`;
 }
+
+export interface Sql4CdsBatchStatementLog {
+  /** 1-based position in the batch, for the header line only — entries within stay keyed the
+   *  way single-statement runs already key them ("第 N 行" / record id). */
+  index: number;
+  action: WriteAction;
+  entityLogicalName: string;
+  entitySetName: string;
+  /** One-line description of what this statement targeted (INSERT's row count, or UPDATE/
+   *  DELETE's WHERE filter) — the batch's full original SQL text is already in the log header
+   *  (see Sql4CdsBatchLogParams.sql), so this doesn't try to reconstruct each statement's own
+   *  slice of it (node-sql-parser's sqlify() wouldn't exactly match what the user typed anyway,
+   *  just something semantically equivalent). */
+  summary: string;
+  entries: Sql4CdsLogEntry[];
+}
+
+export interface Sql4CdsBatchLogParams {
+  startedAt: Date;
+  finishedAt: Date;
+  connectionName: string;
+  /** The whole batch's original SQL text (all statements), printed once in the header. */
+  sql: string;
+  statements: Sql4CdsBatchStatementLog[];
+}
+
+/** One merged log for a whole batch run instead of one file per statement — same line format as
+ *  buildSql4CdsLogText per statement, with an overall header + per-statement sections. */
+export function buildSql4CdsBatchLogText(params: Sql4CdsBatchLogParams): string {
+  const allEntries = params.statements.flatMap((s) => s.entries);
+  const success = allEntries.filter((e) => e.state === "success").length;
+  const error = allEntries.length - success;
+
+  const lines = [
+    "Power Apps Studio & Tools — SQL4CDS 批量执行日志",
+    `开始时间: ${params.startedAt.toISOString()}`,
+    `结束时间: ${params.finishedAt.toISOString()}`,
+    `连接: ${params.connectionName}`,
+    `语句数: ${params.statements.length}`,
+    `SQL:\n${params.sql}`,
+    `总行数: ${allEntries.length}  成功: ${success}  失败: ${error}`,
+    "",
+  ];
+
+  for (const s of params.statements) {
+    const sSuccess = s.entries.filter((e) => e.state === "success").length;
+    const sError = s.entries.length - sSuccess;
+    lines.push(
+      `── 第 ${s.index} 条语句 ──`,
+      `操作: ${ACTION_LABELS[s.action]} ${s.entityLogicalName} (${s.entitySetName})`,
+      s.summary,
+      `本条行数: ${s.entries.length}  成功: ${sSuccess}  失败: ${sError}`,
+      "明细：",
+      ...s.entries.map((e) =>
+        e.state === "success" ? `[成功] ${e.key}${e.detail ? ` — ${e.detail}` : ""}` : `[失败] ${e.key} — ${e.error ?? ""}`,
+      ),
+      "",
+    );
+  }
+
+  return lines.join("\n");
+}
+
+export function sql4CdsBatchLogFilename(finishedAt: Date): string {
+  const ts = finishedAt.toISOString().replace(/[:.]/g, "-");
+  return `sql4cds-batch-${ts}.txt`;
+}
