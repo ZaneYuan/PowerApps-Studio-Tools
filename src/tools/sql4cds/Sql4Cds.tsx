@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
@@ -65,12 +65,13 @@ function describeStatement(stmt: InsertResult | MutateResult): string {
   return `${verb} ${stmt.entityLogicalName} WHERE ${stmt.filter}`;
 }
 
-function WriteResultTable({ results }: { results: Sql4CdsLogEntry[] }) {
+function WriteResultTable({ results, stopped }: { results: Sql4CdsLogEntry[]; stopped?: boolean }) {
   const success = results.filter((r) => r.state === "success").length;
   const error = results.length - success;
   return (
     <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
       <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+        {stopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
         共 {results.length} 条，成功 {success}，失败 {error} — 执行日志已自动下载
       </div>
       <table className="w-full text-left text-sm">
@@ -208,10 +209,22 @@ export default function Sql4Cds() {
   // so the button stayed stuck on "执行中…" forever with no visible error. Every write handler
   // now runs its whole body in try/catch/finally so that can't happen — see handleInsert/handleMutate.
   const [writeError, setWriteError] = useState<string | null>(null);
+  // "停止" button: a ref (not state) because it has to be read synchronously inside the write
+  // loops between awaits, and state updates from a click handler wouldn't be visible there until
+  // the next render. Can only stop *before* the next row/statement starts — an already-in-flight
+  // request still finishes (no AbortController plumbed through the native bridge), so on a large
+  // batch there's a small, unavoidable "one more row" lag after clicking it.
+  const stopRequestedRef = useRef(false);
+  const [writeStopped, setWriteStopped] = useState(false);
+
+  function handleStopWrite() {
+    stopRequestedRef.current = true;
+  }
 
   useEffect(() => {
     setWriteResults(null);
     setWriteError(null);
+    setWriteStopped(false);
   }, [sql]);
 
   // UPDATE/DELETE always needs the matching record ids before it can run — auto-resolved as soon
@@ -257,7 +270,14 @@ export default function Sql4Cds() {
     return connections.find((c) => c.id === activeConnectionId)?.environmentUrl;
   }
 
-  function finishWrite(action: WriteAction, entity: string, entitySetName: string, startedAt: Date, entries: Sql4CdsLogEntry[]) {
+  function finishWrite(
+    action: WriteAction,
+    entity: string,
+    entitySetName: string,
+    startedAt: Date,
+    entries: Sql4CdsLogEntry[],
+    stopped: boolean,
+  ) {
     const finishedAt = new Date();
     const filename = sql4CdsLogFilename(action, entity, finishedAt);
     const text = buildSql4CdsLogText({
@@ -269,6 +289,7 @@ export default function Sql4Cds() {
       entitySetName,
       sql,
       entries,
+      stopped,
     });
     downloadTextFile(filename, text);
   }
@@ -281,8 +302,11 @@ export default function Sql4Cds() {
     setWriteRunning(true);
     setWriteResults([]);
     setWriteError(null);
+    stopRequestedRef.current = false;
+    setWriteStopped(false);
     const startedAt = new Date();
     const entries: Sql4CdsLogEntry[] = [];
+    let stopped = false;
 
     // Whole body wrapped in try/finally: previously the per-row literalToJsValue() conversion
     // ran outside any try/catch, so a bad literal threw an unhandled rejection that skipped
@@ -299,6 +323,11 @@ export default function Sql4Cds() {
       if (manyToMany && !envUrl) throw new Error("找不到当前连接的环境 URL。");
 
       for (let i = 0; i < result.rows.length; i++) {
+        if (stopRequestedRef.current) {
+          stopped = true;
+          setWriteStopped(true);
+          break;
+        }
         const key = `第 ${i + 1} 行`;
         let entry: Sql4CdsLogEntry;
         try {
@@ -321,7 +350,7 @@ export default function Sql4Cds() {
         setWriteResults((r) => [...(r ?? []), entry]);
       }
 
-      finishWrite("insert", result.entityLogicalName, entitySet, startedAt, entries);
+      finishWrite("insert", result.entityLogicalName, entitySet, startedAt, entries, stopped);
     } catch (err) {
       setWriteError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -339,8 +368,11 @@ export default function Sql4Cds() {
     setWriteRunning(true);
     setWriteResults([]);
     setWriteError(null);
+    stopRequestedRef.current = false;
+    setWriteStopped(false);
     const startedAt = new Date();
     const entries: Sql4CdsLogEntry[] = [];
+    let stopped = false;
 
     // See handleInsert for why the whole body is wrapped in try/finally.
     try {
@@ -361,6 +393,11 @@ export default function Sql4Cds() {
           : null;
 
       for (const id of ids) {
+        if (stopRequestedRef.current) {
+          stopped = true;
+          setWriteStopped(true);
+          break;
+        }
         let entry: Sql4CdsLogEntry;
         try {
           if (result.action === "update") {
@@ -376,7 +413,7 @@ export default function Sql4Cds() {
         setWriteResults((r) => [...(r ?? []), entry]);
       }
 
-      finishWrite(result.action, result.entityLogicalName, entitySet, startedAt, entries);
+      finishWrite(result.action, result.entityLogicalName, entitySet, startedAt, entries, stopped);
     } catch (err) {
       setWriteError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -399,11 +436,19 @@ export default function Sql4Cds() {
     setWriteRunning(true);
     setWriteResults([]);
     setWriteError(null);
+    stopRequestedRef.current = false;
+    setWriteStopped(false);
     const startedAt = new Date();
     const statementLogs: Sql4CdsBatchStatementLog[] = [];
+    let stopped = false;
 
     try {
       for (let i = 0; i < statements.length; i++) {
+        if (stopRequestedRef.current) {
+          stopped = true;
+          setWriteStopped(true);
+          break;
+        }
         const stmt = statements[i];
         const entries: Sql4CdsLogEntry[] = [];
         let entitySetName = stmt.entitySetGuess;
@@ -420,6 +465,11 @@ export default function Sql4Cds() {
             if (manyToMany && !envUrl) throw new Error("找不到当前连接的环境 URL。");
 
             for (let r = 0; r < stmt.rows.length; r++) {
+              if (stopRequestedRef.current) {
+                stopped = true;
+                setWriteStopped(true);
+                break;
+              }
               const key = `语句 ${i + 1} · 第 ${r + 1} 行`;
               let entry: Sql4CdsLogEntry;
               try {
@@ -454,6 +504,11 @@ export default function Sql4Cds() {
                 : null;
 
             for (const id of ids) {
+              if (stopRequestedRef.current) {
+                stopped = true;
+                setWriteStopped(true);
+                break;
+              }
               const key = `语句 ${i + 1} · ${id}`;
               let entry: Sql4CdsLogEntry;
               try {
@@ -499,6 +554,7 @@ export default function Sql4Cds() {
         connectionName: connectionName(),
         sql,
         statements: statementLogs,
+        stopped,
       });
       downloadTextFile(sql4CdsBatchLogFilename(finishedAt), text);
     } catch (err) {
@@ -683,6 +739,14 @@ export default function Sql4Cds() {
             >
               {writeRunning ? "执行中…" : `执行插入 (${result.rows.length} 行)`}
             </button>
+            {writeRunning && (
+              <button
+                onClick={handleStopWrite}
+                className="ml-2 rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+              >
+                停止
+              </button>
+            )}
             {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
 
@@ -692,7 +756,7 @@ export default function Sql4Cds() {
             </pre>
           )}
 
-          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} />}
+          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} />}
         </>
       )}
 
@@ -723,6 +787,14 @@ export default function Sql4Cds() {
             >
               {writeRunning ? "执行中…" : `执行${result.action === "update" ? "更新" : "删除"}`}
             </button>
+            {writeRunning && (
+              <button
+                onClick={handleStopWrite}
+                className="ml-2 rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+              >
+                停止
+              </button>
+            )}
             {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
 
@@ -732,7 +804,7 @@ export default function Sql4Cds() {
             </pre>
           )}
 
-          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} />}
+          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} />}
         </>
       )}
 
@@ -762,6 +834,14 @@ export default function Sql4Cds() {
             >
               {writeRunning ? "执行中…" : `执行全部 (${result.statements.length} 条语句)`}
             </button>
+            {writeRunning && (
+              <button
+                onClick={handleStopWrite}
+                className="ml-2 rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+              >
+                停止
+              </button>
+            )}
             {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
 
@@ -771,7 +851,7 @@ export default function Sql4Cds() {
             </pre>
           )}
 
-          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} />}
+          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} />}
         </>
       )}
     </div>

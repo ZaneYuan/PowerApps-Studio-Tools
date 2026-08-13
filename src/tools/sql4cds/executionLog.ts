@@ -18,6 +18,9 @@ export interface Sql4CdsLogParams {
   entitySetName: string;
   sql: string;
   entries: Sql4CdsLogEntry[];
+  /** True if the user clicked "停止" partway through — entries only cover what actually ran
+   *  before the stop took effect, not the full planned row count. */
+  stopped?: boolean;
 }
 
 const ACTION_LABELS: Record<WriteAction, string> = { insert: "INSERT", update: "UPDATE", delete: "DELETE" };
@@ -37,6 +40,7 @@ export function buildSql4CdsLogText(params: Sql4CdsLogParams): string {
     `实体: ${params.entityLogicalName} (${params.entitySetName})`,
     `连接: ${params.connectionName}`,
     `SQL: ${params.sql}`,
+    ...(params.stopped ? ["⚠ 用户手动停止执行 — 以下仅为已处理的部分，后续行未执行"] : []),
     `总行数: ${params.entries.length}  成功: ${success}  失败: ${error}`,
     "",
     "明细：",
@@ -75,6 +79,9 @@ export interface Sql4CdsBatchLogParams {
   /** The whole batch's original SQL text (all statements), printed once in the header. */
   sql: string;
   statements: Sql4CdsBatchStatementLog[];
+  /** True if the user clicked "停止" partway through — later statements (or later rows within
+   *  the statement that was running) never executed. */
+  stopped?: boolean;
 }
 
 /** One merged log for a whole batch run instead of one file per statement — same line format as
@@ -91,6 +98,7 @@ export function buildSql4CdsBatchLogText(params: Sql4CdsBatchLogParams): string 
     `连接: ${params.connectionName}`,
     `语句数: ${params.statements.length}`,
     `SQL:\n${params.sql}`,
+    ...(params.stopped ? ["⚠ 用户手动停止执行 — 以下仅为已处理的部分，后续语句/行未执行"] : []),
     `总行数: ${allEntries.length}  成功: ${success}  失败: ${error}`,
     "",
   ];
