@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
+import EntityNameInput from "./EntityNameInput";
+import FieldNameInput from "./FieldNameInput";
 import FilterGroupEditor from "./FilterGroupEditor";
 import LinkEntityEditor from "./LinkEntityEditor";
 import { serializeFetchXml } from "./serialize";
@@ -9,14 +11,6 @@ import { newLinkEntity, newOrderClause, newQuery, type FetchXmlQuery, type LinkE
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
-
-/** Same naive pluralization heuristic used by the other Dataverse tools — a starting guess
- *  only, Dataverse's real plural entity set names can be irregular. */
-function naivePluralize(name: string): string {
-  if (/[sxz]$|[cs]h$/i.test(name)) return `${name}es`;
-  if (/[^aeiou]y$/i.test(name)) return `${name.slice(0, -1)}ies`;
-  return `${name}s`;
-}
 
 export default function FetchXmlBuilder() {
   const { activeConnectionId } = useActiveConnection();
@@ -26,9 +20,8 @@ export default function FetchXmlBuilder() {
   const [running, setRunning] = useState(false);
 
   const { xml, error } = useMemo(() => serializeFetchXml(query), [query]);
-  const entitySetGuess = query.entityName.trim() ? naivePluralize(query.entityName.trim()) : "";
   const entitySetMeta = useEntitySetName(activeConnectionId, query.entityName);
-  const entitySet = entitySetMeta.entitySetName || entitySetGuess;
+  const entitySet = entitySetMeta.entitySetName;
 
   function updateOrder(id: string, patch: Partial<{ attribute: string; descending: boolean }>) {
     setQuery((q) => ({
@@ -91,12 +84,12 @@ export default function FetchXmlBuilder() {
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
         <div>
           <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">实体 (entity name)</label>
-          <input
-            type="text"
+          <EntityNameInput
+            connectionId={activeConnectionId}
             value={query.entityName}
-            onChange={(e) => setQuery((q) => ({ ...q, entityName: e.target.value }))}
+            onChange={(v) => setQuery((q) => ({ ...q, entityName: v }))}
             placeholder="account"
-            className={`${inputCls} w-40`}
+            className="w-40"
           />
         </div>
         <div className="flex-1">
@@ -144,7 +137,12 @@ export default function FetchXmlBuilder() {
         <div className="mb-2 flex items-center justify-between">
           <span className="text-sm font-medium text-gray-700 dark:text-gray-300">过滤条件</span>
         </div>
-        <FilterGroupEditor group={query.filter} onChange={(f) => setQuery((q) => ({ ...q, filter: f }))} />
+        <FilterGroupEditor
+          connectionId={activeConnectionId}
+          entityLogicalName={query.entityName}
+          group={query.filter}
+          onChange={(f) => setQuery((q) => ({ ...q, filter: f }))}
+        />
       </div>
 
       <div>
@@ -157,12 +155,13 @@ export default function FetchXmlBuilder() {
         <div className="space-y-2">
           {query.orders.map((o) => (
             <div key={o.id} className="flex items-center gap-2">
-              <input
-                type="text"
+              <FieldNameInput
+                connectionId={activeConnectionId}
+                entityLogicalName={query.entityName}
                 value={o.attribute}
-                onChange={(e) => updateOrder(o.id, { attribute: e.target.value })}
+                onChange={(v) => updateOrder(o.id, { attribute: v })}
                 placeholder="字段名"
-                className={`${inputCls} w-40`}
+                className="w-40"
               />
               <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300">
                 <input
@@ -189,7 +188,14 @@ export default function FetchXmlBuilder() {
         </div>
         <div className="space-y-3">
           {query.links.map((l) => (
-            <LinkEntityEditor key={l.id} link={l} onChange={(updated) => updateLink(l.id, updated)} onRemove={() => removeLink(l.id)} />
+            <LinkEntityEditor
+              key={l.id}
+              connectionId={activeConnectionId}
+              parentEntityName={query.entityName}
+              link={l}
+              onChange={(updated) => updateLink(l.id, updated)}
+              onRemove={() => removeLink(l.id)}
+            />
           ))}
         </div>
       </div>
@@ -219,38 +225,22 @@ export default function FetchXmlBuilder() {
 
       {xml && !error && (
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-xs text-gray-500 dark:text-gray-400">
-            Entity Set Name（{entitySetMeta.resolved ? "已从元数据确认" : "猜测"}，可编辑覆盖）：
-          </span>
-          <input
-            type="text"
-            value={entitySetMeta.override}
-            onChange={(e) => entitySetMeta.setOverride(e.target.value)}
-            placeholder={entitySetMeta.resolved ?? entitySetGuess}
-            className={`${inputCls} w-40 font-mono`}
-          />
-          {entitySetMeta.loading && <span className="text-xs text-gray-400">读取真实值中…</span>}
-          {entitySetMeta.resolved && !entitySetMeta.loading && (
-            <span className="text-xs text-green-600 dark:text-green-400">✓ 真实值</span>
-          )}
-          {entitySetMeta.error && !entitySetMeta.loading && (
-            <span className="text-xs text-amber-600 dark:text-amber-400" title={entitySetMeta.error}>
-              ⚠ 读取失败，已回退为猜测值
-            </span>
-          )}
-          {activeConnectionId && query.entityName.trim() && (
-            <button onClick={entitySetMeta.refresh} className="text-xs text-blue-600 hover:underline dark:text-blue-400">
-              刷新
-            </button>
-          )}
           <button
             onClick={handleRun}
-            disabled={!activeConnectionId || running}
+            disabled={!activeConnectionId || !entitySet || running}
             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             {running ? "执行中…" : "执行查询"}
           </button>
           {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+          {activeConnectionId && query.entityName.trim() && entitySetMeta.loading && (
+            <span className="text-xs text-gray-400">解析实体元数据中…</span>
+          )}
+          {activeConnectionId && query.entityName.trim() && !entitySetMeta.loading && !entitySet && (
+            <span className="text-xs text-red-500 dark:text-red-400">
+              {entitySetMeta.error ?? "找不到该实体，请检查实体名是否正确。"}
+            </span>
+          )}
         </div>
       )}
 

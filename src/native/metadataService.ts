@@ -33,35 +33,44 @@ export interface ManyToManyInfo {
  *  metadata, shared across every tool that needs to turn a logical entity name into a Web API
  *  collection path. Replaces each tool guessing with its own naive-pluralization heuristic
  *  (SQL4CDS, FetchXML Builder, data-migration all used to duplicate that logic). */
-const cache = new Map<string, EntityMeta>();
-const attributeCache = new Map<string, AttributeMeta[]>();
+// Caches the in-flight Promise, not just the resolved value — several sibling components can ask
+// for the same entity's metadata in the same tick (e.g. multiple FieldNameInput instances scoped
+// to the same entity mounting together), and without this they'd each fire their own redundant
+// network request before the first one resolves. A rejected promise evicts its own cache entry
+// (see the `.catch()` below each `cache.set`) so a transient failure doesn't get cached forever —
+// the next call genuinely retries instead of replaying the same rejection.
+const cache = new Map<string, Promise<EntityMeta>>();
+const attributeCache = new Map<string, Promise<AttributeMeta[]>>();
 
 function cacheKey(connectionId: string, logicalName: string): string {
   return `${connectionId}:${logicalName.trim().toLowerCase()}`;
 }
 
-export async function fetchEntityMeta(connectionId: string, logicalName: string): Promise<EntityMeta> {
+export function fetchEntityMeta(connectionId: string, logicalName: string): Promise<EntityMeta> {
   const trimmed = logicalName.trim();
   const key = cacheKey(connectionId, trimmed);
   const cached = cache.get(key);
   if (cached) return cached;
 
-  const res = await callNative<{ EntitySetName: string; PrimaryIdAttribute: string; PrimaryNameAttribute: string }>(
-    "dataverse.request",
-    {
-      connectionId,
-      method: "GET",
-      path: `EntityDefinitions(LogicalName='${trimmed}')?$select=EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute`,
-    },
-  );
-  const meta: EntityMeta = {
-    logicalName: trimmed,
-    entitySetName: res.EntitySetName,
-    primaryIdAttribute: res.PrimaryIdAttribute,
-    primaryNameAttribute: res.PrimaryNameAttribute,
-  };
-  cache.set(key, meta);
-  return meta;
+  const promise = (async (): Promise<EntityMeta> => {
+    const res = await callNative<{ EntitySetName: string; PrimaryIdAttribute: string; PrimaryNameAttribute: string }>(
+      "dataverse.request",
+      {
+        connectionId,
+        method: "GET",
+        path: `EntityDefinitions(LogicalName='${trimmed}')?$select=EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute`,
+      },
+    );
+    return {
+      logicalName: trimmed,
+      entitySetName: res.EntitySetName,
+      primaryIdAttribute: res.PrimaryIdAttribute,
+      primaryNameAttribute: res.PrimaryNameAttribute,
+    };
+  })();
+  cache.set(key, promise);
+  promise.catch(() => cache.delete(key));
+  return promise;
 }
 
 /** Drop one entity's cached metadata so the next fetch re-reads it from the server — use after
@@ -140,44 +149,50 @@ export async function fetchManyToManyInfo(connectionId: string, entityLogicalNam
 /** All entity logical names for a connection, cached per-connection — used for SQL4CDS's
  *  table-name autocomplete. EntityDefinitions doesn't support $orderby (confirmed against a live
  *  org), so results are sorted client-side instead. */
-const entityListCache = new Map<string, string[]>();
+const entityListCache = new Map<string, Promise<string[]>>();
 
-export async function fetchEntityList(connectionId: string): Promise<string[]> {
+export function fetchEntityList(connectionId: string): Promise<string[]> {
   const cached = entityListCache.get(connectionId);
   if (cached) return cached;
 
-  const res = await callNative<{ value: { LogicalName: string }[] }>("dataverse.request", {
-    connectionId,
-    method: "GET",
-    path: "EntityDefinitions?$select=LogicalName",
-  });
-  const names = res.value.map((e) => e.LogicalName).sort();
-  entityListCache.set(connectionId, names);
-  return names;
+  const promise = (async (): Promise<string[]> => {
+    const res = await callNative<{ value: { LogicalName: string }[] }>("dataverse.request", {
+      connectionId,
+      method: "GET",
+      path: "EntityDefinitions?$select=LogicalName",
+    });
+    return res.value.map((e) => e.LogicalName).sort();
+  })();
+  entityListCache.set(connectionId, promise);
+  promise.catch(() => entityListCache.delete(connectionId));
+  return promise;
 }
 
 /** All of an entity's attributes (excluding "Virtual" — compound/image-type fields that either
  *  can't be $select-ed directly or aren't meaningful on their own), cached the same way as
  *  fetchEntityMeta. Used by Record Explorer to build a full-field $select and to tell custom
  *  lookups apart from system ones. */
-export async function fetchAttributes(connectionId: string, logicalName: string): Promise<AttributeMeta[]> {
+export function fetchAttributes(connectionId: string, logicalName: string): Promise<AttributeMeta[]> {
   const trimmed = logicalName.trim();
   const key = cacheKey(connectionId, trimmed);
   const cached = attributeCache.get(key);
   if (cached) return cached;
 
-  const res = await callNative<{
-    value: { LogicalName: string; AttributeType: string; IsCustomAttribute: boolean }[];
-  }>("dataverse.request", {
-    connectionId,
-    method: "GET",
-    path: `EntityDefinitions(LogicalName='${trimmed}')/Attributes?$select=LogicalName,AttributeType,IsCustomAttribute`,
-  });
-  const attrs = res.value
-    .filter((a) => a.AttributeType !== "Virtual")
-    .map((a) => ({ logicalName: a.LogicalName, attributeType: a.AttributeType, isCustomAttribute: a.IsCustomAttribute }));
-  attributeCache.set(key, attrs);
-  return attrs;
+  const promise = (async (): Promise<AttributeMeta[]> => {
+    const res = await callNative<{
+      value: { LogicalName: string; AttributeType: string; IsCustomAttribute: boolean }[];
+    }>("dataverse.request", {
+      connectionId,
+      method: "GET",
+      path: `EntityDefinitions(LogicalName='${trimmed}')/Attributes?$select=LogicalName,AttributeType,IsCustomAttribute`,
+    });
+    return res.value
+      .filter((a) => a.AttributeType !== "Virtual")
+      .map((a) => ({ logicalName: a.LogicalName, attributeType: a.AttributeType, isCustomAttribute: a.IsCustomAttribute }));
+  })();
+  attributeCache.set(key, promise);
+  promise.catch(() => attributeCache.delete(key));
+  return promise;
 }
 
 export interface OptionSetValue {

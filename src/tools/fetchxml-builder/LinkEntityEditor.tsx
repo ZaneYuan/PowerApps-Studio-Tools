@@ -1,3 +1,5 @@
+import EntityNameInput from "./EntityNameInput";
+import FieldNameInput from "./FieldNameInput";
 import FilterGroupEditor from "./FilterGroupEditor";
 import { newLinkEntity, type LinkEntity, type LinkType } from "./types";
 
@@ -5,11 +7,17 @@ const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 
 export default function LinkEntityEditor({
+  connectionId,
+  parentEntityName,
   link,
   onChange,
   onRemove,
   depth = 0,
 }: {
+  connectionId: string | null;
+  /** The entity this link attaches to — the root query entity for a top-level link, or the
+   *  enclosing link's own entity for a nested one. `to` resolves against this. */
+  parentEntityName: string;
   link: LinkEntity;
   onChange: (l: LinkEntity) => void;
   onRemove: () => void;
@@ -37,26 +45,28 @@ export default function LinkEntityEditor({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <input
-          type="text"
+        <EntityNameInput
+          connectionId={connectionId}
           value={link.name}
-          onChange={(e) => onChange({ ...link, name: e.target.value })}
+          onChange={(v) => onChange({ ...link, name: v })}
           placeholder="关联实体名 (name)"
-          className={`${inputCls} w-40`}
+          className="w-40"
         />
-        <input
-          type="text"
+        <FieldNameInput
+          connectionId={connectionId}
+          entityLogicalName={link.name}
           value={link.from}
-          onChange={(e) => onChange({ ...link, from: e.target.value })}
+          onChange={(v) => onChange({ ...link, from: v })}
           placeholder="from（对方字段）"
-          className={`${inputCls} w-36`}
+          className="w-36"
         />
-        <input
-          type="text"
+        <FieldNameInput
+          connectionId={connectionId}
+          entityLogicalName={parentEntityName}
           value={link.to}
-          onChange={(e) => onChange({ ...link, to: e.target.value })}
+          onChange={(v) => onChange({ ...link, to: v })}
           placeholder="to（本方字段）"
-          className={`${inputCls} w-36`}
+          className="w-36"
         />
         <input
           type="text"
@@ -83,11 +93,18 @@ export default function LinkEntityEditor({
         className={`${inputCls} w-full`}
       />
 
-      <FilterGroupEditor group={link.filter} onChange={(f) => onChange({ ...link, filter: f })} />
+      <FilterGroupEditor
+        connectionId={connectionId}
+        entityLogicalName={link.name}
+        group={link.filter}
+        onChange={(f) => onChange({ ...link, filter: f })}
+      />
 
       {link.links.map((nested) => (
         <LinkEntityEditor
           key={nested.id}
+          connectionId={connectionId}
+          parentEntityName={link.name}
           link={nested}
           onChange={(updated) => updateNestedLink(nested.id, updated)}
           onRemove={() => removeNestedLink(nested.id)}

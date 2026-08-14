@@ -1,3 +1,5 @@
+import ConditionValueInput from "./ConditionValueInput";
+import FieldNameInput from "./FieldNameInput";
 import {
   OPERATOR_LABELS,
   VALUELESS_OPERATORS,
@@ -12,22 +14,27 @@ const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 
 function ConditionRow({
+  connectionId,
+  entityLogicalName,
   condition,
   onChange,
   onRemove,
 }: {
+  connectionId: string | null;
+  entityLogicalName: string;
   condition: Condition;
   onChange: (c: Condition) => void;
   onRemove: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <input
-        type="text"
+      <FieldNameInput
+        connectionId={connectionId}
+        entityLogicalName={entityLogicalName}
         value={condition.attribute}
-        onChange={(e) => onChange({ ...condition, attribute: e.target.value })}
+        onChange={(v) => onChange({ ...condition, attribute: v })}
         placeholder="字段名"
-        className={`${inputCls} w-40`}
+        className="w-40"
       />
       <select
         value={condition.operator}
@@ -41,12 +48,14 @@ function ConditionRow({
         ))}
       </select>
       {!VALUELESS_OPERATORS.includes(condition.operator) && (
-        <input
-          type="text"
+        <ConditionValueInput
+          connectionId={connectionId}
+          entityLogicalName={entityLogicalName}
+          attribute={condition.attribute}
+          operator={condition.operator}
           value={condition.value}
-          onChange={(e) => onChange({ ...condition, value: e.target.value })}
-          placeholder="值"
-          className={`${inputCls} min-w-32 flex-1`}
+          onChange={(v) => onChange({ ...condition, value: v })}
+          className="min-w-32 flex-1"
         />
       )}
       <button onClick={onRemove} className="text-xs text-gray-400 hover:text-red-500">
@@ -57,11 +66,15 @@ function ConditionRow({
 }
 
 export default function FilterGroupEditor({
+  connectionId,
+  entityLogicalName,
   group,
   onChange,
   onRemove,
   depth = 0,
 }: {
+  connectionId: string | null;
+  entityLogicalName: string;
   group: FilterGroup;
   onChange: (g: FilterGroup) => void;
   onRemove?: () => void;
@@ -120,6 +133,8 @@ export default function FilterGroupEditor({
         {group.conditions.map((c) => (
           <ConditionRow
             key={c.id}
+            connectionId={connectionId}
+            entityLogicalName={entityLogicalName}
             condition={c}
             onChange={(updated) => updateCondition(c.id, updated)}
             onRemove={() => removeCondition(c.id)}
@@ -130,6 +145,8 @@ export default function FilterGroupEditor({
       {group.groups.map((g) => (
         <FilterGroupEditor
           key={g.id}
+          connectionId={connectionId}
+          entityLogicalName={entityLogicalName}
           group={g}
           onChange={(updated) => updateNestedGroup(g.id, updated)}
           onRemove={() => removeNestedGroup(g.id)}

@@ -1,12 +1,9 @@
 import { callNative } from "../../native/bridge";
+import { escapeODataString } from "../../native/odata";
 import type { PluginTraceLog, TraceFilters } from "./types";
 
 async function fetchDataverse<T>(connectionId: string, path: string): Promise<T> {
   return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
-}
-
-function escapeODataString(v: string): string {
-  return v.replace(/'/g, "''");
 }
 
 function buildFilterClauses(filters: TraceFilters): string[] {
