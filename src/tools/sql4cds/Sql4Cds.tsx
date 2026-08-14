@@ -5,6 +5,7 @@ import { useEntitySetName } from "../../native/useEntitySetName";
 import { downloadTextFile } from "../../native/download";
 import { fetchAttributes, fetchEntityList, fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
+import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
 import { literalToJsValue, parseSql, type InsertResult, type MutateResult, type SqlNode } from "./translate";
 import {
   deleteRow,
@@ -295,6 +296,30 @@ export default function Sql4Cds() {
     };
   }, [result.kind, activeConnectionId, entitySet, entityLogicalName, mutateFilter]);
 
+  // A batch can span several tables with cross-statement (or, for one INSERT's own multiple
+  // rows, intra-statement) GUID dependencies — auto-resolved the same way matchInfo is above, so
+  // the user sees the actual execution order (and any unresolvable circular dependency) before
+  // clicking "执行全部", not after.
+  const [orderedBatch, setOrderedBatch] = useState<DependencyOrderResult | null>(null);
+  const [orderLoading, setOrderLoading] = useState(false);
+
+  useEffect(() => {
+    setOrderedBatch(null);
+    if (result.kind !== "batch" || !activeConnectionId) return;
+    let cancelled = false;
+    setOrderLoading(true);
+    orderStatementsByDependency(activeConnectionId, result.statements)
+      .then((r) => {
+        if (!cancelled) setOrderedBatch(r);
+      })
+      .finally(() => {
+        if (!cancelled) setOrderLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [result, activeConnectionId]);
+
   function connectionName(): string {
     return connections.find((c) => c.id === activeConnectionId)?.name ?? activeConnectionId ?? "";
   }
@@ -471,10 +496,18 @@ export default function Sql4Cds() {
   // statements land in one merged log instead of one download per statement.
   async function handleBatch() {
     if (!activeConnectionId || result.kind !== "batch") return;
-    const statements = result.statements;
+    // orderedBatch is populated by the useEffect above as soon as the batch is parsed — by the
+    // time this button is clickable it should always be present and clean (the button itself is
+    // disabled otherwise); the checks here are a second guard against a stale click.
+    if (!orderedBatch || orderedBatch.cycleError || orderedBatch.ordered.some((os) => os.rowCycleError)) return;
+    const statements = orderedBatch.ordered;
 
-    const preview = statements.map((s, i) => `${i + 1}. ${describeStatement(s)}`).join("\n");
-    if (!confirm(`即将依次执行 ${statements.length} 条语句：\n${preview}\n\n具体影响行数将在执行过程中依次查询/写入。确定吗？`)) return;
+    // Numbered by originalIndex (the statement's position in the pasted SQL), not execution
+    // order — so "语句 N" in the confirm dialog, the log, and any error always matches what the
+    // user actually typed, even when dependency ordering moved it.
+    const preview = statements.map((os) => `${os.originalIndex + 1}. ${describeStatement(os.statement)}`).join("\n");
+    const reorderNote = orderedBatch.reordered ? "\n\n（已按跨表/跨行依赖关系自动调整了执行顺序，上面列出的就是实际执行顺序。）" : "";
+    if (!confirm(`即将依次执行 ${statements.length} 条语句：\n${preview}${reorderNote}\n\n具体影响行数将在执行过程中依次查询/写入。确定吗？`)) return;
 
     setWriteRunning(true);
     setWriteResults([]);
@@ -492,7 +525,9 @@ export default function Sql4Cds() {
           setWriteStopped(true);
           break;
         }
-        const stmt = statements[i];
+        const os = statements[i];
+        const stmt = os.statement;
+        const stmtLabel = os.originalIndex + 1;
         const entries: Sql4CdsLogEntry[] = [];
         let entitySetName = stmt.entitySetGuess;
 
@@ -507,11 +542,21 @@ export default function Sql4Cds() {
             const envUrl = manyToMany ? environmentUrl() : undefined;
             if (manyToMany && !envUrl) throw new Error("找不到当前连接的环境 URL。");
 
+            // os.rowOrder is only set when this INSERT's own rows reference each other's
+            // not-yet-created id (e.g. product.parentproductid pointing at a sibling row in the
+            // same multi-row VALUES) — runConcurrent(..., 1, ...) is already strictly sequential
+            // (single runner, awaits each row before claiming the next), so forcing concurrency
+            // to 1 here is enough to make that safe without a separate sequential code path.
+            // Every other statement (the overwhelming majority) runs exactly as before.
+            const orderedRows = os.rowOrder ? os.rowOrder.map((idx) => stmt.rows[idx]) : stmt.rows;
+            const rowConcurrency = os.rowOrder ? 1 : writeConcurrency;
+
             await runConcurrent(
-              stmt.rows,
-              writeConcurrency,
+              orderedRows,
+              rowConcurrency,
               async (row, r) => {
-                const key = `语句 ${i + 1} · 第 ${r + 1} 行`;
+                const rowLabel = os.rowOrder ? os.rowOrder[r] + 1 : r + 1;
+                const key = `语句 ${stmtLabel} · 第 ${rowLabel} 行`;
                 let entry: Sql4CdsLogEntry;
                 try {
                   const columnValues: Record<string, unknown> = {};
@@ -554,7 +599,7 @@ export default function Sql4Cds() {
               ids,
               writeConcurrency,
               async (id) => {
-                const key = `语句 ${i + 1} · ${id}`;
+                const key = `语句 ${stmtLabel} · ${id}`;
                 let entry: Sql4CdsLogEntry;
                 try {
                   if (stmt.action === "update") {
@@ -580,7 +625,7 @@ export default function Sql4Cds() {
           // A failure resolving the entity/matching-ids for this whole statement (not a single
           // row) — record one entry so it's still visible in the log instead of silently skipped.
           const entry: Sql4CdsLogEntry = {
-            key: `语句 ${i + 1}`,
+            key: `语句 ${stmtLabel}`,
             state: "error",
             error: err instanceof Error ? err.message : String(err),
           };
@@ -589,7 +634,7 @@ export default function Sql4Cds() {
         }
 
         statementLogs.push({
-          index: i + 1,
+          index: stmtLabel,
           action: stmt.kind === "insert" ? "insert" : stmt.action,
           entityLogicalName: stmt.entityLogicalName,
           entitySetName,
@@ -862,53 +907,70 @@ export default function Sql4Cds() {
         </>
       )}
 
-      {result.kind === "batch" && (
-        <>
-          <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-            <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-              批量执行 {result.statements.length} 条语句
+      {result.kind === "batch" && (() => {
+        const orderedList: { statement: InsertResult | MutateResult; originalIndex: number; rowOrder?: number[]; rowCycleError?: string }[] =
+          orderedBatch?.ordered ?? result.statements.map((s, i) => ({ statement: s, originalIndex: i }));
+        const blockingCycleError = orderedBatch?.cycleError ?? orderedList.find((os) => os.rowCycleError)?.rowCycleError ?? null;
+        return (
+          <>
+            <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
+              <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+                批量执行 {result.statements.length} 条语句
+                {orderLoading && " — 正在分析跨表依赖关系…"}
+                {!orderLoading && orderedBatch?.reordered && " — 已按依赖关系自动排序（下表为实际执行顺序）"}
+              </div>
+              <table className="w-full text-left text-sm">
+                <tbody>
+                  {orderedList.map((os, i) => (
+                    <tr key={os.originalIndex} className="border-t border-gray-100 dark:border-gray-800">
+                      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-gray-400">
+                        {i + 1}
+                        {os.originalIndex !== i && <span className="ml-1 text-amber-500">(原第 {os.originalIndex + 1} 条)</span>}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{describeStatement(os.statement)}</td>
+                      {os.rowCycleError && <td className="px-3 py-1.5 text-xs text-red-600 dark:text-red-400">⚠ {os.rowCycleError}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <table className="w-full text-left text-sm">
-              <tbody>
-                {result.statements.map((s, i) => (
-                  <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-gray-400">{i + 1}</td>
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{describeStatement(s)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={handleBatch}
-              disabled={!activeConnectionId || writeRunning}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {writeRunning ? "执行中…" : `执行全部 (${result.statements.length} 条语句)`}
-            </button>
-            {writeRunning && (
-              <button
-                onClick={handleStopWrite}
-                className="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
-              >
-                停止
-              </button>
+            {blockingCycleError && (
+              <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
+                {blockingCycleError}
+              </div>
             )}
-            <ConcurrencyInput value={writeConcurrency} onChange={setWriteConcurrency} disabled={writeRunning} />
-            {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
-          </div>
 
-          {writeError && (
-            <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-              {writeError}
-            </pre>
-          )}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleBatch}
+                disabled={!activeConnectionId || writeRunning || orderLoading || !!blockingCycleError}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {writeRunning ? "执行中…" : `执行全部 (${result.statements.length} 条语句)`}
+              </button>
+              {writeRunning && (
+                <button
+                  onClick={handleStopWrite}
+                  className="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                >
+                  停止
+                </button>
+              )}
+              <ConcurrencyInput value={writeConcurrency} onChange={setWriteConcurrency} disabled={writeRunning} />
+              {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+            </div>
 
-          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} />}
-        </>
-      )}
+            {writeError && (
+              <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
+                {writeError}
+              </pre>
+            )}
+
+            {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} />}
+          </>
+        );
+      })()}
     </div>
   );
 }
