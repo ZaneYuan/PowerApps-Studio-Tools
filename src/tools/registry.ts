@@ -98,14 +98,6 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./record-explorer/RecordExplorer")),
   },
   {
-    id: "guid-formatter",
-    name: "GUID 格式转换",
-    description: "在裸 GUID、大括号 GUID、Web API key 等格式之间快速转换。",
-    category: "实用工具",
-    icon: "🆔",
-    Component: lazy(() => import("./sample-tool/GuidFormatter")),
-  },
-  {
     id: "fetchxml-to-odata",
     name: "FetchXML → OData",
     description: "把 FetchXML 转换为 $select/$filter/$orderby 等 OData 查询片段。",

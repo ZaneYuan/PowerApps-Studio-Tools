@@ -63,10 +63,7 @@ desktop/
 - 🧭 **BPF 流程查看器**：只读查看 Business Process Flow 的阶段 / 步骤 / 条件分支 / 触发流程，模拟 Power Apps 原生 BPF 设计器视图。
 - 🧬 **Solution 深度对比**：上传两个 `solution.zip`，对比实体/属性/Web 资源/流程等组件的差异。
 
-**实用工具**
-- 🆔 **GUID 格式转换**：在裸 GUID、大括号 GUID、Web API key 等格式之间快速转换。
-
-所有需要真实连接 Dataverse 的工具都仅在桌面版（WebView2 壳）里可用；纯前端计算类工具（GUID 转换、FetchXML → OData 等）在普通浏览器里跑 `npm run dev` 也能用。
+所有需要真实连接 Dataverse 的工具都仅在桌面版（WebView2 壳）里可用；纯前端计算类工具（FetchXML → OData 等）在普通浏览器里跑 `npm run dev` 也能用。
 
 ## 新增一个工具
 
