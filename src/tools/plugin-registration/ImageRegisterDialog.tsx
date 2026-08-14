@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AttributePicker from "./AttributePicker";
+import AttributePicker from "../../shared/AttributePicker";
 import { fetchEntityAttributes, fetchImageDetail, fetchStepDetail, registerImage, updateImage } from "./dataverseOps";
 import { IMAGE_TYPE_LABELS } from "./types";
 

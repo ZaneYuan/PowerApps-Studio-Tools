@@ -1,18 +1,14 @@
 import type { ManyToManyInfo } from "../../native/metadataService";
+import type { GridColumn, GridRow } from "../../shared/CheckableGrid";
 
-export interface ImportColumn {
-  logicalName: string;
+export interface ImportColumn extends GridColumn {
   attributeType: string;
-  checked: boolean;
 }
 
-export interface ImportRow {
-  /** This row's own primary-key value — a real existing GUID for a query-sourced row, or the
-   *  literal from an uploaded SQL file's INSERT for a sql-insert-sourced row. */
-  id: string;
-  values: Record<string, unknown>;
-  checked: boolean;
-}
+/** No extra fields needed beyond the shared grid's own row shape — `id` doubles as this row's
+ *  own primary-key value (a real existing GUID for a query-sourced row, or the literal from an
+ *  uploaded SQL file's INSERT for a sql-insert-sourced row). */
+export type ImportRow = GridRow;
 
 export type ImportTableSource = "query" | "sql-insert";
 

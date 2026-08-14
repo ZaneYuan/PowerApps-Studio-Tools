@@ -47,7 +47,7 @@ export function planDeferredWrite(tables: ImportTable[]): DeferredWritePlan {
   const rows: DeferredRowPlan[] = [];
   let deferredRowCount = 0;
   for (const table of writableTables) {
-    const checkedColumns = new Set(table.columns.filter((c) => c.checked).map((c) => c.logicalName.toLowerCase()));
+    const checkedColumns = new Set(table.columns.filter((c) => c.checked).map((c) => c.key.toLowerCase()));
     for (const row of table.rows) {
       if (!row.checked) continue;
       const deferredColumns: string[] = [];
@@ -68,7 +68,7 @@ export function planDeferredWrite(tables: ImportTable[]): DeferredWritePlan {
 /** The checked-column values to write for one row, minus whichever ones this plan deferred. */
 export function phase1Body(plan: DeferredRowPlan): Record<string, unknown> {
   const deferred = new Set(plan.deferredColumns.map((c) => c.toLowerCase()));
-  const checkedColumns = new Set(plan.table.columns.filter((c) => c.checked).map((c) => c.logicalName.toLowerCase()));
+  const checkedColumns = new Set(plan.table.columns.filter((c) => c.checked).map((c) => c.key.toLowerCase()));
   const body: Record<string, unknown> = {};
   for (const [col, value] of Object.entries(plan.row.values)) {
     const lower = col.toLowerCase();

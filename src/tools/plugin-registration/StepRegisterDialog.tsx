@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import AttributePicker from "./AttributePicker";
+import AttributePicker from "../../shared/AttributePicker";
 import {
   fetchEntityAttributes,
   fetchMessageFilters,

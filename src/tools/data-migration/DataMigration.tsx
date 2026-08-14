@@ -6,8 +6,8 @@ import { fetchAttributes, fetchEntityMeta, fetchManyToManyInfo } from "../../nat
 import { runConcurrent } from "../sql4cds/concurrency";
 import { literalToJsValue, parseSql, type SelectComplexResult, type SelectSimpleResult } from "../sql4cds/translate";
 import { insertIntersectRow, resolveIntersectRowValues, updateRow } from "../sql4cds/writeOps";
-import SqlEditor from "../sql4cds/SqlEditor";
-import ImportTableView from "./ImportTableView";
+import SqlEditor from "../../shared/SqlEditor";
+import CheckableGrid from "../../shared/CheckableGrid";
 import { planDeferredWrite, phase1Body, phase2Body } from "./deferredWrite";
 import { buildDataMigrationLogText, dataMigrationLogFilename, type DataMigrationLogEntry, type DataMigrationTableLog } from "./importLog";
 import type { ImportColumn, ImportRow, ImportTable } from "./types";
@@ -66,7 +66,7 @@ async function buildColumns(
 ): Promise<ImportColumn[]> {
   const attrs = await fetchAttributes(connectionId, entityLogicalName);
   const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
-  return columnNames.map((name) => ({ logicalName: name, attributeType: typeByName.get(name.toLowerCase()) ?? "String", checked: true }));
+  return columnNames.map((name) => ({ key: name, attributeType: typeByName.get(name.toLowerCase()) ?? "String", checked: true }));
 }
 
 export default function DataMigration() {
@@ -448,7 +448,20 @@ export default function DataMigration() {
             ))}
           </div>
 
-          {activeTable && <ImportTableView table={activeTable} onChange={(next) => updateTable(activeTable.tabId, next)} />}
+          {activeTable && (
+            <CheckableGrid
+              columns={activeTable.columns}
+              rows={activeTable.rows}
+              columnsLabel="要迁移的列（勾选）"
+              renderColumnBadge={(c) =>
+                (c as ImportColumn).attributeType === "Lookup" && (
+                  <span className="text-purple-500 dark:text-purple-400">(Lookup)</span>
+                )
+              }
+              onColumnsChange={(columns) => updateTable(activeTable.tabId, { ...activeTable, columns: columns as ImportColumn[] })}
+              onRowsChange={(rows) => updateTable(activeTable.tabId, { ...activeTable, rows })}
+            />
+          )}
 
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
             <span className="text-xs text-gray-500 dark:text-gray-400">

@@ -25,7 +25,7 @@ import {
   type Sql4CdsLogEntry,
   type WriteAction,
 } from "./executionLog";
-import SqlEditor from "./SqlEditor";
+import SqlEditor from "../../shared/SqlEditor";
 
 const SAMPLE = `SELECT TOP 50 name, revenue, statecode
 FROM account
