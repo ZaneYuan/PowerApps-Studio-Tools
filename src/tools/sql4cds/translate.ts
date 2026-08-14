@@ -188,10 +188,21 @@ function isStringLiteral(node: SqlNode): boolean {
   return node.type === "single_quote_string" || node.type === "string" || node.type === "var_string";
 }
 
+/** node-sql-parser's `.value` for a string literal node preserves the source text verbatim,
+ *  including a doubled `''` a user wrote to escape a literal quote — confirmed by parsing
+ *  `N'O''Brien'` directly: `.value` comes back as `"O''Brien"`, not the unescaped `"O'Brien"`.
+ *  Every reader of a string literal's `.value` must undo that exactly once via this helper, or an
+ *  apostrophe in the data corrupts on the way through — either the stray extra quote survives
+ *  into the written value (literalToJsValue/formatFxLiteral), or — in formatLiteral's case, which
+ *  re-escapes for OData `$filter` text via quoteString — it doubles again into `''''`. */
+function stringLiteralValue(node: SqlNode): string {
+  return String(node.value).replace(/''/g, "'");
+}
+
 function formatLiteral(node: SqlNode): string {
   if (node.type === "number") return String(node.value);
   if (isStringLiteral(node)) {
-    const raw = String(node.value);
+    const raw = stringLiteralValue(node);
     return GUID_RE.test(raw) ? raw : quoteString(raw);
   }
   if (node.type === "bool") return node.value ? "true" : "false";
@@ -202,7 +213,7 @@ function formatLiteral(node: SqlNode): string {
  *  XML attribute values need no SQL-style quoting, just XML-escaping (done by the serializer). */
 function formatFxLiteral(node: SqlNode): string {
   if (node.type === "number") return String(node.value);
-  if (isStringLiteral(node)) return String(node.value);
+  if (isStringLiteral(node)) return stringLiteralValue(node);
   if (node.type === "bool") return node.value ? "1" : "0";
   throw new Error(`不支持的字面量类型: ${node.type}`);
 }
@@ -222,7 +233,7 @@ export function literalToJsValue(node: SqlNode): string | number | boolean | nul
   // Edm.Int32 fields (Integer/Picklist) tolerate it — which is why only Money/Decimal columns
   // ever surfaced this. `Number(...)` makes the conversion real instead of asserted.
   if (node.type === "number") return Number(node.value);
-  if (isStringLiteral(node)) return node.value as string;
+  if (isStringLiteral(node)) return stringLiteralValue(node);
   if (node.type === "bool") return node.value as boolean;
   if (node.type === "null") return null;
   throw new Error(`不支持的字面量类型: ${node.type}`);
