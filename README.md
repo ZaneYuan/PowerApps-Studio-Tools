@@ -57,7 +57,7 @@ desktop/
 - 📜 **Plugin Trace Viewer**：查看/过滤 Plugin Trace Log，含异常详情、耗时、org 级别 trace 设置开关。
 
 **数据 & Solution**
-- 🚚 **数据迁移**：粘贴多表 SQL（INSERT/UPDATE/DELETE），自动识别跨表/跨行 GUID 依赖并排序，导入到任意已保存的连接。
+- 🚚 **数据迁移**：多表 Tab + 行/列勾选表格，可来自多条 SELECT 查询或上传 .sql 文件（INSERT），自动识别批次内的 GUID 依赖并分两阶段回填，导入到任意已保存的连接。
 - 🎀 **Ribbon Workbench**：编辑表的 RibbonDiffXml（原始 XML）：导出 solution → 改 → 重新导入 → 发布（v1 只支持单表）。
 - 🧭 **BPF 流程查看器**：只读查看 Business Process Flow 的阶段 / 步骤 / 条件分支 / 触发流程，模拟 Power Apps 原生 BPF 设计器视图。
 - 🧬 **Solution 深度对比**：上传两个 `solution.zip`，对比实体/属性/Web 资源/流程等组件的差异。
