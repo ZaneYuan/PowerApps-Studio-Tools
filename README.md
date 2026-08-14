@@ -38,7 +38,7 @@ desktop/
 
 ## 已内置的工具
 
-按侧边栏分组列出（截至本次更新，共 14 个）：
+按侧边栏分组列出（截至本次更新，共 13 个）：
 
 **连接管理**
 - 🔌 **我的连接**：管理 Dataverse 连接（交互式登录 / Client Secret / 证书 / 连接字符串导入），登录后可用 WhoAmI 验证连通性。
@@ -50,7 +50,6 @@ desktop/
 **查询工具**
 - 🗄️ **SQL4CDS**：SQL SELECT / INSERT / UPDATE / DELETE，翻译成 Dataverse Web API / FetchXML 并真实执行，支持 JOIN 和 GROUP BY 聚合。
 - 🧩 **FetchXML Builder**：可视化拼 FetchXML（含嵌套过滤分组、嵌套 link-entity），生成后真实执行。
-- 🔍 **OData $filter 构建器**：可视化拼接 OData `$filter` 表达式，自动处理各类型字面量格式。
 - 🔄 **FetchXML → OData**：把 FetchXML 转换为 `$select`/`$filter`/`$orderby` 等 OData 查询片段。
 
 **插件开发**
@@ -66,21 +65,21 @@ desktop/
 **实用工具**
 - 🆔 **GUID 格式转换**：在裸 GUID、大括号 GUID、Web API key 等格式之间快速转换。
 
-所有需要真实连接 Dataverse 的工具都仅在桌面版（WebView2 壳）里可用；纯前端计算类工具（GUID 转换、`$filter` 构建器等）在普通浏览器里跑 `npm run dev` 也能用。
+所有需要真实连接 Dataverse 的工具都仅在桌面版（WebView2 壳）里可用；纯前端计算类工具（GUID 转换、FetchXML → OData 等）在普通浏览器里跑 `npm run dev` 也能用。
 
 ## 新增一个工具
 
-1. 在 `src/tools/` 下新建文件夹，例如 `src/tools/odata-filter-builder/`，写一个默认导出的 React 组件。
+1. 在 `src/tools/` 下新建文件夹，例如 `src/tools/my-new-tool/`，写一个默认导出的 React 组件。
 2. 打开 `src/tools/registry.ts`，追加一条：
 
 ```ts
 {
-  id: "odata-filter-builder",
-  name: "OData $filter 构建器",
-  description: "可视化拼接 OData $filter 表达式。",
+  id: "my-new-tool",
+  name: "工具名称",
+  description: "一句话描述这个工具是做什么的。",
   category: "查询工具",
-  icon: "🔍",
-  Component: lazy(() => import("./odata-filter-builder/OdataFilterBuilder")),
+  icon: "🔧",
+  Component: lazy(() => import("./my-new-tool/MyNewTool")),
 }
 ```
 
