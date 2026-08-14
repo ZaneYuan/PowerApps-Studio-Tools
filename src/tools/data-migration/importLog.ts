@@ -1,44 +1,60 @@
-export interface ImportLogEntry {
-  id: string;
-  state: "success" | "error";
-  error?: string;
-}
+import type { Sql4CdsBatchStatementLog, WriteAction } from "../sql4cds/executionLog";
 
-export interface ImportLogParams {
+const ACTION_LABELS: Record<WriteAction, string> = { insert: "INSERT", update: "UPDATE", delete: "DELETE" };
+
+export interface DataMigrationLogParams {
   startedAt: Date;
   finishedAt: Date;
-  sourceConnectionName: string;
   targetConnectionName: string;
-  entityLogicalName: string;
-  entitySetName: string;
-  columns: string[];
-  entries: ImportLogEntry[];
+  /** The whole pasted SQL, printed once in the header. */
+  sql: string;
+  statements: Sql4CdsBatchStatementLog[];
+  /** True if the user clicked "停止" partway through — later statements (or later rows within
+   *  the statement that was running) never executed. */
+  stopped?: boolean;
 }
 
-/** Plain-text execution log for one import run — every run produces one, downloadable via
- *  native/download.ts. Kept as a pure function (no I/O) so it's easy to unit-test the format
- *  later if this project ever adds a test runner. */
-export function buildImportLogText(params: ImportLogParams): string {
-  const success = params.entries.filter((e) => e.state === "success").length;
-  const error = params.entries.filter((e) => e.state === "error").length;
+/** Plain-text execution log for one "从 SQL 导入" run — same per-statement/per-entry format as
+ *  SQL4CDS's batch log (src/tools/sql4cds/executionLog.ts's buildSql4CdsBatchLogText), since this
+ *  tool reuses that same write engine, but with this tool's own header wording/filename prefix
+ *  so a downloaded log doesn't say "SQL4CDS" when the user ran it from the Data Migration tool. */
+export function buildDataMigrationLogText(params: DataMigrationLogParams): string {
+  const allEntries = params.statements.flatMap((s) => s.entries);
+  const success = allEntries.filter((e) => e.state === "success").length;
+  const error = allEntries.length - success;
 
   const lines = [
-    "Power Apps Studio & Tools — 数据迁移执行日志",
+    "Power Apps Studio & Tools — 数据迁移（SQL 导入）执行日志",
     `开始时间: ${params.startedAt.toISOString()}`,
     `结束时间: ${params.finishedAt.toISOString()}`,
-    `实体: ${params.entityLogicalName} (${params.entitySetName})`,
-    `源连接: ${params.sourceConnectionName}`,
     `目标连接: ${params.targetConnectionName}`,
-    `迁移列: ${params.columns.join(", ")}`,
-    `总行数: ${params.entries.length}  成功: ${success}  失败: ${error}`,
+    `语句数: ${params.statements.length}`,
+    `SQL:\n${params.sql}`,
+    ...(params.stopped ? ["⚠ 用户手动停止执行 — 以下仅为已处理的部分，后续语句/行未执行"] : []),
+    `总行数: ${allEntries.length}  成功: ${success}  失败: ${error}`,
     "",
-    "明细：",
-    ...params.entries.map((e) => (e.state === "success" ? `[成功] ${e.id}` : `[失败] ${e.id} — ${e.error ?? ""}`)),
   ];
+
+  for (const s of params.statements) {
+    const sSuccess = s.entries.filter((e) => e.state === "success").length;
+    const sError = s.entries.length - sSuccess;
+    lines.push(
+      `── 第 ${s.index} 条语句 ──`,
+      `操作: ${ACTION_LABELS[s.action]} ${s.entityLogicalName} (${s.entitySetName})`,
+      s.summary,
+      `本条行数: ${s.entries.length}  成功: ${sSuccess}  失败: ${sError}`,
+      "明细：",
+      ...s.entries.map((e) =>
+        e.state === "success" ? `[成功] ${e.key}${e.detail ? ` — ${e.detail}` : ""}` : `[失败] ${e.key} — ${e.error ?? ""}`,
+      ),
+      "",
+    );
+  }
+
   return lines.join("\n");
 }
 
-export function importLogFilename(entityLogicalName: string, finishedAt: Date): string {
+export function dataMigrationLogFilename(finishedAt: Date): string {
   const ts = finishedAt.toISOString().replace(/[:.]/g, "-");
-  return `data-migration-${entityLogicalName}-${ts}.txt`;
+  return `data-migration-sql-import-${ts}.txt`;
 }

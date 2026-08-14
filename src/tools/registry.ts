@@ -60,7 +60,7 @@ export const tools: ToolDefinition[] = [
   {
     id: "data-migration",
     name: "数据迁移",
-    description: "查询一张表的数据，勾选行/列（含主键 ID），导入到任意已保存的连接。仅桌面版可用。",
+    description: "粘贴多表 INSERT/UPDATE/DELETE SQL，自动识别跨表依赖并排序，导入到任意已保存的连接。仅桌面版可用。",
     category: "数据 & Solution",
     icon: "🚚",
     Component: lazy(() => import("./data-migration/DataMigration")),
