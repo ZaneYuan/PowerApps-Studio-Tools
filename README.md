@@ -58,6 +58,7 @@ desktop/
 
 **数据 & Solution**
 - 🚚 **数据迁移**：多表 Tab + 行/列勾选表格，可来自多条 SELECT 查询或上传 .sql 文件（INSERT），自动识别批次内的 GUID 依赖并分两阶段回填，导入到任意已保存的连接。
+- 📋 **数据复制**：单表 SELECT 查出数据后，结果表格可直接编辑（文本 / 选项集字段），行 / 列勾选（默认全选），把（编辑后的）数据当新记录批量创建，主键 ID 由 Dataverse 自动生成。
 - 🎀 **Ribbon Workbench**：编辑表的 RibbonDiffXml（原始 XML）：导出 solution → 改 → 重新导入 → 发布（v1 只支持单表）。
 - 🧭 **BPF 流程查看器**：只读查看 Business Process Flow 的阶段 / 步骤 / 条件分支 / 触发流程，模拟 Power Apps 原生 BPF 设计器视图。
 - 🧬 **Solution 深度对比**：上传两个 `solution.zip`，对比实体/属性/Web 资源/流程等组件的差异。

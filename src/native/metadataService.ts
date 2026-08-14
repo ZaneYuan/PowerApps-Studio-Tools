@@ -75,6 +75,7 @@ export function clearEntityMetaCache(): void {
   attributeCache.clear();
   entityListCache.clear();
   manyToManyCache.clear();
+  optionSetCache.clear();
 }
 
 /** Cached like the rest of this module (`null` is a valid cached value — "confirmed not an
@@ -177,4 +178,45 @@ export async function fetchAttributes(connectionId: string, logicalName: string)
     .map((a) => ({ logicalName: a.LogicalName, attributeType: a.AttributeType, isCustomAttribute: a.IsCustomAttribute }));
   attributeCache.set(key, attrs);
   return attrs;
+}
+
+export interface OptionSetValue {
+  value: number;
+  label: string;
+}
+
+/** Cached like the rest of this module, keyed by connection+entity+attribute. */
+const optionSetCache = new Map<string, OptionSetValue[]>();
+
+/** A Picklist attribute's option list (local or global — this endpoint returns either the same
+ *  way, so no need to tell them apart up front). Confirmed against a live org:
+ *  `EntityDefinitions(LogicalName='account')/Attributes(LogicalName='industrycode')/
+ *  Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)`
+ *  returns `{ OptionSet: { Options: [{ Value, Label: { UserLocalizedLabel: { Label } } }] } }` —
+ *  only State/Status attributes use a different metadata cast (StateAttributeMetadata/
+ *  StatusAttributeMetadata), not covered here since those aren't in scope for the tools that
+ *  use this (v1 editable-cell support is Picklist only, not State/Status). */
+export async function fetchOptionSetValues(
+  connectionId: string,
+  entityLogicalName: string,
+  attributeLogicalName: string,
+): Promise<OptionSetValue[]> {
+  const trimmedEntity = entityLogicalName.trim();
+  const trimmedAttribute = attributeLogicalName.trim();
+  const key = `${cacheKey(connectionId, trimmedEntity)}:${trimmedAttribute.toLowerCase()}`;
+  const cached = optionSetCache.get(key);
+  if (cached) return cached;
+
+  const res = await callNative<{
+    OptionSet: { Options: { Value: number; Label: { UserLocalizedLabel: { Label: string } | null } }[] };
+  }>("dataverse.request", {
+    connectionId,
+    method: "GET",
+    path:
+      `EntityDefinitions(LogicalName='${trimmedEntity}')/Attributes(LogicalName='${trimmedAttribute}')` +
+      "/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)",
+  });
+  const options = res.OptionSet.Options.map((o) => ({ value: o.Value, label: o.Label.UserLocalizedLabel?.Label ?? String(o.Value) }));
+  optionSetCache.set(key, options);
+  return options;
 }

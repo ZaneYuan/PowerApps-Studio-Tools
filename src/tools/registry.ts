@@ -66,6 +66,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./data-migration/DataMigration")),
   },
   {
+    id: "data-copy",
+    name: "数据复制",
+    description: "单表 SELECT 查询，结果表格可编辑（文本/选项集）后批量创建为新记录，行/列勾选，默认全选。仅桌面版可用。",
+    category: "数据 & Solution",
+    icon: "📋",
+    Component: lazy(() => import("./data-copy/DataCopy")),
+  },
+  {
     id: "ribbon-workbench",
     name: "Ribbon Workbench",
     description: "编辑表的 RibbonDiffXml（原始 XML）：导出 solution → 改 → 重新导入 → 发布。仅桌面版可用，v1 只支持单表。",
