@@ -1,52 +1,57 @@
-import type { Sql4CdsBatchStatementLog, WriteAction } from "../sql4cds/executionLog";
+export interface DataMigrationLogEntry {
+  /** This row's own primary-key value — or, for a phase-2 backfill entry, the primary-key value
+   *  plus a "(回填 col1, col2)" suffix identifying which deferred fields that entry covers, so a
+   *  row with deferred columns shows up as two distinct lines (phase-1 create, phase-2 backfill)
+   *  instead of one entry silently standing in for both. */
+  key: string;
+  state: "success" | "error";
+  error?: string;
+}
 
-const ACTION_LABELS: Record<WriteAction, string> = { insert: "INSERT", update: "UPDATE", delete: "DELETE" };
+export interface DataMigrationTableLog {
+  entityLogicalName: string;
+  entitySetName: string;
+  source: "query" | "sql-insert";
+  entries: DataMigrationLogEntry[];
+}
 
 export interface DataMigrationLogParams {
   startedAt: Date;
   finishedAt: Date;
   targetConnectionName: string;
-  /** The whole pasted SQL, printed once in the header. */
-  sql: string;
-  statements: Sql4CdsBatchStatementLog[];
-  /** True if the user clicked "停止" partway through — later statements (or later rows within
-   *  the statement that was running) never executed. */
+  tables: DataMigrationTableLog[];
+  /** True if the user clicked "停止" partway through. */
   stopped?: boolean;
 }
 
-/** Plain-text execution log for one "从 SQL 导入" run — same per-statement/per-entry format as
- *  SQL4CDS's batch log (src/tools/sql4cds/executionLog.ts's buildSql4CdsBatchLogText), since this
- *  tool reuses that same write engine, but with this tool's own header wording/filename prefix
- *  so a downloaded log doesn't say "SQL4CDS" when the user ran it from the Data Migration tool. */
+const SOURCE_LABELS: Record<DataMigrationTableLog["source"], string> = { query: "查询", "sql-insert": "SQL 导入" };
+
+/** Plain-text execution log for one "数据迁移" run — one section per table, one line per row,
+ *  same download-a-txt-after-every-run convention every write tool in this app already follows. */
 export function buildDataMigrationLogText(params: DataMigrationLogParams): string {
-  const allEntries = params.statements.flatMap((s) => s.entries);
+  const allEntries = params.tables.flatMap((t) => t.entries);
   const success = allEntries.filter((e) => e.state === "success").length;
   const error = allEntries.length - success;
 
   const lines = [
-    "Power Apps Studio & Tools — 数据迁移（SQL 导入）执行日志",
+    "Power Apps Studio & Tools — 数据迁移执行日志",
     `开始时间: ${params.startedAt.toISOString()}`,
     `结束时间: ${params.finishedAt.toISOString()}`,
     `目标连接: ${params.targetConnectionName}`,
-    `语句数: ${params.statements.length}`,
-    `SQL:\n${params.sql}`,
-    ...(params.stopped ? ["⚠ 用户手动停止执行 — 以下仅为已处理的部分，后续语句/行未执行"] : []),
+    `表数: ${params.tables.length}`,
+    ...(params.stopped ? ["⚠ 用户手动停止执行 — 以下仅为已处理的部分，后续表/行未执行"] : []),
     `总行数: ${allEntries.length}  成功: ${success}  失败: ${error}`,
     "",
   ];
 
-  for (const s of params.statements) {
-    const sSuccess = s.entries.filter((e) => e.state === "success").length;
-    const sError = s.entries.length - sSuccess;
+  for (const t of params.tables) {
+    const tSuccess = t.entries.filter((e) => e.state === "success").length;
+    const tError = t.entries.length - tSuccess;
     lines.push(
-      `── 第 ${s.index} 条语句 ──`,
-      `操作: ${ACTION_LABELS[s.action]} ${s.entityLogicalName} (${s.entitySetName})`,
-      s.summary,
-      `本条行数: ${s.entries.length}  成功: ${sSuccess}  失败: ${sError}`,
+      `── ${t.entityLogicalName} (${t.entitySetName}) — 来源: ${SOURCE_LABELS[t.source]} ──`,
+      `本表行数: ${t.entries.length}  成功: ${tSuccess}  失败: ${tError}`,
       "明细：",
-      ...s.entries.map((e) =>
-        e.state === "success" ? `[成功] ${e.key}${e.detail ? ` — ${e.detail}` : ""}` : `[失败] ${e.key} — ${e.error ?? ""}`,
-      ),
+      ...t.entries.map((e) => (e.state === "success" ? `[成功] ${e.key}` : `[失败] ${e.key} — ${e.error ?? ""}`)),
       "",
     );
   }
@@ -56,5 +61,5 @@ export function buildDataMigrationLogText(params: DataMigrationLogParams): strin
 
 export function dataMigrationLogFilename(finishedAt: Date): string {
   const ts = finishedAt.toISOString().replace(/[:.]/g, "-");
-  return `data-migration-sql-import-${ts}.txt`;
+  return `data-migration-${ts}.txt`;
 }

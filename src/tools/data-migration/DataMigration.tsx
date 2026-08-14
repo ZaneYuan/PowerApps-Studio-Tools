@@ -1,177 +1,227 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { isNativeBridgeAvailable } from "../../native/bridge";
+import { useRef, useState } from "react";
+import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { downloadTextFile } from "../../native/download";
-import { fetchAttributes, fetchEntityList, fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
-import { orderStatementsByDependency, type DependencyOrderResult } from "../sql4cds/dependencyOrder";
+import { fetchAttributes, fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
-import { literalToJsValue, parseSql, type InsertResult, type MutateResult } from "../sql4cds/translate";
-import { deleteRow, insertIntersectRow, insertRow, queryMatchingIds, resolveIntersectRowValues, updateRow } from "../sql4cds/writeOps";
-import type { Sql4CdsBatchStatementLog, Sql4CdsLogEntry } from "../sql4cds/executionLog";
+import { literalToJsValue, parseSql, type SelectComplexResult, type SelectSimpleResult } from "../sql4cds/translate";
+import { insertIntersectRow, resolveIntersectRowValues, updateRow } from "../sql4cds/writeOps";
 import SqlEditor from "../sql4cds/SqlEditor";
-import { buildDataMigrationLogText, dataMigrationLogFilename } from "./importLog";
+import ImportTableView from "./ImportTableView";
+import { planDeferredWrite, phase1Body, phase2Body } from "./deferredWrite";
+import { buildDataMigrationLogText, dataMigrationLogFilename, type DataMigrationLogEntry, type DataMigrationTableLog } from "./importLog";
+import type { ImportColumn, ImportRow, ImportTable } from "./types";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 
-function ConcurrencyInput({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled: boolean }) {
-  return (
-    <label className="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-      并发数
-      <input
-        type="number"
-        min={1}
-        max={20}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(Math.min(20, Math.max(1, Number(e.target.value) || 1)))}
-        className="w-14 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-xs text-gray-900 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-      />
-    </label>
-  );
+const SAMPLE = `SELECT TOP 50 name, revenue, statecode
+FROM account
+WHERE statecode = 0`;
+
+let tabCounter = 0;
+function nextTabId(prefix: string, entityLogicalName: string): string {
+  tabCounter += 1;
+  return `${prefix}-${entityLogicalName}-${tabCounter}`;
 }
 
-function describeStatement(stmt: InsertResult | MutateResult): string {
-  if (stmt.kind === "insert") return `INSERT INTO ${stmt.entityLogicalName}（${stmt.rows.length} 行）`;
-  const verb = stmt.action === "update" ? "UPDATE" : "DELETE";
-  return `${verb} ${stmt.entityLogicalName} WHERE ${stmt.filter}`;
+/** A raw SELECT's split-by-`;` text still has to go through translate.ts's own `parseSql` per
+ *  statement — this only splits the *text*, so each chunk parses as exactly one statement
+ *  (never `kind:"batch"`). Naive: doesn't know about a `;` inside a quoted string literal, which
+ *  is an accepted, documented limitation rather than something worth a real SQL tokenizer for. */
+function splitStatements(sql: string): string[] {
+  return sql
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
-function WriteResultTable({ results, stopped }: { results: Sql4CdsLogEntry[]; stopped?: boolean }) {
-  const success = results.filter((r) => r.state === "success").length;
-  const error = results.length - success;
-  return (
-    <div className="max-h-[50vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-      <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-        {stopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
-        共 {results.length} 条，成功 {success}，失败 {error} — 执行日志已自动下载
-      </div>
-      <table className="w-full text-left text-sm">
-        <tbody>
-          {results.map((r, i) => (
-            <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-              <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
-              <td className="whitespace-nowrap px-3 py-1.5 text-xs">
-                {r.state === "success" ? (
-                  <span className="text-green-600 dark:text-green-400">成功{r.detail ? ` — ${r.detail}` : ""}</span>
-                ) : (
-                  <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+function buildSelectPath(result: SelectSimpleResult | SelectComplexResult, entitySet: string): string {
+  if (result.kind === "select-complex") return `${entitySet}?fetchXml=${encodeURIComponent(result.fetchXml)}`;
+  const parts: string[] = [];
+  if (result.select) parts.push(`$select=${result.select}`);
+  if (result.filter) parts.push(`$filter=${result.filter}`);
+  if (result.orderby) parts.push(`$orderby=${result.orderby}`);
+  if (result.top) parts.push(`$top=${result.top}`);
+  return parts.length ? `${entitySet}?${parts.join("&")}` : entitySet;
 }
 
-/** Data Migration is a thin, cross-environment-focused shell around SQL4CDS's own parse/order/
- *  write engine (translate.ts/dependencyOrder.ts/writeOps.ts/concurrency.ts, all imported
- *  directly rather than re-implemented — a bug fix to any of those benefits both tools, not just
- *  one of a diverging pair). What's actually specific to this tool: a "目标连接" picker decoupled
- *  from whichever connection this tab happens to be bound to, since the whole point of a
- *  migration run is writing to a *different* environment than the one you're looking at. Unlike
- *  SQL4CDS's own INSERT (a plain create) there is no upsert-by-id behavior here either — SQL
- *  semantics are preserved as written (INSERT creates, rejecting a duplicate id rather than
- *  silently overwriting; UPDATE only touches whatever its own WHERE matches). */
+/** Dataverse returns a Lookup column as `_logicalname_value` (with `@...` annotations alongside)
+ *  — unwrap to the plain attribute name so ImportRow.values reads uniformly regardless of
+ *  whether a column is a Lookup, matching the convention this app's other write tools use. */
+function unwrapRow(row: Record<string, unknown>): Record<string, unknown> {
+  const unwrapped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (key.includes("@")) continue;
+    const plain = key.startsWith("_") && key.endsWith("_value") ? key.slice(1, -"_value".length) : key;
+    unwrapped[plain] = value;
+  }
+  return unwrapped;
+}
+
+async function buildColumns(
+  connectionId: string,
+  entityLogicalName: string,
+  columnNames: string[],
+): Promise<ImportColumn[]> {
+  const attrs = await fetchAttributes(connectionId, entityLogicalName);
+  const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
+  return columnNames.map((name) => ({ logicalName: name, attributeType: typeByName.get(name.toLowerCase()) ?? "String", checked: true }));
+}
+
 export default function DataMigration() {
-  const { connections } = useActiveConnection();
+  const { activeConnectionId, connections } = useActiveConnection();
 
   const [sql, setSql] = useState("");
-  const [targetConnectionId, setTargetConnectionId] = useState("");
+  const [queryRunning, setQueryRunning] = useState(false);
+  const [queryError, setQueryError] = useState<string | null>(null);
+  const [fileNote, setFileNote] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const parsed = useMemo(() => parseSql(sql), [sql]);
-  const statements = useMemo<(InsertResult | MutateResult)[]>(() => {
-    if (parsed.kind === "insert" || parsed.kind === "mutate") return [parsed];
-    if (parsed.kind === "batch") return parsed.statements;
-    return [];
-  }, [parsed]);
+  const [tables, setTables] = useState<ImportTable[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const activeTable = tables.find((t) => t.tabId === activeTabId) ?? null;
 
-  // Table/column-name autocomplete — best-effort, scoped to whichever table the first statement
-  // targets (same "one shared cache, lazily filled in" approach as SQL4CDS's own editor).
-  const [editorTables, setEditorTables] = useState<string[]>([]);
-  const [editorColumns, setEditorColumns] = useState<Record<string, string[]>>({});
-  const primaryEntityLogicalName = statements[0]?.entityLogicalName ?? null;
+  function updateTable(tabId: string, next: ImportTable) {
+    setTables((ts) => ts.map((t) => (t.tabId === tabId ? next : t)));
+  }
+  function addTables(newTables: ImportTable[]) {
+    if (newTables.length === 0) return;
+    setTables((ts) => [...ts, ...newTables]);
+    setActiveTabId(newTables[0].tabId);
+  }
 
-  useEffect(() => {
-    if (!targetConnectionId) {
-      setEditorTables([]);
-      return;
+  async function handleRunQuery() {
+    if (!activeConnectionId) return;
+    setQueryRunning(true);
+    setQueryError(null);
+    setFileNote(null);
+    try {
+      const statements = splitStatements(sql);
+      const newTables: ImportTable[] = [];
+      const skipped: string[] = [];
+
+      for (let i = 0; i < statements.length; i++) {
+        const parsed = parseSql(statements[i]);
+        if (parsed.kind !== "select-simple" && parsed.kind !== "select-complex") {
+          skipped.push(`第 ${i + 1} 条`);
+          continue;
+        }
+        const [meta, manyToMany] = await Promise.all([
+          fetchEntityMeta(activeConnectionId, parsed.entityLogicalName),
+          fetchManyToManyInfo(activeConnectionId, parsed.entityLogicalName),
+        ]);
+        const path = buildSelectPath(parsed, meta.entitySetName);
+        const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
+          connectionId: activeConnectionId,
+          method: "GET",
+          path,
+        });
+        const unwrapped = res.value.map(unwrapRow);
+        const columnNames = unwrapped.length > 0 ? Object.keys(unwrapped[0]) : parsed.kind === "select-simple" && parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
+        const columns = await buildColumns(activeConnectionId, parsed.entityLogicalName, columnNames);
+        const rows: ImportRow[] = unwrapped.map((r) => ({
+          id: String(r[meta.primaryIdAttribute]),
+          values: r,
+          checked: false,
+        }));
+        newTables.push({
+          tabId: nextTabId("query", parsed.entityLogicalName),
+          entityLogicalName: parsed.entityLogicalName,
+          entitySetName: meta.entitySetName,
+          primaryIdAttribute: meta.primaryIdAttribute,
+          source: "query",
+          columns,
+          rows,
+          isIntersect: !!manyToMany,
+          manyToManyInfo: manyToMany ?? undefined,
+        });
+      }
+
+      addTables(newTables);
+      if (skipped.length > 0) setFileNote(`${skipped.join("、")}不是 SELECT 查询，已跳过。`);
+    } catch (err) {
+      setQueryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setQueryRunning(false);
     }
-    let cancelled = false;
-    fetchEntityList(targetConnectionId)
-      .then((names) => {
-        if (!cancelled) setEditorTables(names);
-      })
-      .catch(() => {
-        if (!cancelled) setEditorTables([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [targetConnectionId]);
+  }
 
-  useEffect(() => {
-    if (!targetConnectionId || !primaryEntityLogicalName || editorColumns[primaryEntityLogicalName]) return;
-    let cancelled = false;
-    fetchAttributes(targetConnectionId, primaryEntityLogicalName)
-      .then((attrs) => {
-        if (!cancelled) setEditorColumns((prev) => ({ ...prev, [primaryEntityLogicalName]: attrs.map((a) => a.logicalName) }));
-      })
-      .catch(() => {
-        /* autocomplete is best-effort */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [targetConnectionId, primaryEntityLogicalName, editorColumns]);
+  async function handleSqlFileChange(file: File) {
+    if (!activeConnectionId) return;
+    setQueryError(null);
+    setFileNote(null);
+    try {
+      const text = await file.text();
+      const statements = splitStatements(text);
+      const insertsByEntity = new Map<string, { columns: Set<string>; rows: { pkValue: string; values: Record<string, unknown> }[] }>();
+      let ignoredCount = 0;
+      let skippedNoPk = 0;
 
-  const editorSchema = useMemo(() => {
-    const schema: Record<string, string[]> = {};
-    for (const table of editorTables) schema[table] = editorColumns[table] ?? [];
-    if (primaryEntityLogicalName && !schema[primaryEntityLogicalName]) schema[primaryEntityLogicalName] = editorColumns[primaryEntityLogicalName] ?? [];
-    return schema;
-  }, [editorTables, editorColumns, primaryEntityLogicalName]);
+      for (const stmtText of statements) {
+        const parsed = parseSql(stmtText);
+        if (parsed.kind !== "insert") {
+          ignoredCount++;
+          continue;
+        }
+        const meta = await fetchEntityMeta(activeConnectionId, parsed.entityLogicalName);
+        const pkIndex = parsed.columns.findIndex((c) => c.toLowerCase() === meta.primaryIdAttribute.toLowerCase());
+        if (pkIndex === -1) {
+          skippedNoPk += parsed.rows.length;
+          continue;
+        }
+        const entry = insertsByEntity.get(parsed.entityLogicalName) ?? { columns: new Set<string>(), rows: [] };
+        parsed.columns.forEach((c) => entry.columns.add(c));
+        for (const row of parsed.rows) {
+          const values: Record<string, unknown> = {};
+          parsed.columns.forEach((col, idx) => {
+            const v = literalToJsValue(row[idx]);
+            if (v !== null) values[col] = v;
+            else values[col] = null;
+          });
+          entry.rows.push({ pkValue: String(literalToJsValue(row[pkIndex])), values });
+        }
+        insertsByEntity.set(parsed.entityLogicalName, entry);
+      }
 
-  // Dependency ordering — auto-resolved as soon as there are statements and a target connection,
-  // same pattern SQL4CDS uses for its own batch preview (see Sql4Cds.tsx).
-  const [orderedBatch, setOrderedBatch] = useState<DependencyOrderResult | null>(null);
-  const [orderLoading, setOrderLoading] = useState(false);
+      const newTables: ImportTable[] = [];
+      for (const [entityLogicalName, group] of insertsByEntity) {
+        const [meta, manyToMany] = await Promise.all([
+          fetchEntityMeta(activeConnectionId, entityLogicalName),
+          fetchManyToManyInfo(activeConnectionId, entityLogicalName),
+        ]);
+        const columns = await buildColumns(activeConnectionId, entityLogicalName, Array.from(group.columns));
+        const rows: ImportRow[] = group.rows.map((r) => ({ id: r.pkValue, values: r.values, checked: true }));
+        newTables.push({
+          tabId: nextTabId("sql", entityLogicalName),
+          entityLogicalName,
+          entitySetName: meta.entitySetName,
+          primaryIdAttribute: meta.primaryIdAttribute,
+          source: "sql-insert",
+          columns,
+          rows,
+          isIntersect: !!manyToMany,
+          manyToManyInfo: manyToMany ?? undefined,
+        });
+      }
 
-  useEffect(() => {
-    setOrderedBatch(null);
-    if (statements.length === 0 || !targetConnectionId) return;
-    let cancelled = false;
-    setOrderLoading(true);
-    orderStatementsByDependency(targetConnectionId, statements)
-      .then((r) => {
-        if (!cancelled) setOrderedBatch(r);
-      })
-      .finally(() => {
-        if (!cancelled) setOrderLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [statements, targetConnectionId]);
+      addTables(newTables);
+      const notes: string[] = [];
+      if (ignoredCount > 0) notes.push(`已忽略 ${ignoredCount} 条非 INSERT 语句`);
+      if (skippedNoPk > 0) notes.push(`${skippedNoPk} 行因为 INSERT 没有显式写主键列，无法识别自身 ID，已跳过`);
+      if (notes.length > 0) setFileNote(notes.join("；") + "。");
+    } catch (err) {
+      setQueryError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
+  const [targetConnectionId, setTargetConnectionId] = useState("");
   const [writeRunning, setWriteRunning] = useState(false);
-  const [writeResults, setWriteResults] = useState<Sql4CdsLogEntry[] | null>(null);
+  const [writeResults, setWriteResults] = useState<{ key: string; state: "success" | "error"; error?: string }[] | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [writeConcurrency, setWriteConcurrency] = useState(8);
   const stopRequestedRef = useRef(false);
   const [writeStopped, setWriteStopped] = useState(false);
-
-  useEffect(() => {
-    setWriteResults(null);
-    setWriteError(null);
-    setWriteStopped(false);
-  }, [sql]);
-
-  function handleStop() {
-    stopRequestedRef.current = true;
-  }
 
   function targetConnectionName(): string {
     return connections.find((c) => c.id === targetConnectionId)?.name ?? targetConnectionId;
@@ -180,13 +230,22 @@ export default function DataMigration() {
     return connections.find((c) => c.id === targetConnectionId)?.environmentUrl;
   }
 
-  async function handleImport() {
-    if (!targetConnectionId || !orderedBatch || orderedBatch.cycleError || orderedBatch.ordered.some((os) => os.rowCycleError)) return;
-    const ordered = orderedBatch.ordered;
+  const totalCheckedRows = tables.reduce((n, t) => n + t.rows.filter((r) => r.checked).length, 0);
 
-    const preview = ordered.map((os) => `${os.originalIndex + 1}. ${describeStatement(os.statement)}`).join("\n");
-    const reorderNote = orderedBatch.reordered ? "\n\n（已按跨表/跨行依赖关系自动调整了执行顺序，上面列出的就是实际执行顺序。）" : "";
-    if (!confirm(`即将向 ${targetConnectionName()} 依次执行 ${ordered.length} 条语句：\n${preview}${reorderNote}\n\n确定吗？`)) return;
+  async function handleImport() {
+    if (!targetConnectionId || totalCheckedRows === 0) return;
+    const plan = planDeferredWrite(tables);
+    const intersectTables = tables.filter((t) => t.isIntersect);
+    const intersectRowCount = intersectTables.reduce((n, t) => n + t.rows.filter((r) => r.checked).length, 0);
+
+    if (
+      !confirm(
+        `即将向 ${targetConnectionName()} 导入 ${totalCheckedRows} 行（共 ${tables.length} 张表）。` +
+          (plan.deferredRowCount > 0 ? `其中 ${plan.deferredRowCount} 行有字段引用了本批数据里还没创建的记录，会先创建、再单独回填。` : "") +
+          `\n\n确定吗？`,
+      )
+    )
+      return;
 
     setWriteRunning(true);
     setWriteResults([]);
@@ -194,118 +253,97 @@ export default function DataMigration() {
     stopRequestedRef.current = false;
     setWriteStopped(false);
     const startedAt = new Date();
-    const statementLogs: Sql4CdsBatchStatementLog[] = [];
+    const tableLogs = new Map<string, DataMigrationTableLog>();
+    for (const t of tables) {
+      tableLogs.set(t.tabId, { entityLogicalName: t.entityLogicalName, entitySetName: t.entitySetName, source: t.source, entries: [] });
+    }
     let stopped = false;
 
+    function recordResult(tabId: string, entry: DataMigrationLogEntry) {
+      tableLogs.get(tabId)?.entries.push(entry);
+      setWriteResults((r) => [...(r ?? []), { key: entry.key, state: entry.state, error: entry.error }]);
+    }
+
     try {
-      for (let i = 0; i < ordered.length; i++) {
+      // Phase 1: every checked row's non-deferred fields.
+      await runConcurrent(
+        plan.rows,
+        writeConcurrency,
+        async (rowPlan) => {
+          try {
+            await updateRow(targetConnectionId, rowPlan.table.entityLogicalName, rowPlan.table.entitySetName, rowPlan.row.id, phase1Body(rowPlan));
+            recordResult(rowPlan.table.tabId, { key: rowPlan.row.id, state: "success" });
+          } catch (err) {
+            recordResult(rowPlan.table.tabId, { key: rowPlan.row.id, state: "error", error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+        () => stopRequestedRef.current,
+      );
+      if (stopRequestedRef.current) {
+        stopped = true;
+        setWriteStopped(true);
+      }
+
+      // Phase 2: backfill deferred fields — only for rows whose phase-1 write actually succeeded.
+      if (!stopped) {
+        const phase1Failed = new Set(
+          Array.from(tableLogs.values())
+            .flatMap((t) => t.entries)
+            .filter((e) => e.state === "error")
+            .map((e) => e.key),
+        );
+        const toBackfill = plan.rows.filter((p) => p.deferredColumns.length > 0 && !phase1Failed.has(p.row.id));
+        await runConcurrent(
+          toBackfill,
+          writeConcurrency,
+          async (rowPlan) => {
+            const key = `${rowPlan.row.id} (回填 ${rowPlan.deferredColumns.join(", ")})`;
+            try {
+              await updateRow(targetConnectionId, rowPlan.table.entityLogicalName, rowPlan.table.entitySetName, rowPlan.row.id, phase2Body(rowPlan));
+              recordResult(rowPlan.table.tabId, { key, state: "success" });
+            } catch (err) {
+              recordResult(rowPlan.table.tabId, { key, state: "error", error: err instanceof Error ? err.message : String(err) });
+            }
+          },
+          () => stopRequestedRef.current,
+        );
         if (stopRequestedRef.current) {
           stopped = true;
           setWriteStopped(true);
-          break;
         }
-        const os = ordered[i];
-        const stmt = os.statement;
-        const stmtLabel = os.originalIndex + 1;
-        const entries: Sql4CdsLogEntry[] = [];
-        let entitySetName = stmt.entitySetGuess;
+      }
 
-        try {
-          const meta = await fetchEntityMeta(targetConnectionId, stmt.entityLogicalName);
-          entitySetName = meta.entitySetName;
-          const manyToMany = await fetchManyToManyInfo(targetConnectionId, stmt.entityLogicalName);
-
-          if (stmt.kind === "insert") {
-            const envUrl = manyToMany ? targetEnvironmentUrl() : undefined;
-            if (manyToMany && !envUrl) throw new Error("找不到目标连接的环境 URL。");
-
-            const orderedRows = os.rowOrder ? os.rowOrder.map((idx) => stmt.rows[idx]) : stmt.rows;
-            const rowConcurrency = os.rowOrder ? 1 : writeConcurrency;
-
-            await runConcurrent(
-              orderedRows,
-              rowConcurrency,
-              async (row, r) => {
-                const rowLabel = os.rowOrder ? os.rowOrder[r] + 1 : r + 1;
-                const key = `语句 ${stmtLabel} · 第 ${rowLabel} 行`;
-                let entry: Sql4CdsLogEntry;
-                try {
-                  const columnValues: Record<string, unknown> = {};
-                  stmt.columns.forEach((col, idx) => {
-                    columnValues[col] = literalToJsValue(row[idx]);
-                  });
-                  if (manyToMany) {
-                    const values = resolveIntersectRowValues(manyToMany, columnValues);
-                    await insertIntersectRow(targetConnectionId, envUrl!, manyToMany, values);
-                    entry = { key, state: "success" };
-                  } else {
-                    const { newId } = await insertRow(targetConnectionId, stmt.entityLogicalName, entitySetName, columnValues);
-                    entry = { key, state: "success", detail: newId ?? undefined };
-                  }
-                } catch (err) {
-                  entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
-                }
-                entries.push(entry);
-                setWriteResults((r2) => [...(r2 ?? []), entry]);
-              },
-              () => stopRequestedRef.current,
-            );
-            if (stopRequestedRef.current) {
-              stopped = true;
-              setWriteStopped(true);
-            }
-          } else {
-            if (manyToMany) {
-              throw new Error(
-                `"${stmt.entityLogicalName}" 是多对多关联表（${manyToMany.entity1LogicalName} ↔ ${manyToMany.entity2LogicalName}），暂不支持对它执行 UPDATE/DELETE。`,
-              );
-            }
-            const { ids } = await queryMatchingIds(targetConnectionId, entitySetName, meta.primaryIdAttribute, stmt.filter);
-            const columnValues =
-              stmt.action === "update" && stmt.setClauses
-                ? Object.fromEntries(stmt.setClauses.map((s) => [s.column, literalToJsValue(s.value)]))
-                : null;
-
-            await runConcurrent(
-              ids,
-              writeConcurrency,
-              async (id) => {
-                const key = `语句 ${stmtLabel} · ${id}`;
-                let entry: Sql4CdsLogEntry;
-                try {
-                  if (stmt.action === "update") {
-                    await updateRow(targetConnectionId, stmt.entityLogicalName, entitySetName, id, columnValues!);
-                  } else {
-                    await deleteRow(targetConnectionId, entitySetName, id);
-                  }
-                  entry = { key, state: "success" };
-                } catch (err) {
-                  entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
-                }
-                entries.push(entry);
-                setWriteResults((r2) => [...(r2 ?? []), entry]);
-              },
-              () => stopRequestedRef.current,
-            );
-            if (stopRequestedRef.current) {
-              stopped = true;
-              setWriteStopped(true);
-            }
+      // Phase 3: N:N intersect associations — need both sides to already exist, so these run last.
+      if (!stopped && intersectRowCount > 0) {
+        for (const table of intersectTables) {
+          if (stopRequestedRef.current) {
+            stopped = true;
+            setWriteStopped(true);
+            break;
           }
-        } catch (err) {
-          const entry: Sql4CdsLogEntry = { key: `语句 ${stmtLabel}`, state: "error", error: err instanceof Error ? err.message : String(err) };
-          entries.push(entry);
-          setWriteResults((r2) => [...(r2 ?? []), entry]);
+          const envUrl = targetEnvironmentUrl();
+          const checkedRows = table.rows.filter((r) => r.checked);
+          if (!table.manyToManyInfo || !envUrl) {
+            for (const row of checkedRows) {
+              recordResult(table.tabId, { key: row.id, state: "error", error: "找不到多对多关系元数据或目标连接的环境 URL。" });
+            }
+            continue;
+          }
+          await runConcurrent(
+            checkedRows,
+            writeConcurrency,
+            async (row) => {
+              try {
+                const values = resolveIntersectRowValues(table.manyToManyInfo!, row.values);
+                await insertIntersectRow(targetConnectionId, envUrl, table.manyToManyInfo!, values);
+                recordResult(table.tabId, { key: row.id, state: "success" });
+              } catch (err) {
+                recordResult(table.tabId, { key: row.id, state: "error", error: err instanceof Error ? err.message : String(err) });
+              }
+            },
+            () => stopRequestedRef.current,
+          );
         }
-
-        statementLogs.push({
-          index: stmtLabel,
-          action: stmt.kind === "insert" ? "insert" : stmt.action,
-          entityLogicalName: stmt.entityLogicalName,
-          entitySetName,
-          summary: describeStatement(stmt),
-          entries,
-        });
       }
 
       const finishedAt = new Date();
@@ -313,8 +351,7 @@ export default function DataMigration() {
         startedAt,
         finishedAt,
         targetConnectionName: targetConnectionName(),
-        sql,
-        statements: statementLogs,
+        tables: Array.from(tableLogs.values()).filter((t) => t.entries.length > 0),
         stopped,
       });
       downloadTextFile(dataMigrationLogFilename(finishedAt), text);
@@ -325,6 +362,10 @@ export default function DataMigration() {
     }
   }
 
+  function handleStop() {
+    stopRequestedRef.current = true;
+  }
+
   if (!isNativeBridgeAvailable()) {
     return (
       <div className="max-w-xl rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
@@ -333,100 +374,121 @@ export default function DataMigration() {
     );
   }
 
-  const orderedList: { statement: InsertResult | MutateResult; originalIndex: number; rowOrder?: number[]; rowCycleError?: string }[] =
-    orderedBatch?.ordered ?? statements.map((s, i) => ({ statement: s, originalIndex: i }));
-  const blockingCycleError = orderedBatch?.cycleError ?? orderedList.find((os) => os.rowCycleError)?.rowCycleError ?? null;
-
   return (
-    <div className="max-w-4xl space-y-4">
+    <div className="max-w-5xl space-y-4">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        粘贴一段或多段 `;` 分隔的 INSERT/UPDATE/DELETE 语句（可以跨不同的表），执行前自动识别跨表、以及同一条 INSERT 内部跨行的 GUID
-        依赖关系并排好安全的执行顺序，排不出顺序（循环依赖）会清晰报错并阻止执行。按 SQL 本身的语义执行——INSERT
-        是真正新建（主键冲突会报错，不是静默按 GUID 覆盖已有记录），UPDATE/DELETE 按各自的 WHERE 条件执行。执行对象是下面选择的"目标连接"，与当前
-        Tab 绑定的连接无关。此界面不支持 SELECT 查询——查询请使用 SQL4CDS 工具。
+        默认模式：写一条或多条 `;` 分隔的 SELECT（可以查不同的表），对本页连接执行，每条查询结果各开一个 Tab，行默认不勾选、列默认全选。也可以点"以
+        SQL 导入"上传一个 `.sql` 文件——文件里的 INSERT 语句按表分组同样落进 Tab（行、列都默认全选），非 INSERT
+        语句会被忽略并提示。两种来源的 Tab 共存，配置好勾选后选一个目标连接点导入——自动识别这批数据里"一张表引用了另一张表还没创建的记录"这种依赖，先创建所有行（引用的字段先留空），再统一回填，不需要手动排好表的导入顺序。
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">目标连接：</label>
-        <select value={targetConnectionId} onChange={(e) => setTargetConnectionId(e.target.value)} className={inputCls}>
-          <option value="">选择目标连接…</option>
-          {connections.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        {!targetConnectionId && <span className="text-xs text-gray-400">请先选择要写入的目标连接。</span>}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">查询（SELECT，可多条）</label>
+          <button onClick={() => setSql(SAMPLE)} className="text-xs text-blue-600 hover:underline dark:text-blue-400">
+            填充示例
+          </button>
+        </div>
+        <SqlEditor value={sql} onChange={setSql} schema={{}} placeholder="SELECT name FROM account WHERE statecode = 0" />
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleRunQuery}
+            disabled={!activeConnectionId || queryRunning}
+            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {queryRunning ? "查询中…" : "执行查询"}
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!activeConnectionId}
+            className="rounded-md border border-gray-300 px-4 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+          >
+            以 SQL 导入…
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".sql"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void handleSqlFileChange(f);
+            }}
+          />
+          {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个本页连接。</span>}
+        </div>
+        {queryError && (
+          <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
+            {queryError}
+          </pre>
+        )}
+        {fileNote && (
+          <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+            {fileNote}
+          </p>
+        )}
       </div>
 
-      <SqlEditor
-        value={sql}
-        onChange={setSql}
-        schema={editorSchema}
-        defaultTable={primaryEntityLogicalName ?? undefined}
-        placeholder="INSERT INTO account (accountid, name) VALUES ('...', 'Contoso');"
-      />
-
-      {parsed.kind === "error" && (
-        <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-          {parsed.error}
-        </div>
-      )}
-
-      {(parsed.kind === "select-simple" || parsed.kind === "select-complex") && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-          此界面不支持 SELECT 查询，请到 SQL4CDS 工具执行查询。
-        </div>
-      )}
-
-      {statements.length > 0 && (
+      {tables.length > 0 && (
         <>
-          <div className="max-h-[50vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-            <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-              共 {statements.length} 条语句
-              {!targetConnectionId && " — 选择目标连接后开始分析依赖关系"}
-              {orderLoading && " — 正在分析跨表依赖关系…"}
-              {!orderLoading && orderedBatch?.reordered && " — 已按依赖关系自动排序（下表为实际执行顺序）"}
-            </div>
-            <table className="w-full text-left text-sm">
-              <tbody>
-                {orderedList.map((os, i) => (
-                  <tr key={os.originalIndex} className="border-t border-gray-100 dark:border-gray-800">
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-gray-400">
-                      {i + 1}
-                      {os.originalIndex !== i && <span className="ml-1 text-amber-500">(原第 {os.originalIndex + 1} 条)</span>}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{describeStatement(os.statement)}</td>
-                    {os.rowCycleError && <td className="px-3 py-1.5 text-xs text-red-600 dark:text-red-400">⚠ {os.rowCycleError}</td>}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex flex-wrap gap-1 border-b border-gray-200 dark:border-gray-800">
+            {tables.map((t) => (
+              <button
+                key={t.tabId}
+                onClick={() => setActiveTabId(t.tabId)}
+                className={`rounded-t-md px-3 py-1.5 text-xs font-medium ${
+                  t.tabId === activeTabId
+                    ? "border border-b-0 border-gray-200 bg-white text-blue-600 dark:border-gray-800 dark:bg-gray-950 dark:text-blue-400"
+                    : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                }`}
+              >
+                {t.source === "query" ? "🔍" : "📄"} {t.entityLogicalName}（{t.rows.length}）
+              </button>
+            ))}
           </div>
 
-          {blockingCycleError && (
-            <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-              {blockingCycleError}
-            </div>
-          )}
+          {activeTable && <ImportTableView table={activeTable} onChange={(next) => updateTable(activeTable.tabId, next)} />}
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              共 {tables.length} 张表，已勾选 {totalCheckedRows} 行 → 目标连接：
+            </span>
+            <select value={targetConnectionId} onChange={(e) => setTargetConnectionId(e.target.value)} className={inputCls}>
+              <option value="">选择目标连接…</option>
+              {connections.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
             <button
               onClick={handleImport}
-              disabled={!targetConnectionId || writeRunning || orderLoading || !!blockingCycleError}
-              className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+              disabled={!targetConnectionId || totalCheckedRows === 0 || writeRunning}
+              className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
             >
-              {writeRunning ? "执行中…" : `导入 (${statements.length} 条语句)`}
+              {writeRunning ? "导入中…" : `导入选中的 ${totalCheckedRows} 行`}
             </button>
             {writeRunning && (
               <button
                 onClick={handleStop}
-                className="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                className="rounded-md border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
               >
                 停止
               </button>
             )}
-            <ConcurrencyInput value={writeConcurrency} onChange={setWriteConcurrency} disabled={writeRunning} />
+            <label className="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+              并发数
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={writeConcurrency}
+                disabled={writeRunning}
+                onChange={(e) => setWriteConcurrency(Math.min(20, Math.max(1, Number(e.target.value) || 1)))}
+                className="w-14 rounded border border-gray-300 px-1.5 py-0.5 text-xs disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800"
+              />
+            </label>
           </div>
 
           {writeError && (
@@ -435,7 +497,31 @@ export default function DataMigration() {
             </pre>
           )}
 
-          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} />}
+          {writeResults && writeResults.length > 0 && (
+            <div className="max-h-[40vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
+              <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+                {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+                共 {writeResults.length} 条，成功 {writeResults.filter((r) => r.state === "success").length}，失败{" "}
+                {writeResults.filter((r) => r.state === "error").length} — 执行日志已自动下载
+              </div>
+              <table className="w-full text-left text-sm">
+                <tbody>
+                  {writeResults.map((r, i) => (
+                    <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+                      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
+                      <td className="whitespace-nowrap px-3 py-1.5 text-xs">
+                        {r.state === "success" ? (
+                          <span className="text-green-600 dark:text-green-400">成功</span>
+                        ) : (
+                          <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
     </div>
