@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { downloadTextFile } from "../../native/download";
@@ -8,6 +8,7 @@ import OrderClausesEditor from "./OrderClausesEditor";
 import { fetchEntityMeta, fetchMigratableAttributes, importRow, queryRows } from "./dataverseOps";
 import { buildFilter, buildOrderBy, validateConditions } from "./filterBuild";
 import { buildImportLogText, importLogFilename, type ImportLogEntry } from "./importLog";
+import { buildInsertSql } from "./sqlGen";
 import { newConditionGroup, type AttributeInfo, type ConditionGroup, type EntityMeta, type LogicOp, type OrderClause, type RowImportStatus } from "./types";
 
 const inputCls =
@@ -31,6 +32,9 @@ export default function DataMigration() {
   const [columnsError, setColumnsError] = useState<string | null>(null);
   const [columnsLoading, setColumnsLoading] = useState(false);
   const [selectedColumns, setSelectedColumns] = useState<Set<string>>(new Set());
+  const [columnQuery, setColumnQuery] = useState("");
+  const [showCheckedColumns, setShowCheckedColumns] = useState(true);
+  const [showUncheckedColumns, setShowUncheckedColumns] = useState(true);
 
   const [conditionGroups, setConditionGroups] = useState<ConditionGroup[]>([newConditionGroup()]);
   const [topLogic, setTopLogic] = useState<LogicOp>("and");
@@ -48,6 +52,7 @@ export default function DataMigration() {
   const [importStatuses, setImportStatuses] = useState<Record<string, RowImportStatus>>({});
   const [importing, setImporting] = useState(false);
   const [lastLog, setLastLog] = useState<{ filename: string; text: string } | null>(null);
+  const [showSqlPreview, setShowSqlPreview] = useState(false);
 
   async function handleLoadColumns() {
     if (!activeConnectionId || !entityName.trim()) return;
@@ -55,6 +60,7 @@ export default function DataMigration() {
     setColumnsError(null);
     setEntityMeta(null);
     setAttributes(null);
+    setColumnQuery("");
     setRows(null);
     setImportStatuses({});
     try {
@@ -89,6 +95,7 @@ export default function DataMigration() {
     setRows(null);
     setSelectedRowIds(new Set());
     setImportStatuses({});
+    setShowSqlPreview(false);
     try {
       const lookupColumns = new Set(
         (attributes ?? []).filter((a) => a.AttributeType === "Lookup").map((a) => a.LogicalName),
@@ -111,9 +118,10 @@ export default function DataMigration() {
     }
   }
 
-  function rowId(row: Record<string, unknown>): string {
-    return String(row[entityMeta!.primaryIdAttribute]);
-  }
+  const rowId = useCallback(
+    (row: Record<string, unknown>): string => String(row[entityMeta!.primaryIdAttribute]),
+    [entityMeta],
+  );
 
   function toggleRow(id: string) {
     setSelectedRowIds((s) => {
@@ -178,7 +186,38 @@ export default function DataMigration() {
     return { success, error, total: values.length };
   }, [importStatuses]);
 
-  const displayColumns = entityMeta ? [entityMeta.primaryIdAttribute, ...Array.from(selectedColumns).filter((c) => c !== entityMeta.primaryIdAttribute)] : [];
+  const displayColumns = useMemo(
+    () =>
+      entityMeta
+        ? [entityMeta.primaryIdAttribute, ...Array.from(selectedColumns).filter((c) => c !== entityMeta.primaryIdAttribute)]
+        : [],
+    [entityMeta, selectedColumns],
+  );
+
+  const filteredAttributes = useMemo(() => {
+    if (!attributes) return [];
+    const q = columnQuery.trim().toLowerCase();
+    return attributes.filter((a) => {
+      if (q && !a.LogicalName.toLowerCase().includes(q) && !labelOf(a.DisplayName, "").toLowerCase().includes(q)) {
+        return false;
+      }
+      return selectedColumns.has(a.LogicalName) ? showCheckedColumns : showUncheckedColumns;
+    });
+  }, [attributes, columnQuery, selectedColumns, showCheckedColumns, showUncheckedColumns]);
+
+  // SQL4CDS's INSERT parser needs each column's real Dataverse attribute type to know whether a
+  // value should render as a bare number/0-1 or a quoted string literal — see sqlGen.ts.
+  const attributeTypeByLogicalName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of attributes ?? []) map.set(a.LogicalName.toLowerCase(), a.AttributeType);
+    return map;
+  }, [attributes]);
+
+  const generatedSql = useMemo(() => {
+    if (!entityMeta || !rows || selectedRowIds.size === 0) return "";
+    const targetRows = rows.filter((r) => selectedRowIds.has(rowId(r)));
+    return buildInsertSql(entityName.trim(), displayColumns, attributeTypeByLogicalName, targetRows);
+  }, [entityMeta, rows, selectedRowIds, displayColumns, attributeTypeByLogicalName, entityName, rowId]);
 
   if (!isNativeBridgeAvailable()) {
     return (
@@ -203,7 +242,7 @@ export default function DataMigration() {
         记录就只更新勾选的字段，不存在就用这个 ID 新建一条——主键 ID 始终用于匹配，不用单独勾选。支持标量字段和单目标 Lookup
         字段（按目标连接自己的 schema 解析 `@odata.bind`）——Owner / Customer / PartyList 等多态关联字段仍不支持。选 Lookup
         字段的前提是两边环境这个字段指向的记录 ID 一致，不一致会在写入这一行时报错，不会静默出错数据。每次导入结束会自动下载一份
-        .txt 执行日志。
+        .txt 执行日志。查到数据后除了直接导入，也可以对勾选的行生成一段 SQL4CDS 可读的 INSERT 语句，复制到 SQL4CDS 工具里对着任意连接执行。
       </div>
 
       <div className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
@@ -242,8 +281,26 @@ export default function DataMigration() {
           <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">
             要迁移的列（勾选，主键默认已勾选）
           </div>
+          <input
+            type="text"
+            placeholder="搜索字段…"
+            value={columnQuery}
+            onChange={(e) => setColumnQuery(e.target.value)}
+            className={`${inputCls} mb-1.5 w-full`}
+          />
+          <div className="mb-1.5 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+            <label className="inline-flex items-center gap-1">
+              <input type="checkbox" checked={showCheckedColumns} onChange={(e) => setShowCheckedColumns(e.target.checked)} />
+              已勾选
+            </label>
+            <label className="inline-flex items-center gap-1">
+              <input type="checkbox" checked={showUncheckedColumns} onChange={(e) => setShowUncheckedColumns(e.target.checked)} />
+              未勾选
+            </label>
+          </div>
           <div className="flex max-h-32 flex-wrap gap-x-4 gap-y-1 overflow-y-auto text-xs">
-            {attributes.map((a) => (
+            {filteredAttributes.length === 0 && <p className="text-gray-400">没有匹配的字段。</p>}
+            {filteredAttributes.map((a) => (
               <label key={a.LogicalName} className="inline-flex items-center gap-1.5">
                 <input
                   type="checkbox"
@@ -258,6 +315,7 @@ export default function DataMigration() {
               </label>
             ))}
           </div>
+          <p className="mt-1 text-xs text-gray-400">已选择 {selectedColumns.size} 个字段</p>
         </div>
       )}
 
@@ -347,6 +405,13 @@ export default function DataMigration() {
             >
               {importing ? "导入中…" : `导入选中的 ${selectedRowIds.size} 行`}
             </button>
+            <button
+              onClick={() => setShowSqlPreview((v) => !v)}
+              disabled={selectedRowIds.size === 0}
+              className="rounded-md border border-gray-300 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+            >
+              {showSqlPreview ? "隐藏 SQL 语句" : "生成 SQL 语句"}
+            </button>
             {summary && (
               <span className="text-gray-500 dark:text-gray-400">
                 本次结果：成功 {summary.success} / 失败 {summary.error}（共 {summary.total}）
@@ -361,6 +426,25 @@ export default function DataMigration() {
               </button>
             )}
           </div>
+
+          {showSqlPreview && generatedSql && (
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                  SQL4CDS 可读的 INSERT 语句（{selectedRowIds.size} 行）
+                </span>
+                <button
+                  onClick={() => navigator.clipboard.writeText(generatedSql)}
+                  className="rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                >
+                  复制
+                </button>
+              </div>
+              <pre className="max-h-64 overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-900 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-100">
+                {generatedSql}
+              </pre>
+            </div>
+          )}
 
           <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
             <table className="w-full text-left text-sm">
