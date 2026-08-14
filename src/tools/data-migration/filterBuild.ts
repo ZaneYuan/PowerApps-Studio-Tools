@@ -4,11 +4,11 @@ import {
   type Condition,
   type ConditionGroup,
   type LogicOp,
+  type OrderClause,
   type ValueType,
 } from "./types";
 
-const GUID_RE =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 export interface ConditionWarning {
   conditionId: string;
@@ -54,20 +54,23 @@ function renderCondition(c: Condition): string | null {
 }
 
 function renderGroup(group: ConditionGroup): string | null {
-  const parts = group.conditions
-    .map(renderCondition)
-    .filter((p): p is string => p !== null);
+  const parts = group.conditions.map(renderCondition).filter((p): p is string => p !== null);
   if (parts.length === 0) return null;
   const joined = parts.join(group.logic === "and" ? " and " : " or ");
   return parts.length > 1 ? `(${joined})` : joined;
 }
 
 export function buildFilter(groups: ConditionGroup[], topLogic: LogicOp): string {
-  const parts = groups
-    .map(renderGroup)
-    .filter((p): p is string => p !== null);
+  const parts = groups.map(renderGroup).filter((p): p is string => p !== null);
   if (parts.length === 0) return "";
   return parts.join(topLogic === "and" ? " and " : " or ");
+}
+
+export function buildOrderBy(orders: OrderClause[]): string {
+  return orders
+    .filter((o) => o.field.trim())
+    .map((o) => (o.descending ? `${o.field.trim()} desc` : o.field.trim()))
+    .join(",");
 }
 
 export function validateConditions(groups: ConditionGroup[]): ConditionWarning[] {
@@ -76,16 +79,9 @@ export function validateConditions(groups: ConditionGroup[]): ConditionWarning[]
     for (const c of group.conditions) {
       if (!c.field.trim()) continue;
       if (c.valueType === "guid" && c.value.trim() && !GUID_RE.test(c.value.trim())) {
-        warnings.push({
-          conditionId: c.id,
-          message: `"${c.field}" 的值不是有效的 GUID 格式`,
-        });
+        warnings.push({ conditionId: c.id, message: `"${c.field}" 的值不是有效的 GUID 格式` });
       }
-      if (
-        c.valueType === "number" &&
-        c.value.trim() &&
-        Number.isNaN(Number(c.value.trim()))
-      ) {
+      if (c.valueType === "number" && c.value.trim() && Number.isNaN(Number(c.value.trim()))) {
         warnings.push({ conditionId: c.id, message: `"${c.field}" 的值不是有效数字` });
       }
     }

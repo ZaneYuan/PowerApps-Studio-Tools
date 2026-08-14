@@ -98,14 +98,6 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./sample-tool/GuidFormatter")),
   },
   {
-    id: "odata-filter-builder",
-    name: "OData $filter 构建器",
-    description: "可视化拼接 OData $filter 表达式，自动处理各类型字面量格式。",
-    category: "查询工具",
-    icon: "🔍",
-    Component: lazy(() => import("./odata-filter-builder/OdataFilterBuilder")),
-  },
-  {
     id: "fetchxml-to-odata",
     name: "FetchXML → OData",
     description: "把 FetchXML 转换为 $select/$filter/$orderby 等 OData 查询片段。",

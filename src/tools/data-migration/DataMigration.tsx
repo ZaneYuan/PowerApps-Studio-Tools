@@ -3,9 +3,12 @@ import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { downloadTextFile } from "../../native/download";
 import { labelOf } from "../metadata-browser/types";
+import ConditionGroupsEditor from "./ConditionGroupsEditor";
+import OrderClausesEditor from "./OrderClausesEditor";
 import { fetchEntityMeta, fetchMigratableAttributes, importRow, queryRows } from "./dataverseOps";
+import { buildFilter, buildOrderBy, validateConditions } from "./filterBuild";
 import { buildImportLogText, importLogFilename, type ImportLogEntry } from "./importLog";
-import type { AttributeInfo, EntityMeta, RowImportStatus } from "./types";
+import { newConditionGroup, type AttributeInfo, type ConditionGroup, type EntityMeta, type LogicOp, type OrderClause, type RowImportStatus } from "./types";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -29,7 +32,12 @@ export default function DataMigration() {
   const [columnsLoading, setColumnsLoading] = useState(false);
   const [selectedColumns, setSelectedColumns] = useState<Set<string>>(new Set());
 
-  const [filter, setFilter] = useState("");
+  const [conditionGroups, setConditionGroups] = useState<ConditionGroup[]>([newConditionGroup()]);
+  const [topLogic, setTopLogic] = useState<LogicOp>("and");
+  const [orders, setOrders] = useState<OrderClause[]>([]);
+  const filter = useMemo(() => buildFilter(conditionGroups, topLogic), [conditionGroups, topLogic]);
+  const orderBy = useMemo(() => buildOrderBy(orders), [orders]);
+  const filterWarnings = useMemo(() => validateConditions(conditionGroups), [conditionGroups]);
   const [top, setTop] = useState(50);
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
@@ -92,6 +100,7 @@ export default function DataMigration() {
         Array.from(selectedColumns),
         lookupColumns,
         filter,
+        orderBy,
         top,
       );
       setRows(data);
@@ -253,34 +262,57 @@ export default function DataMigration() {
       )}
 
       {entityMeta && (
-        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-          <div className="min-w-[16rem] flex-1">
-            <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">$filter（可选，原始 OData 表达式）</label>
-            <input
-              type="text"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="statecode eq 0"
-              className={`${inputCls} w-full font-mono`}
+        <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+          <div>
+            <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">过滤条件（可选）</div>
+            <ConditionGroupsEditor
+              groups={conditionGroups}
+              topLogic={topLogic}
+              onGroupsChange={setConditionGroups}
+              onTopLogicChange={setTopLogic}
             />
           </div>
+
           <div>
-            <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">最多取</label>
-            <select value={top} onChange={(e) => setTop(Number(e.target.value))} className={inputCls}>
-              {TOP_OPTIONS.map((n) => (
-                <option key={n} value={n}>
-                  {n} 条
-                </option>
-              ))}
-            </select>
+            <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">排序（可选）</div>
+            <OrderClausesEditor orders={orders} onChange={setOrders} />
           </div>
-          <button
-            onClick={handleQuery}
-            disabled={selectedColumns.size === 0 || queryLoading}
-            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            {queryLoading ? "查询中…" : "查询"}
-          </button>
+
+          {filterWarnings.length > 0 && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+              {filterWarnings.map((w, i) => (
+                <div key={i}>⚠ {w.message}</div>
+              ))}
+            </div>
+          )}
+
+          {(filter || orderBy) && (
+            <pre className="overflow-x-auto rounded-md border border-gray-200 bg-gray-50 p-2 font-mono text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
+              {filter && `$filter=${filter}`}
+              {filter && orderBy && "\n"}
+              {orderBy && `$orderby=${orderBy}`}
+            </pre>
+          )}
+
+          <div className="flex flex-wrap items-end gap-2">
+            <div>
+              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">最多取</label>
+              <select value={top} onChange={(e) => setTop(Number(e.target.value))} className={inputCls}>
+                {TOP_OPTIONS.map((n) => (
+                  <option key={n} value={n}>
+                    {n} 条
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              onClick={handleQuery}
+              disabled={selectedColumns.size === 0 || queryLoading}
+              className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {queryLoading ? "查询中…" : "查询"}
+            </button>
+          </div>
         </div>
       )}
 

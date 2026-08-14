@@ -62,6 +62,7 @@ export async function queryRows(
   columns: string[],
   lookupColumns: Set<string>,
   filter: string,
+  orderBy: string,
   top: number,
 ): Promise<Record<string, unknown>[]> {
   // Primary id is always fetched (even if not selected for import) — it's the only stable
@@ -73,6 +74,7 @@ export async function queryRows(
   );
   const params = [`$select=${selectCols.join(",")}`, `$top=${top}`];
   if (filter.trim()) params.push(`$filter=${filter.trim()}`);
+  if (orderBy.trim()) params.push(`$orderby=${orderBy.trim()}`);
 
   const res = await fetchDataverse<{ value: Record<string, unknown>[] }>(
     connectionId,
