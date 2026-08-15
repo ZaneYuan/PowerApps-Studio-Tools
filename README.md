@@ -2,9 +2,19 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-一个开源的 Power Apps / Dataverse / Dynamics 365 桌面工具箱（React + Vite + TypeScript + Tailwind CSS v4 前端，WPF + WebView2 桌面壳），面向日常做 Power Platform 管理/开发工作的人。不隶属于、也未获得 Microsoft 官方认可或关联——只是社区维护的第三方工具集合，产品/服务名称仅作描述性引用。
+一个开源的高性能 Power Apps / Dataverse / Dynamics 365 桌面工具箱（React + Vite + TypeScript + Tailwind CSS v4 前端，WPF + WebView2 桌面壳），目标是最大化节省开发人员的时间、提升开发体验，面向日常做 Dynamics 365 / Power Platform 管理与开发工作的人。
 
-> 项目原名 "MSD365 PP Tools"，2026-08 更名为 "Power Apps Studio & Tools" 并准备开源；C# 内部命名空间/项目文件仍是 `MsdPpTools.Desktop`（保留是为了不做一次大而无益的机械重命名），但发布出来的 exe、窗口标题、README 等所有用户可见的地方都已经是新名字。
+**特色功能**
+- 🔌 **交互式连接**：仅需提供环境 URL 和用户名，通过浏览器交互式登录即可，登录信息永久保存，无需频繁重新认证。
+- 🔗 **关联记录浏览器**：输入一条记录，即可查出最相关的 5 个查找字段表记录和 5 个子表的相关记录，并支持模糊搜索，帮助开发人员在调试中快速定位数据所在的表和字段，理解表关系。
+- 🗄️ **SQL4CDS**：INSERT 语句表格可视化，方便核对数据，支持最大 20 并发执行，大幅提升效率。
+- 🧩 **FetchXML Builder**：实体和字段支持下拉提示，查找字段和选项集字段均可搜索选择，配置 FetchXML 更轻松。
+- 🔧 **Plugin Registration**：快速、高性能，编辑 Step 和 Image 列时支持搜索。
+- 🚚 **数据迁移**：通过 SQL 语句查询当前环境数据，勾选要导入的行和列即可直接导入目标环境，支持单次多表导入、自动处理数据依赖关系，并提供日志记录与安全的失败处理机制。
+- 📋 **数据复制**：同样通过 SQL 查询需要复制的数据，勾选行和列即可轻松完成复制。
+
+整体运行高性能、无卡顿，所有已打开的数据都会保留在对应 Tab 中，无需重复加载。未来会持续完善更多小工具，详见下方「路线图 / Roadmap」。
+
 
 ## 本地调试运行
 
