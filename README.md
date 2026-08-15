@@ -15,11 +15,13 @@ npm run dev
 
 ## 打包桌面版（可直接双击运行，不用挂着 `npm run dev`）
 
+在项目根目录运行：
+
 ```bash
-npm run publish:desktop
+npm install
 ```
 
-等价于 `npm run build`（Vite 生产构建）→ `dotnet publish` 桌面壳（Release）→ 把构建产物拷到 exe 旁边的 `wwwroot/`。产物在 `publish/MsdPpTools.Desktop/PowerAppsStudioTools.exe`，双击直接跑，不需要 Node/Vite 在后台运行（还是需要机器上已装 .NET 10 桌面运行时——WPF 项目默认发布是框架依赖，不是自包含）。改了前端或桌面壳代码后要重新跑一遍这个命令才会反映到打包产物里。
+然后双击根目录下的 `publish.bat`，运行结束后双击 `publish\MsdPpTools.Desktop\PowerAppsStudioTools.exe` 即可，不需要 Node/Vite 在后台运行（还是需要机器上已装 .NET 10 桌面运行时——WPF 项目默认发布是框架依赖，不是自包含）。改了前端或桌面壳代码后要重新跑一遍才会反映到打包产物里。
 
 ## 目录结构
 
