@@ -6,12 +6,17 @@
 
 > 项目原名 "MSD365 PP Tools"，2026-08 更名为 "Power Apps Studio & Tools" 并准备开源；C# 内部命名空间/项目文件仍是 `MsdPpTools.Desktop`（保留是为了不做一次大而无益的机械重命名），但发布出来的 exe、窗口标题、README 等所有用户可见的地方都已经是新名字。
 
-## 运行
+## 本地调试运行
 
+1...\MSD365Tools(当前目录)：
 ```bash
 npm install
 npm run dev
 ```
+
+2.打开"..\MSD365Tools\desktop\MsdPpTools.slnx"
+F5启动
+
 
 ## 打包桌面版（可直接双击运行，不用挂着 `npm run dev`）
 
