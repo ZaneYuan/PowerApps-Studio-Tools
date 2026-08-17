@@ -85,9 +85,14 @@ export default function DataMigration() {
   function updateTable(tabId: string, next: ImportTable) {
     setTables((ts) => ts.map((t) => (t.tabId === tabId ? next : t)));
   }
+  /** Replaces the previous batch from the same source (query vs. SQL-import) instead of piling
+   *  on top of it — re-running "执行查询" with the same entity still in the SQL box used to leave
+   *  the stale tab from the last run sitting next to the fresh one. The two sources still coexist
+   *  (per the tool's own help text), so a SQL-import run never touches query tabs and vice versa. */
   function addTables(newTables: ImportTable[]) {
     if (newTables.length === 0) return;
-    setTables((ts) => [...ts, ...newTables]);
+    const source = newTables[0].source;
+    setTables((ts) => [...ts.filter((t) => t.source !== source), ...newTables]);
     setActiveTabId(newTables[0].tabId);
   }
 
@@ -237,10 +242,11 @@ export default function DataMigration() {
     const plan = planDeferredWrite(tables);
     const intersectTables = tables.filter((t) => t.isIntersect);
     const intersectRowCount = intersectTables.reduce((n, t) => n + t.rows.filter((r) => r.checked).length, 0);
+    const checkedTableCount = tables.filter((t) => t.rows.some((r) => r.checked)).length;
 
     if (
       !confirm(
-        `即将向 ${targetConnectionName()} 导入 ${totalCheckedRows} 行（共 ${tables.length} 张表）。` +
+        `即将向 ${targetConnectionName()} 导入 ${totalCheckedRows} 行（共 ${checkedTableCount} 张表）。` +
           (plan.deferredRowCount > 0 ? `其中 ${plan.deferredRowCount} 行有字段引用了本批数据里还没创建的记录，会先创建、再单独回填。` : "") +
           `\n\n确定吗？`,
       )

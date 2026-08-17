@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
+import { fetchOptionSetValuesForType, isOptionSetAttributeType, type OptionSetValue } from "../../native/metadataService";
 import {
   RELATIONSHIP_COLLECTION,
   TAB_LABELS,
@@ -47,11 +48,18 @@ export default function MetadataBrowser() {
   const [tabLoading, setTabLoading] = useState(false);
   const [tabError, setTabError] = useState<string | null>(null);
 
-  // Row-click "expand full JSON below" is disabled for now in favor of per-cell click-to-copy
-  // (see the table rendering below) — commented out rather than deleted in case it comes back.
+  // Row-click "expand full JSON below" is disabled for now — commented out rather than deleted
+  // in case it comes back.
   // const [expanded, setExpanded] = useState<{ key: string; data: unknown } | null>(null);
   // const [expandLoading, setExpandLoading] = useState<string | null>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const [optionSetPanel, setOptionSetPanel] = useState<{
+    attributeLogicalName: string;
+    displayName: string;
+    loading: boolean;
+    error: string | null;
+    options: OptionSetValue[] | null;
+  } | null>(null);
 
   const [entityListWidth, setEntityListWidth] = useState(288);
 
@@ -164,6 +172,29 @@ export default function MetadataBrowser() {
     setRowFilterByEntity((prev) => ({ ...prev, [activeLogicalName]: value }));
   }
 
+  // The panel shows one attribute's options for the currently open entity — stale once either
+  // changes, so close it instead of leaving it displaying the wrong field's data.
+  useEffect(() => {
+    setOptionSetPanel(null);
+  }, [activeLogicalName, activeTab]);
+
+  function openOptionSetPanel(row: AttributeSummary) {
+    if (!activeConnectionId || !selectedEntity) return;
+    const displayName = labelOf(row.DisplayName, row.LogicalName);
+    setOptionSetPanel({ attributeLogicalName: row.LogicalName, displayName, loading: true, error: null, options: null });
+    fetchOptionSetValuesForType(activeConnectionId, selectedEntity.LogicalName, row.LogicalName, row.AttributeType)
+      .then((options) => {
+        setOptionSetPanel((p) => (p && p.attributeLogicalName === row.LogicalName ? { ...p, options, loading: false } : p));
+      })
+      .catch((err) => {
+        setOptionSetPanel((p) =>
+          p && p.attributeLogicalName === row.LogicalName
+            ? { ...p, error: err instanceof Error ? err.message : String(err), loading: false }
+            : p,
+        );
+      });
+  }
+
   // async function toggleExpand(rowKey: string, metadataId: string) {
   //   if (expanded?.key === rowKey) {
   //     setExpanded(null);
@@ -182,12 +213,6 @@ export default function MetadataBrowser() {
   //     setExpandLoading(null);
   //   }
   // }
-
-  function copyText(key: string, text: string) {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey((k) => (k === key ? null : k)), 1200);
-  }
 
   const currentRows = selectedEntity ? (tabCache[`${selectedEntity.LogicalName}:${activeTab}`] ?? null) : null;
   const filteredRows = useMemo(() => {
@@ -302,12 +327,9 @@ export default function MetadataBrowser() {
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                 {labelOf(selectedEntity.DisplayName, selectedEntity.LogicalName)}
               </h2>
-              <button
-                onClick={() => copyText("entity-logicalname", selectedEntity.LogicalName)}
-                className="rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-              >
-                {copiedKey === "entity-logicalname" ? "已复制" : selectedEntity.LogicalName}
-              </button>
+              <span className="rounded border border-gray-300 px-2 py-0.5 font-mono text-xs text-gray-600 dark:border-gray-600 dark:text-gray-300">
+                {selectedEntity.LogicalName}
+              </span>
               <span className="text-xs text-gray-400">EntitySetName: {selectedEntity.EntitySetName}</span>
             </div>
 
@@ -363,39 +385,41 @@ export default function MetadataBrowser() {
                     {filteredRows.map((row) => {
                       const rowKey =
                         (row as { MetadataId: string }).MetadataId ?? JSON.stringify(row).slice(0, 40);
-                      const cellCls =
-                        "cursor-pointer px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800";
                       const relationshipDetail =
                         activeTab === "attributes"
                           ? ""
                           : activeTab === "manyToMany"
                             ? `${(row as RelationshipSummary).Entity1LogicalName} ↔ ${(row as RelationshipSummary).Entity2LogicalName}`
                             : `${(row as RelationshipSummary).ReferencingEntity}.${(row as RelationshipSummary).ReferencingAttribute} → ${(row as RelationshipSummary).ReferencedEntity}`;
+                      const attributeType = activeTab === "attributes" ? (row as AttributeSummary).AttributeType : null;
+                      const isOptionSet = attributeType !== null && isOptionSetAttributeType(attributeType);
                       return (
                         <tr key={rowKey} className="border-t border-gray-100 dark:border-gray-800">
                           {activeTab === "attributes" ? (
                             <>
-                              <td
-                                onClick={() => copyText(`ln-${rowKey}`, (row as AttributeSummary).LogicalName)}
-                                className={`${cellCls} font-mono text-xs`}
-                                title="点击复制 Logical Name"
-                              >
-                                {copiedKey === `ln-${rowKey}` ? "已复制" : (row as AttributeSummary).LogicalName}
+                              <td className="px-3 py-1.5 font-mono text-xs text-gray-900 dark:text-gray-100">
+                                {(row as AttributeSummary).LogicalName}
                                 {(row as AttributeSummary).IsPrimaryId && (
                                   <span className="ml-1 rounded bg-gray-100 px-1 text-[10px] text-gray-500 dark:bg-gray-800">
                                     PK
                                   </span>
                                 )}
                               </td>
-                              <td
-                                onClick={() => copyText(`dn-${rowKey}`, labelOf((row as AttributeSummary).DisplayName, ""))}
-                                className={cellCls}
-                                title="点击复制显示名"
-                              >
-                                {copiedKey === `dn-${rowKey}` ? "已复制" : labelOf((row as AttributeSummary).DisplayName, "")}
+                              <td className="px-3 py-1.5 text-gray-900 dark:text-gray-100">
+                                {labelOf((row as AttributeSummary).DisplayName, "")}
                               </td>
                               <td className="px-3 py-1.5 text-xs text-gray-500">
-                                {(row as AttributeSummary).AttributeType}
+                                {isOptionSet ? (
+                                  <button
+                                    onClick={() => openOptionSetPanel(row as AttributeSummary)}
+                                    className="rounded border border-blue-300 px-1.5 py-0.5 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                                    title="查看所有选项的 label / value"
+                                  >
+                                    {attributeType} — 查看选项
+                                  </button>
+                                ) : (
+                                  attributeType
+                                )}
                               </td>
                               <td className="px-3 py-1.5 text-xs text-gray-500">
                                 {(row as AttributeSummary).RequiredLevel?.Value ?? ""}
@@ -406,20 +430,10 @@ export default function MetadataBrowser() {
                             </>
                           ) : (
                             <>
-                              <td
-                                onClick={() => copyText(`sn-${rowKey}`, (row as RelationshipSummary).SchemaName)}
-                                className={`${cellCls} font-mono text-xs`}
-                                title="点击复制 Schema Name"
-                              >
-                                {copiedKey === `sn-${rowKey}` ? "已复制" : (row as RelationshipSummary).SchemaName}
+                              <td className="px-3 py-1.5 font-mono text-xs text-gray-900 dark:text-gray-100">
+                                {(row as RelationshipSummary).SchemaName}
                               </td>
-                              <td
-                                onClick={() => copyText(`detail-${rowKey}`, relationshipDetail)}
-                                className={`${cellCls} text-xs text-gray-500`}
-                                title="点击复制详情"
-                              >
-                                {copiedKey === `detail-${rowKey}` ? "已复制" : relationshipDetail}
-                              </td>
+                              <td className="px-3 py-1.5 text-xs text-gray-500">{relationshipDetail}</td>
                             </>
                           )}
                         </tr>
@@ -432,6 +446,48 @@ export default function MetadataBrowser() {
           </>
         )}
       </div>
+
+      {optionSetPanel && (
+        <div className="fixed inset-y-0 right-0 z-50 flex w-96 max-w-full flex-col border-l border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-950">
+          <div className="flex items-center justify-between border-b border-gray-200 p-3 dark:border-gray-800">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">{optionSetPanel.displayName}</div>
+              <div className="truncate font-mono text-xs text-gray-400">{optionSetPanel.attributeLogicalName}</div>
+            </div>
+            <button
+              onClick={() => setOptionSetPanel(null)}
+              className="shrink-0 text-xs text-gray-400 hover:text-red-500"
+            >
+              ✕ 关闭
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3">
+            {optionSetPanel.loading && <p className="text-xs text-gray-400">加载选项中…</p>}
+            {optionSetPanel.error && <p className="text-sm text-red-600 dark:text-red-400">{optionSetPanel.error}</p>}
+            {optionSetPanel.options && optionSetPanel.options.length === 0 && (
+              <p className="text-xs text-gray-400">这个字段没有选项。</p>
+            )}
+            {optionSetPanel.options && optionSetPanel.options.length > 0 && (
+              <table className="w-full text-left text-sm">
+                <thead className="text-xs text-gray-500 dark:text-gray-400">
+                  <tr>
+                    <th className="px-2 py-1.5">Value</th>
+                    <th className="px-2 py-1.5">Label</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {optionSetPanel.options.map((o) => (
+                    <tr key={o.value} className="border-t border-gray-100 dark:border-gray-800">
+                      <td className="px-2 py-1.5 font-mono text-xs text-gray-900 dark:text-gray-100">{o.value}</td>
+                      <td className="px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100">{o.label}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

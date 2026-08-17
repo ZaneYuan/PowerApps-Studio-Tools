@@ -200,25 +200,18 @@ export interface OptionSetValue {
   label: string;
 }
 
-/** Cached like the rest of this module, keyed by connection+entity+attribute. */
+/** Cached like the rest of this module, keyed by connection+entity+attribute+metadata cast. */
 const optionSetCache = new Map<string, OptionSetValue[]>();
 
-/** A Picklist attribute's option list (local or global — this endpoint returns either the same
- *  way, so no need to tell them apart up front). Confirmed against a live org:
- *  `EntityDefinitions(LogicalName='account')/Attributes(LogicalName='industrycode')/
- *  Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)`
- *  returns `{ OptionSet: { Options: [{ Value, Label: { UserLocalizedLabel: { Label } } }] } }` —
- *  only State/Status attributes use a different metadata cast (StateAttributeMetadata/
- *  StatusAttributeMetadata), not covered here since those aren't in scope for the tools that
- *  use this (v1 editable-cell support is Picklist only, not State/Status). */
-export async function fetchOptionSetValues(
+async function fetchOptionSetValuesForCast(
   connectionId: string,
   entityLogicalName: string,
   attributeLogicalName: string,
+  cast: string,
 ): Promise<OptionSetValue[]> {
   const trimmedEntity = entityLogicalName.trim();
   const trimmedAttribute = attributeLogicalName.trim();
-  const key = `${cacheKey(connectionId, trimmedEntity)}:${trimmedAttribute.toLowerCase()}`;
+  const key = `${cacheKey(connectionId, trimmedEntity)}:${trimmedAttribute.toLowerCase()}:${cast}`;
   const cached = optionSetCache.get(key);
   if (cached) return cached;
 
@@ -229,9 +222,50 @@ export async function fetchOptionSetValues(
     method: "GET",
     path:
       `EntityDefinitions(LogicalName='${trimmedEntity}')/Attributes(LogicalName='${trimmedAttribute}')` +
-      "/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)",
+      `/Microsoft.Dynamics.CRM.${cast}?$select=LogicalName&$expand=OptionSet($select=Options)`,
   });
   const options = res.OptionSet.Options.map((o) => ({ value: o.Value, label: o.Label.UserLocalizedLabel?.Label ?? String(o.Value) }));
   optionSetCache.set(key, options);
   return options;
+}
+
+/** A Picklist attribute's option list (local or global — this endpoint returns either the same
+ *  way, so no need to tell them apart up front). Confirmed against a live org:
+ *  `EntityDefinitions(LogicalName='account')/Attributes(LogicalName='industrycode')/
+ *  Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)`
+ *  returns `{ OptionSet: { Options: [{ Value, Label: { UserLocalizedLabel: { Label } } }] } }`. */
+export async function fetchOptionSetValues(
+  connectionId: string,
+  entityLogicalName: string,
+  attributeLogicalName: string,
+): Promise<OptionSetValue[]> {
+  return fetchOptionSetValuesForCast(connectionId, entityLogicalName, attributeLogicalName, "PicklistAttributeMetadata");
+}
+
+/** State/Status/MultiSelectPicklist expose the identical `OptionSet.Options` shape as Picklist,
+ *  just under their own metadata cast (per Microsoft's Web API metadata reference — only the
+ *  Picklist cast above has actually been run against a live org). Kept separate from
+ *  `fetchOptionSetValues` rather than widening it: that one backs *writable* cell editors
+ *  (DataCopy, FetchXML Builder's condition value picker) which intentionally stay Picklist-only —
+ *  this one only backs Metadata Browser's read-only "show all options" panel. */
+const OPTIONSET_ATTRIBUTE_CASTS: Record<string, string> = {
+  Picklist: "PicklistAttributeMetadata",
+  State: "StateAttributeMetadata",
+  Status: "StatusAttributeMetadata",
+  MultiSelectPicklist: "MultiSelectPicklistAttributeMetadata",
+};
+
+export function isOptionSetAttributeType(attributeType: string): boolean {
+  return attributeType in OPTIONSET_ATTRIBUTE_CASTS;
+}
+
+export async function fetchOptionSetValuesForType(
+  connectionId: string,
+  entityLogicalName: string,
+  attributeLogicalName: string,
+  attributeType: string,
+): Promise<OptionSetValue[]> {
+  const cast = OPTIONSET_ATTRIBUTE_CASTS[attributeType];
+  if (!cast) throw new Error(`"${attributeType}" 不是可展开选项列表的字段类型。`);
+  return fetchOptionSetValuesForCast(connectionId, entityLogicalName, attributeLogicalName, cast);
 }
