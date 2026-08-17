@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 const inputCls =
   "w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -12,11 +12,13 @@ export default function AttributePicker({
   options,
   selected,
   onToggle,
+  renderBadge,
 }: {
   label: string;
   options: string[];
   selected: Set<string>;
   onToggle: (name: string) => void;
+  renderBadge?: (name: string) => ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [showChecked, setShowChecked] = useState(true);
@@ -56,6 +58,7 @@ export default function AttributePicker({
           <label key={a} className="mr-3 inline-flex items-center gap-1">
             <input type="checkbox" checked={selected.has(a)} onChange={() => onToggle(a)} />
             {a}
+            {renderBadge?.(a)}
           </label>
         ))}
       </div>

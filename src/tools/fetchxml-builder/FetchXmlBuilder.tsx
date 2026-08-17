@@ -252,33 +252,35 @@ export default function FetchXmlBuilder() {
 
       {rows && (
         <div className="overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-          <div className="border-b border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
-            {rows.length} 行
-          </div>
-          {rows.length > 0 && (
-            <table className="w-full text-left text-sm">
-              <thead className="sticky top-0 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
-                <tr>
-                  {columns.map((c) => (
-                    <th key={c} className="px-3 py-2 font-mono">
-                      {c}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row, i) => (
-                  <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+          <div className="inline-block min-w-full align-top">
+            <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+              {rows.length} 行
+            </div>
+            {rows.length > 0 && (
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+                  <tr>
                     {columns.map((c) => (
-                      <td key={c} className="px-3 py-1.5 font-mono text-xs">
-                        {typeof row[c] === "object" ? JSON.stringify(row[c]) : String(row[c] ?? "")}
-                      </td>
+                      <th key={c} className="whitespace-nowrap px-3 py-2 font-mono">
+                        {c}
+                      </th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+                </thead>
+                <tbody>
+                  {rows.map((row, i) => (
+                    <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+                      {columns.map((c) => (
+                        <td key={c} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
+                          {typeof row[c] === "object" ? JSON.stringify(row[c]) : String(row[c] ?? "")}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
       )}
     </div>

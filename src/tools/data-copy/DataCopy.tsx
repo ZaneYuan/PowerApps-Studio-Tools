@@ -292,27 +292,29 @@ export default function DataCopy() {
 
           {writeResults && writeResults.length > 0 && (
             <div className="max-h-[40vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-              <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-                {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
-                共 {writeResults.length} 条，成功 {writeResults.filter((r) => r.state === "success").length}，失败{" "}
-                {writeResults.filter((r) => r.state === "error").length} — 执行日志已自动下载
+              <div className="inline-block min-w-full align-top">
+                <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+                  {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+                  共 {writeResults.length} 条，成功 {writeResults.filter((r) => r.state === "success").length}，失败{" "}
+                  {writeResults.filter((r) => r.state === "error").length} — 执行日志已自动下载
+                </div>
+                <table className="w-full text-left text-sm">
+                  <tbody>
+                    {writeResults.map((r, i) => (
+                      <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+                        <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
+                        <td className="whitespace-nowrap px-3 py-1.5 text-xs">
+                          {r.state === "success" ? (
+                            <span className="text-green-600 dark:text-green-400">成功{r.detail ? ` — ${r.detail}` : ""}</span>
+                          ) : (
+                            <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <table className="w-full text-left text-sm">
-                <tbody>
-                  {writeResults.map((r, i) => (
-                    <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-                      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
-                      <td className="whitespace-nowrap px-3 py-1.5 text-xs">
-                        {r.state === "success" ? (
-                          <span className="text-green-600 dark:text-green-400">成功{r.detail ? ` — ${r.detail}` : ""}</span>
-                        ) : (
-                          <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           )}
         </>

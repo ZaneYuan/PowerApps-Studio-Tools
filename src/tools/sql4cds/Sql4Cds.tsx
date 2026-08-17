@@ -105,26 +105,28 @@ function WriteResultTable({ results, stopped }: { results: Sql4CdsLogEntry[]; st
   const error = results.length - success;
   return (
     <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-      <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-        {stopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
-        共 {results.length} 条，成功 {success}，失败 {error} — 执行日志已自动下载
+      <div className="inline-block min-w-full align-top">
+        <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+          {stopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+          共 {results.length} 条，成功 {success}，失败 {error} — 执行日志已自动下载
+        </div>
+        <table className="w-full text-left text-sm">
+          <tbody>
+            {results.map((r, i) => (
+              <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+                <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
+                <td className="whitespace-nowrap px-3 py-1.5 text-xs">
+                  {r.state === "success" ? (
+                    <span className="text-green-600 dark:text-green-400">成功{r.detail ? ` — ${r.detail}` : ""}</span>
+                  ) : (
+                    <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      <table className="w-full text-left text-sm">
-        <tbody>
-          {results.map((r, i) => (
-            <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-              <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
-              <td className="whitespace-nowrap px-3 py-1.5 text-xs">
-                {r.state === "success" ? (
-                  <span className="text-green-600 dark:text-green-400">成功{r.detail ? ` — ${r.detail}` : ""}</span>
-                ) : (
-                  <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }
@@ -766,33 +768,35 @@ export default function Sql4Cds() {
 
           {rows && (
             <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-              <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-                {rows.length} 行
-              </div>
-              {rows.length > 0 && (
-                <table className="w-full text-left text-sm">
-                  <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
-                    <tr>
-                      {columns.map((c) => (
-                        <th key={c} className="whitespace-nowrap px-3 py-2 font-mono">
-                          {c}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row, i) => (
-                      <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+              <div className="inline-block min-w-full align-top">
+                <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+                  {rows.length} 行
+                </div>
+                {rows.length > 0 && (
+                  <table className="w-full text-left text-sm">
+                    <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+                      <tr>
                         {columns.map((c) => (
-                          <td key={c} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
-                            {typeof row[c] === "object" ? JSON.stringify(row[c]) : String(row[c] ?? "")}
-                          </td>
+                          <th key={c} className="whitespace-nowrap px-3 py-2 font-mono">
+                            {c}
+                          </th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+                    </thead>
+                    <tbody>
+                      {rows.map((row, i) => (
+                        <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+                          {columns.map((c) => (
+                            <td key={c} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
+                              {typeof row[c] === "object" ? JSON.stringify(row[c]) : String(row[c] ?? "")}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
           )}
         </>
@@ -801,31 +805,33 @@ export default function Sql4Cds() {
       {result.kind === "insert" && (
         <>
           <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-            <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-              待插入 {result.rows.length} 行
-            </div>
-            <table className="w-full text-left text-sm">
-              <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
-                <tr>
-                  {result.columns.map((c) => (
-                    <th key={c} className="whitespace-nowrap px-3 py-2 font-mono">
-                      {c}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {result.rows.map((row, i) => (
-                  <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-                    {row.map((node, j) => (
-                      <td key={j} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
-                        {describeLiteral(node)}
-                      </td>
+            <div className="inline-block min-w-full align-top">
+              <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+                待插入 {result.rows.length} 行
+              </div>
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+                  <tr>
+                    {result.columns.map((c) => (
+                      <th key={c} className="whitespace-nowrap px-3 py-2 font-mono">
+                        {c}
+                      </th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {result.rows.map((row, i) => (
+                    <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+                      {row.map((node, j) => (
+                        <td key={j} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
+                          {describeLiteral(node)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -914,25 +920,27 @@ export default function Sql4Cds() {
         return (
           <>
             <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-              <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-                批量执行 {result.statements.length} 条语句
-                {orderLoading && " — 正在分析跨表依赖关系…"}
-                {!orderLoading && orderedBatch?.reordered && " — 已按依赖关系自动排序（下表为实际执行顺序）"}
+              <div className="inline-block min-w-full align-top">
+                <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+                  批量执行 {result.statements.length} 条语句
+                  {orderLoading && " — 正在分析跨表依赖关系…"}
+                  {!orderLoading && orderedBatch?.reordered && " — 已按依赖关系自动排序（下表为实际执行顺序）"}
+                </div>
+                <table className="w-full text-left text-sm">
+                  <tbody>
+                    {orderedList.map((os, i) => (
+                      <tr key={os.originalIndex} className="border-t border-gray-100 dark:border-gray-800">
+                        <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-gray-400">
+                          {i + 1}
+                          {os.originalIndex !== i && <span className="ml-1 text-amber-500">(原第 {os.originalIndex + 1} 条)</span>}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{describeStatement(os.statement)}</td>
+                        {os.rowCycleError && <td className="px-3 py-1.5 text-xs text-red-600 dark:text-red-400">⚠ {os.rowCycleError}</td>}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <table className="w-full text-left text-sm">
-                <tbody>
-                  {orderedList.map((os, i) => (
-                    <tr key={os.originalIndex} className="border-t border-gray-100 dark:border-gray-800">
-                      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-gray-400">
-                        {i + 1}
-                        {os.originalIndex !== i && <span className="ml-1 text-amber-500">(原第 {os.originalIndex + 1} 条)</span>}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{describeStatement(os.statement)}</td>
-                      {os.rowCycleError && <td className="px-3 py-1.5 text-xs text-red-600 dark:text-red-400">⚠ {os.rowCycleError}</td>}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
 
             {blockingCycleError && (

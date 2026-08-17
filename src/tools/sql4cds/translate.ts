@@ -734,12 +734,22 @@ function parseDelete(ast: DeleteAst): ParsedStatement {
   }
 }
 
-function parseOneStatement(ast: { type: string }): ParsedStatement {
+function parseOneStatement(ast: { type?: string }): ParsedStatement {
   if (ast.type === "select") return parseSelect(ast as unknown as SelectAst);
   if (ast.type === "insert") return parseInsert(ast as unknown as InsertAst);
   if (ast.type === "update") return parseUpdate(ast as unknown as UpdateAst);
   if (ast.type === "delete") return parseDelete(ast as unknown as DeleteAst);
-  return { kind: "error", error: `不支持的语句类型 "${ast.type.toUpperCase()}"（只支持 SELECT / INSERT / UPDATE / DELETE）。` };
+  // `ast.type` can legitimately be missing here: T-SQL grammar parses a keyword like DELETE with
+  // no FROM followed by another token as a variable-assignment statement instead (astify returns
+  // `{stmt: {type: "assign", ...}, vars: [...]}`, with no top-level `.type` at all) — confirmed by
+  // running the parser directly on "delete x". Guard instead of calling `.toUpperCase()` on
+  // `undefined`.
+  return {
+    kind: "error",
+    error: ast.type
+      ? `不支持的语句类型 "${ast.type.toUpperCase()}"（只支持 SELECT / INSERT / UPDATE / DELETE）。`
+      : "无法识别这条 SQL 语句，请检查关键字是否完整（例如 DELETE 后面是否缺少 FROM）。",
+  };
 }
 
 export function parseSql(sql: string): ParsedStatement {

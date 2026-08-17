@@ -11,6 +11,19 @@ export interface RelationshipMeta {
  *  for write payloads instead of guessing them from the attribute's display name. */
 const cache = new Map<string, RelationshipMeta[]>();
 
+/** `owner` is an abstract metadata-only type (no `/owners` Web API entity set — querying it 404s
+ *  with "Resource not found for the segment 'owners'"). A ManyToOneRelationships row reported
+ *  against it really resolves to `systemuser` or `team` at runtime, so it's expanded into both
+ *  concrete candidates here, once, for every caller (nav property name is the same either way —
+ *  Dataverse infers the target from the bound URL). */
+function expandOwnerCandidates(rels: RelationshipMeta[]): RelationshipMeta[] {
+  return rels.flatMap((r) =>
+    r.ReferencedEntity.toLowerCase() === "owner"
+      ? (["systemuser", "team"] as const).map((entity) => ({ ...r, ReferencedEntity: entity }))
+      : [r],
+  );
+}
+
 async function loadManyToOne(connectionId: string, entityLogicalName: string): Promise<RelationshipMeta[]> {
   const key = `${connectionId}:${entityLogicalName}`;
   const cached = cache.get(key);
@@ -23,8 +36,9 @@ async function loadManyToOne(connectionId: string, entityLogicalName: string): P
       `EntityDefinitions(LogicalName='${entityLogicalName}')/ManyToOneRelationships` +
       `?$select=ReferencingAttribute,ReferencingEntityNavigationPropertyName,ReferencedEntity`,
   });
-  cache.set(key, res.value);
-  return res.value;
+  const rels = expandOwnerCandidates(res.value);
+  cache.set(key, rels);
+  return rels;
 }
 
 /** Resolves the `{navProp}` to use as `{navProp}@odata.bind` when creating/updating a lookup
