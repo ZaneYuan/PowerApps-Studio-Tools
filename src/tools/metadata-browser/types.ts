@@ -21,6 +21,15 @@ export interface AttributeSummary {
   RequiredLevel?: { Value: string } | null;
   IsCustomAttribute: boolean;
   IsPrimaryId: boolean;
+  Description?: LabelValue | null;
+  /** Non-null on a compound field's own child attributes (e.g. `address1_line1`), naming the
+   *  parent composite attribute — null for everything else. */
+  AttributeOf?: string | null;
+  IsValidForCreate: boolean;
+  IsValidForUpdate: boolean;
+  IsValidForRead: boolean;
+  IsFilterable: boolean;
+  IsSearchable: boolean;
 }
 
 export interface RelationshipSummary {

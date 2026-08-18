@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
-import { fetchOptionSetValuesForType, isOptionSetAttributeType, type OptionSetValue } from "../../native/metadataService";
+import {
+  fetchOptionSetValuesForType,
+  isLookupAttributeType,
+  isOptionSetAttributeType,
+  type OptionSetValue,
+} from "../../native/metadataService";
+import { buildLookupRelationshipMap, type RelationshipMeta } from "../../native/navProperty";
+import ColumnFilterPopover, { type ColumnFilter } from "./ColumnFilterPopover";
 import {
   RELATIONSHIP_COLLECTION,
   TAB_LABELS,
@@ -19,7 +26,10 @@ async function fetchDataverse<T>(connectionId: string, path: string): Promise<T>
 }
 
 function attributeSelect() {
-  return "LogicalName,SchemaName,DisplayName,AttributeType,RequiredLevel,IsCustomAttribute,IsPrimaryId,MetadataId";
+  return (
+    "LogicalName,SchemaName,DisplayName,AttributeType,RequiredLevel,IsCustomAttribute,IsPrimaryId,MetadataId," +
+    "Description,AttributeOf,IsValidForCreate,IsValidForUpdate,IsValidForRead,IsFilterable,IsSearchable"
+  );
 }
 
 function relationshipSelect(tab: Exclude<TabKey, "attributes">) {
@@ -27,6 +37,32 @@ function relationshipSelect(tab: Exclude<TabKey, "attributes">) {
     return "SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,MetadataId";
   }
   return "SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedEntity,ReferencedAttribute,MetadataId";
+}
+
+/** One label/value line in the attribute detail panel — skipped entirely when empty, so callers
+ *  don't need their own conditionals for e.g. an empty Description. */
+function PanelField({ label, value }: { label: string; value: string | null | undefined }) {
+  if (!value) return null;
+  return (
+    <div className="flex items-baseline justify-between gap-3 text-xs">
+      <span className="shrink-0 text-gray-500 dark:text-gray-400">{label}</span>
+      <span className="truncate text-right text-gray-900 dark:text-gray-100">{value}</span>
+    </div>
+  );
+}
+
+function PanelBadge({ on, label }: { on: boolean; label: string }) {
+  return (
+    <span
+      className={`rounded px-1.5 py-0.5 text-[11px] ${
+        on
+          ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+          : "bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-500"
+      }`}
+    >
+      {label}
+    </span>
+  );
 }
 
 export default function MetadataBrowser() {
@@ -53,13 +89,28 @@ export default function MetadataBrowser() {
   // const [expanded, setExpanded] = useState<{ key: string; data: unknown } | null>(null);
   // const [expandLoading, setExpandLoading] = useState<string | null>(null);
 
-  const [optionSetPanel, setOptionSetPanel] = useState<{
+  // Clicking an attribute row opens a right-side detail panel for that field (basic metadata for
+  // every type, plus a type-specific block below it — see the render section). `optionValues`
+  // only ever gets populated for Picklist/State/Status/MultiSelectPicklist rows (fetched lazily,
+  // same as before this was folded into the generic row-click panel).
+  const [attributePanel, setAttributePanel] = useState<AttributeSummary | null>(null);
+  const [optionValues, setOptionValues] = useState<{
     attributeLogicalName: string;
-    displayName: string;
     loading: boolean;
     error: string | null;
     options: OptionSetValue[] | null;
   } | null>(null);
+
+  // Lookup/Customer/Owner attributes don't carry their target entity on AttributeMetadata itself —
+  // it only shows up on ManyToOneRelationships. Resolved once per entity (via the same cached
+  // buildLookupRelationshipMap FetchXML Builder's LookupPickerModal already uses) as soon as the
+  // Attributes tab is viewed, so both the "类型" column and the detail panel can read it
+  // synchronously off this map instead of each firing their own request.
+  const [lookupTargetsByEntity, setLookupTargetsByEntity] = useState<Record<string, Map<string, RelationshipMeta[]>>>({});
+
+  // "类型" column's Filter by state — keyed by entity like rowFilterByEntity above (not by tab:
+  // there's only one filterable column today, and it only applies to the attributes tab anyway).
+  const [typeFilterByEntity, setTypeFilterByEntity] = useState<Record<string, ColumnFilter | null>>({});
 
   const [entityListWidth, setEntityListWidth] = useState(288);
 
@@ -89,6 +140,8 @@ export default function MetadataBrowser() {
     setActiveLogicalName(null);
     setActiveTabByEntity({});
     setRowFilterByEntity({});
+    setTypeFilterByEntity({});
+    setLookupTargetsByEntity({});
     fetchDataverse<{ value: EntitySummary[] }>(
       activeConnectionId,
       // EntityDefinitions doesn't support $orderby — sort client-side instead.
@@ -172,27 +225,87 @@ export default function MetadataBrowser() {
     setRowFilterByEntity((prev) => ({ ...prev, [activeLogicalName]: value }));
   }
 
-  // The panel shows one attribute's options for the currently open entity — stale once either
-  // changes, so close it instead of leaving it displaying the wrong field's data.
+  const typeFilter = (activeLogicalName && typeFilterByEntity[activeLogicalName]) || null;
+
+  function applyTypeFilter(filter: ColumnFilter) {
+    if (!activeLogicalName) return;
+    setTypeFilterByEntity((prev) => ({ ...prev, [activeLogicalName]: filter }));
+  }
+
+  function clearTypeFilter() {
+    if (!activeLogicalName) return;
+    setTypeFilterByEntity((prev) => ({ ...prev, [activeLogicalName]: null }));
+  }
+
+  // The detail panel shows one attribute's metadata for the currently open entity — stale once
+  // either changes, so close it instead of leaving it displaying the wrong field's data.
   useEffect(() => {
-    setOptionSetPanel(null);
+    setAttributePanel(null);
   }, [activeLogicalName, activeTab]);
 
-  function openOptionSetPanel(row: AttributeSummary) {
-    if (!activeConnectionId || !selectedEntity) return;
-    const displayName = labelOf(row.DisplayName, row.LogicalName);
-    setOptionSetPanel({ attributeLogicalName: row.LogicalName, displayName, loading: true, error: null, options: null });
+  // Clicking a row while dragging a text selection still fires a trailing `click` on mouseup —
+  // this is what stops that click from also popping the detail panel open, which would fight
+  // with the 8/17 change (MetadataBrowser: ... removed per-cell click-to-copy in favor of normal
+  // text selection) that made cell text drag-selectable in the first place.
+  function handleRowClick(row: AttributeSummary) {
+    if (window.getSelection()?.toString()) return;
+    setAttributePanel(row);
+  }
+
+  // Only Picklist/State/Status/MultiSelectPicklist rows need this extra fetch — everything else
+  // the panel shows (base metadata, Lookup targets) is already in hand synchronously.
+  useEffect(() => {
+    setOptionValues(null);
+    if (!attributePanel || !activeConnectionId || !selectedEntity || !isOptionSetAttributeType(attributePanel.AttributeType)) {
+      return;
+    }
+    const row = attributePanel;
+    let cancelled = false;
+    setOptionValues({ attributeLogicalName: row.LogicalName, loading: true, error: null, options: null });
     fetchOptionSetValuesForType(activeConnectionId, selectedEntity.LogicalName, row.LogicalName, row.AttributeType)
       .then((options) => {
-        setOptionSetPanel((p) => (p && p.attributeLogicalName === row.LogicalName ? { ...p, options, loading: false } : p));
+        if (!cancelled) setOptionValues((p) => (p && p.attributeLogicalName === row.LogicalName ? { ...p, options, loading: false } : p));
       })
       .catch((err) => {
-        setOptionSetPanel((p) =>
-          p && p.attributeLogicalName === row.LogicalName
-            ? { ...p, error: err instanceof Error ? err.message : String(err), loading: false }
-            : p,
-        );
+        if (!cancelled) {
+          setOptionValues((p) =>
+            p && p.attributeLogicalName === row.LogicalName
+              ? { ...p, error: err instanceof Error ? err.message : String(err), loading: false }
+              : p,
+          );
+        }
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [attributePanel, activeConnectionId, selectedEntity]);
+
+  // Resolves Lookup/Customer/Owner target entities for the whole entity at once (not per-row) as
+  // soon as the Attributes tab is viewed — both the "类型" column and the detail panel read off
+  // this map synchronously. buildLookupRelationshipMap has its own connection+entity cache, so
+  // switching back to an already-visited entity is instant.
+  useEffect(() => {
+    if (!activeConnectionId || !selectedEntity || activeTab !== "attributes" || lookupTargetsByEntity[selectedEntity.LogicalName]) {
+      return;
+    }
+    let cancelled = false;
+    const entityLogicalName = selectedEntity.LogicalName;
+    buildLookupRelationshipMap(activeConnectionId, entityLogicalName).then((map) => {
+      if (!cancelled) setLookupTargetsByEntity((prev) => ({ ...prev, [entityLogicalName]: map }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConnectionId, selectedEntity, activeTab, lookupTargetsByEntity]);
+
+  /** "Lookup" / "Owner — systemuser / team" for the "类型" column — falls back to the bare type
+   *  name until the entity's lookup relationship map (above) has loaded. */
+  function typeCellText(row: AttributeSummary): string {
+    if (!isLookupAttributeType(row.AttributeType) || !selectedEntity) return row.AttributeType;
+    const rels = lookupTargetsByEntity[selectedEntity.LogicalName]?.get(row.LogicalName.toLowerCase());
+    if (!rels || rels.length === 0) return row.AttributeType;
+    const targets = [...new Set(rels.map((r) => r.ReferencedEntity))].sort();
+    return `${row.AttributeType} — ${targets.join(" / ")}`;
   }
 
   // async function toggleExpand(rowKey: string, metadataId: string) {
@@ -215,12 +328,28 @@ export default function MetadataBrowser() {
   // }
 
   const currentRows = selectedEntity ? (tabCache[`${selectedEntity.LogicalName}:${activeTab}`] ?? null) : null;
+
+  // Distinct values for the "类型" column's Filter by popover — read off the full unfiltered
+  // row set (like D365's own choice-column filter does), not the already-filtered rows, so the
+  // dropdown doesn't shrink as soon as a filter narrows the grid.
+  const typeDistinctValues = useMemo(() => {
+    if (!currentRows || activeTab !== "attributes") return [];
+    return [...new Set((currentRows as AttributeSummary[]).map((r) => r.AttributeType))].sort();
+  }, [currentRows, activeTab]);
+
   const filteredRows = useMemo(() => {
     if (!currentRows) return null;
+    let rows = currentRows;
     const q = rowFilter.trim().toLowerCase();
-    if (!q) return currentRows;
-    return currentRows.filter((r) => JSON.stringify(r).toLowerCase().includes(q));
-  }, [currentRows, rowFilter]);
+    if (q) rows = rows.filter((r) => JSON.stringify(r).toLowerCase().includes(q));
+    if (activeTab === "attributes" && typeFilter?.value) {
+      rows = rows.filter((r) => {
+        const type = (r as AttributeSummary).AttributeType;
+        return typeFilter.operator === "equals" ? type === typeFilter.value : type.toLowerCase().includes(typeFilter.value.toLowerCase());
+      });
+    }
+    return rows;
+  }, [currentRows, rowFilter, activeTab, typeFilter]);
 
   if (!isNativeBridgeAvailable()) {
     return (
@@ -370,7 +499,16 @@ export default function MetadataBrowser() {
                       <tr>
                         <th className="px-3 py-2">Logical Name</th>
                         <th className="px-3 py-2">显示名</th>
-                        <th className="px-3 py-2">类型</th>
+                        <th className="px-3 py-2">
+                          类型
+                          <ColumnFilterPopover
+                            label="类型"
+                            distinctValues={typeDistinctValues}
+                            filter={typeFilter}
+                            onApply={applyTypeFilter}
+                            onClear={clearTypeFilter}
+                          />
+                        </th>
                         <th className="px-3 py-2">必填</th>
                         <th className="px-3 py-2">自定义</th>
                       </tr>
@@ -391,11 +529,16 @@ export default function MetadataBrowser() {
                           : activeTab === "manyToMany"
                             ? `${(row as RelationshipSummary).Entity1LogicalName} ↔ ${(row as RelationshipSummary).Entity2LogicalName}`
                             : `${(row as RelationshipSummary).ReferencingEntity}.${(row as RelationshipSummary).ReferencingAttribute} → ${(row as RelationshipSummary).ReferencedEntity}`;
-                      const attributeType = activeTab === "attributes" ? (row as AttributeSummary).AttributeType : null;
-                      const isOptionSet = attributeType !== null && isOptionSetAttributeType(attributeType);
+                      const isAttributeRow = activeTab === "attributes";
                       return (
-                        <tr key={rowKey} className="border-t border-gray-100 dark:border-gray-800">
-                          {activeTab === "attributes" ? (
+                        <tr
+                          key={rowKey}
+                          onClick={isAttributeRow ? () => handleRowClick(row as AttributeSummary) : undefined}
+                          className={`border-t border-gray-100 dark:border-gray-800 ${
+                            isAttributeRow ? "cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-900/40" : ""
+                          }`}
+                        >
+                          {isAttributeRow ? (
                             <>
                               <td className="px-3 py-1.5 font-mono text-xs text-gray-900 dark:text-gray-100">
                                 {(row as AttributeSummary).LogicalName}
@@ -408,19 +551,7 @@ export default function MetadataBrowser() {
                               <td className="px-3 py-1.5 text-gray-900 dark:text-gray-100">
                                 {labelOf((row as AttributeSummary).DisplayName, "")}
                               </td>
-                              <td className="px-3 py-1.5 text-xs text-gray-500">
-                                {isOptionSet ? (
-                                  <button
-                                    onClick={() => openOptionSetPanel(row as AttributeSummary)}
-                                    className="rounded border border-blue-300 px-1.5 py-0.5 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
-                                    title="查看所有选项的 label / value"
-                                  >
-                                    {attributeType} — 查看选项
-                                  </button>
-                                ) : (
-                                  attributeType
-                                )}
-                              </td>
+                              <td className="px-3 py-1.5 text-xs text-gray-500">{typeCellText(row as AttributeSummary)}</td>
                               <td className="px-3 py-1.5 text-xs text-gray-500">
                                 {(row as AttributeSummary).RequiredLevel?.Value ?? ""}
                               </td>
@@ -447,43 +578,94 @@ export default function MetadataBrowser() {
         )}
       </div>
 
-      {optionSetPanel && (
-        <div className="fixed inset-y-0 right-0 z-50 flex w-96 max-w-full flex-col border-l border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-950">
+      {attributePanel && (
+        <div className="fixed inset-y-0 right-0 z-40 flex w-96 max-w-full flex-col border-l border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-950">
           <div className="flex items-center justify-between border-b border-gray-200 p-3 dark:border-gray-800">
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">{optionSetPanel.displayName}</div>
-              <div className="truncate font-mono text-xs text-gray-400">{optionSetPanel.attributeLogicalName}</div>
+              <div className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">
+                {labelOf(attributePanel.DisplayName, attributePanel.LogicalName)}
+              </div>
+              <div className="truncate font-mono text-xs text-gray-400">{attributePanel.LogicalName}</div>
             </div>
-            <button
-              onClick={() => setOptionSetPanel(null)}
-              className="shrink-0 text-xs text-gray-400 hover:text-red-500"
-            >
+            <button onClick={() => setAttributePanel(null)} className="shrink-0 text-xs text-gray-400 hover:text-red-500">
               ✕ 关闭
             </button>
           </div>
+
           <div className="flex-1 overflow-y-auto p-3">
-            {optionSetPanel.loading && <p className="text-xs text-gray-400">加载选项中…</p>}
-            {optionSetPanel.error && <p className="text-sm text-red-600 dark:text-red-400">{optionSetPanel.error}</p>}
-            {optionSetPanel.options && optionSetPanel.options.length === 0 && (
-              <p className="text-xs text-gray-400">这个字段没有选项。</p>
-            )}
-            {optionSetPanel.options && optionSetPanel.options.length > 0 && (
-              <table className="w-full text-left text-sm">
-                <thead className="text-xs text-gray-500 dark:text-gray-400">
-                  <tr>
-                    <th className="px-2 py-1.5">Value</th>
-                    <th className="px-2 py-1.5">Label</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {optionSetPanel.options.map((o) => (
-                    <tr key={o.value} className="border-t border-gray-100 dark:border-gray-800">
-                      <td className="px-2 py-1.5 font-mono text-xs text-gray-900 dark:text-gray-100">{o.value}</td>
-                      <td className="px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100">{o.label}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="mb-3 space-y-1">
+              <PanelField label="Schema Name" value={attributePanel.SchemaName} />
+              <PanelField label="类型" value={attributePanel.AttributeType} />
+              <PanelField label="必填级别" value={attributePanel.RequiredLevel?.Value ?? "None"} />
+              <PanelField label="自定义字段" value={attributePanel.IsCustomAttribute ? "是" : "否"} />
+              <PanelField label="主键" value={attributePanel.IsPrimaryId ? "是" : "否"} />
+              {attributePanel.AttributeOf && <PanelField label="复合字段归属" value={`"${attributePanel.AttributeOf}" 的子字段`} />}
+              <PanelField label="Description" value={labelOf(attributePanel.Description, "")} />
+            </div>
+
+            <div className="mb-4 flex flex-wrap gap-1.5">
+              <PanelBadge on={attributePanel.IsValidForCreate} label="可创建" />
+              <PanelBadge on={attributePanel.IsValidForUpdate} label="可更新" />
+              <PanelBadge on={attributePanel.IsValidForRead} label="可读" />
+              <PanelBadge on={attributePanel.IsFilterable} label="可筛选（高级查找）" />
+              <PanelBadge on={attributePanel.IsSearchable} label="快速查找可搜索" />
+            </div>
+
+            {isLookupAttributeType(attributePanel.AttributeType) &&
+              selectedEntity &&
+              (() => {
+                const map = lookupTargetsByEntity[selectedEntity.LogicalName];
+                const targets = map ? [...new Set((map.get(attributePanel.LogicalName.toLowerCase()) ?? []).map((r) => r.ReferencedEntity))].sort() : null;
+                return (
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">目标表</div>
+                    {!map && <p className="text-xs text-gray-400">解析查找关系元数据中…</p>}
+                    {map && targets && targets.length === 0 && (
+                      <p className="text-xs text-gray-400">没有找到对应的查找关系元数据。</p>
+                    )}
+                    {targets && targets.length > 0 && (
+                      <ul className="space-y-1">
+                        {targets.map((t) => (
+                          <li
+                            key={t}
+                            className="rounded bg-gray-100 px-2 py-1 font-mono text-xs text-gray-800 dark:bg-gray-800 dark:text-gray-200"
+                          >
+                            {t}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })()}
+
+            {isOptionSetAttributeType(attributePanel.AttributeType) && (
+              <div>
+                <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">选项</div>
+                {optionValues?.loading && <p className="text-xs text-gray-400">加载选项中…</p>}
+                {optionValues?.error && <p className="text-sm text-red-600 dark:text-red-400">{optionValues.error}</p>}
+                {optionValues?.options && optionValues.options.length === 0 && (
+                  <p className="text-xs text-gray-400">这个字段没有选项。</p>
+                )}
+                {optionValues?.options && optionValues.options.length > 0 && (
+                  <table className="w-full text-left text-sm">
+                    <thead className="text-xs text-gray-500 dark:text-gray-400">
+                      <tr>
+                        <th className="px-2 py-1.5">Value</th>
+                        <th className="px-2 py-1.5">Label</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {optionValues.options.map((o) => (
+                        <tr key={o.value} className="border-t border-gray-100 dark:border-gray-800">
+                          <td className="px-2 py-1.5 font-mono text-xs text-gray-900 dark:text-gray-100">{o.value}</td>
+                          <td className="px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100">{o.label}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             )}
           </div>
         </div>

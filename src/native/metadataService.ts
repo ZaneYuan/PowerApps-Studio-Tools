@@ -255,6 +255,17 @@ const OPTIONSET_ATTRIBUTE_CASTS: Record<string, string> = {
   MultiSelectPicklist: "MultiSelectPicklistAttributeMetadata",
 };
 
+/** A polymorphic lookup (customerid -> account/contact, ownerid/createdby/modifiedby ->
+ *  systemuser/team) reports as "Customer"/"Owner" in attribute metadata, not "Lookup" —
+ *  checking only "Lookup" would miss these very common fields. Mirrors the local `LOOKUP_TYPES`
+ *  set in fetchxml-builder/ConditionValueInput.tsx; kept here too since Metadata Browser needs
+ *  the same check and this module is where the sibling `isOptionSetAttributeType` already lives. */
+const LOOKUP_ATTRIBUTE_TYPES = new Set(["Lookup", "Customer", "Owner"]);
+
+export function isLookupAttributeType(attributeType: string): boolean {
+  return LOOKUP_ATTRIBUTE_TYPES.has(attributeType);
+}
+
 export function isOptionSetAttributeType(attributeType: string): boolean {
   return attributeType in OPTIONSET_ATTRIBUTE_CASTS;
 }
