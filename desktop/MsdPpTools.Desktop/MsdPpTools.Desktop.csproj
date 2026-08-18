@@ -7,6 +7,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <!-- Self-contained single-file publish: the target machine only needs these bits (no
+         separately-installed .NET desktop runtime). Only affects `dotnet publish`/F5-debug
+         output layout, not correctness — WebView2's own runtime is deliberately NOT bundled
+         here (relies on the system Evergreen WebView2 Runtime, which Win11 ships with and
+         Win10 gets via Edge/Windows Update; see MainWindow.xaml.cs). Trimming is deliberately
+         NOT enabled — this app leans on reflection (MetadataLoadContext loading
+         Microsoft.Xrm.Sdk.dll to resolve IPlugin types, MSAL) that trimming routinely breaks
+         in ways that are hard to diagnose after the fact. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishReadyToRun>true</PublishReadyToRun>
     <!-- Output exe / Windows Explorer "Details" metadata only — the C# namespace, project
          folder, and .csproj/.slnx file names deliberately stay MsdPpTools(.Desktop) to avoid
          a much larger, riskier rename across every path reference. -->

@@ -28,7 +28,7 @@ npm run dev
 F5启动
 
 
-## 打包桌面版（可直接双击运行，不用挂着 `npm run dev`）
+## 打包桌面版（自包含单文件，下载即用）
 
 在项目根目录运行：
 
@@ -36,7 +36,14 @@ F5启动
 npm install
 ```
 
-然后双击根目录下的 `publish.bat`，运行结束后双击 `publish\MsdPpTools.Desktop\PowerAppsStudioTools.exe` 即可，不需要 Node/Vite 在后台运行（还是需要机器上已装 .NET 10 桌面运行时——WPF 项目默认发布是框架依赖，不是自包含）。改了前端或桌面壳代码后要重新跑一遍才会反映到打包产物里。
+然后双击根目录下的 `publish.bat`。运行结束后会得到两样东西：
+
+- `publish\MsdPpTools.Desktop\PowerAppsStudioTools.exe` —— 本机双击直接运行，不需要 Node/Vite 在后台挂着。
+- `publish\PowerAppsStudioTools-<版本号>.zip` —— **自包含单文件**打包（`.csproj` 里的 `RuntimeIdentifier`/`SelfContained`/`PublishSingleFile`），目标机器不需要预装 .NET，解压后双击 exe 即可用（仍需要系统自带的 WebView2 运行时——Win11 自带，Win10 绝大多数机器也通过 Edge/Windows Update 装过了）。这个 zip 就是要发给其他用户的发行包：打个 git tag（如 `v1.0.0`）后上传到 [GitHub Release](https://github.com/ZaneYuan/PowerApps-Studio-Tools/releases) 页面即可。
+
+改了前端或桌面壳代码后要重新跑一遍 `publish.bat` 才会反映到打包产物里。
+
+**自动更新**：Release 编译的 exe 每次启动后会在后台（不阻塞窗口打开）检查一次更新——开发机上检测到本地 git 仓库有新 commit 会自动跑 `publish.bat` 重新编译；面向普通用户的自包含发行包则检查 GitHub 最新 Release，有新版本会弹窗询问是否更新，同意才会下载替换并重启（不会静默强制重启，避免正在使用中的内容丢失）。两种更新检查失败（没网络、连不上 GitHub 等）都不会影响应用正常打开。
 
 ## 目录结构
 
