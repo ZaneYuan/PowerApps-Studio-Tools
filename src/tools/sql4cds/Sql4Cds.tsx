@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
+import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
-import { fetchAttributes, fetchEntityList, fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
+import { fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
-import { guessEditingTable, literalToJsValue, parseSql, type InsertResult, type MutateResult, type SqlNode } from "./translate";
+import { literalToJsValue, parseSql, type InsertResult, type MutateResult, type SqlNode } from "./translate";
 import {
   deleteRow,
   insertIntersectRow,
@@ -152,58 +153,7 @@ export default function Sql4Cds() {
   const entitySetMeta = useEntitySetName(activeConnectionId, entityLogicalName ?? "");
   const entitySet = entitySetMeta.entitySetName || entitySetGuess || "";
 
-  // --- SQL editor autocomplete schema: all entity logical names (for table-name completion,
-  // fetched once per connection) plus the current statement's table's columns (fetched lazily as
-  // the FROM/INTO/UPDATE table becomes known) — both via metadataService's existing caches, so
-  // switching between tables already visited in this session is instant. Uses guessEditingTable
-  // (lenient re-parse), not entityLogicalName (only set once the *whole* statement translates
-  // successfully) — otherwise column completion would drop out the instant the user starts typing
-  // a WHERE/SET value, which is exactly when they want it. ---
-  const editingTable = useMemo(() => guessEditingTable(sql), [sql]);
-  const [editorTables, setEditorTables] = useState<string[]>([]);
-  const [editorColumns, setEditorColumns] = useState<Record<string, string[]>>({});
-
-  useEffect(() => {
-    if (!activeConnectionId) {
-      setEditorTables([]);
-      return;
-    }
-    let cancelled = false;
-    fetchEntityList(activeConnectionId)
-      .then((names) => {
-        if (!cancelled) setEditorTables(names);
-      })
-      .catch(() => {
-        if (!cancelled) setEditorTables([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeConnectionId]);
-
-  useEffect(() => {
-    if (!activeConnectionId || !editingTable || editorColumns[editingTable]) return;
-    let cancelled = false;
-    fetchAttributes(activeConnectionId, editingTable)
-      .then((attrs) => {
-        if (!cancelled) {
-          setEditorColumns((prev) => ({ ...prev, [editingTable]: attrs.map((a) => a.logicalName) }));
-        }
-      })
-      .catch(() => {
-        /* autocomplete is best-effort — just falls back to the bare table name with no columns */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeConnectionId, editingTable, editorColumns]);
-
-  const editorSchema = useMemo(() => {
-    const schema: Record<string, string[]> = {};
-    for (const table of editorTables) schema[table] = editorColumns[table] ?? [];
-    if (editingTable && !schema[editingTable]) schema[editingTable] = editorColumns[editingTable] ?? [];
-    return schema;
-  }, [editorTables, editorColumns, editingTable]);
+  const { schema: editorSchema, defaultTable: editingTable } = useSqlEditorSchema(activeConnectionId, sql);
 
   const path = useMemo(() => {
     if (!entitySet) return "";

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
+import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
 import {
   fetchAttributes,
@@ -93,6 +94,7 @@ export default function DataMigration() {
   const { activeConnectionId, connections } = useActiveConnection();
 
   const [sql, setSql] = useState("");
+  const { schema: editorSchema, defaultTable: editingTable } = useSqlEditorSchema(activeConnectionId, sql);
   const [queryRunning, setQueryRunning] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
   const [fileNote, setFileNote] = useState<string | null>(null);
@@ -415,7 +417,13 @@ export default function DataMigration() {
             填充示例
           </button>
         </div>
-        <SqlEditor value={sql} onChange={setSql} schema={{}} placeholder="SELECT name FROM account WHERE statecode = 0" />
+        <SqlEditor
+          value={sql}
+          onChange={setSql}
+          schema={editorSchema}
+          defaultTable={editingTable}
+          placeholder="SELECT name FROM account WHERE statecode = 0"
+        />
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={handleRunQuery}
