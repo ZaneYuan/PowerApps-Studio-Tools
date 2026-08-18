@@ -1,6 +1,7 @@
 import { useTabManager } from "../native/tabs";
 import { getToolById } from "../tools/registry";
 import Home from "../pages/Home";
+import ErrorBoundary from "../shared/ErrorBoundary";
 import Sidebar from "./Sidebar";
 import TabBar from "./TabBar";
 import ToolPanel from "./ToolPanel";
@@ -24,7 +25,9 @@ export default function Layout() {
             if (!tool) return null;
             return (
               <div key={tab.tabKey} style={{ display: activeTabKey === tab.tabKey ? "block" : "none" }}>
-                <ToolPanel tool={tool} tabKey={tab.tabKey} connectionId={tab.connectionId} />
+                <ErrorBoundary label={tool.name}>
+                  <ToolPanel tool={tool} tabKey={tab.tabKey} connectionId={tab.connectionId} />
+                </ErrorBoundary>
               </div>
             );
           })}
