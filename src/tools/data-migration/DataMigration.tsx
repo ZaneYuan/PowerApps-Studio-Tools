@@ -2,7 +2,14 @@ import { useRef, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { downloadTextFile } from "../../native/download";
-import { fetchAttributes, fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
+import {
+  fetchAttributes,
+  fetchDefaultViewColumnOrder,
+  fetchEntityMeta,
+  fetchManyToManyInfo,
+  isSystemAuditField,
+  sortColumnsForDisplay,
+} from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { literalToJsValue, parseSql, type SelectComplexResult, type SelectSimpleResult } from "../sql4cds/translate";
 import { insertIntersectRow, resolveIntersectRowValues, updateRow } from "../sql4cds/writeOps";
@@ -59,14 +66,27 @@ function unwrapRow(row: Record<string, unknown>): Record<string, unknown> {
   return unwrapped;
 }
 
+/** Column order/default-checked state: primary key first, then the entity's default-view columns
+ *  in that view's own order, then everything else alphabetically (`sortColumnsForDisplay`) —
+ *  system/audit columns (createdon, ownerid, statecode, ...) default unchecked since a migrated
+ *  row should get its own from the server, not carry the source row's (`isSystemAuditField`). */
 async function buildColumns(
   connectionId: string,
   entityLogicalName: string,
+  primaryIdAttribute: string,
   columnNames: string[],
 ): Promise<ImportColumn[]> {
-  const attrs = await fetchAttributes(connectionId, entityLogicalName);
+  const [attrs, viewOrder] = await Promise.all([
+    fetchAttributes(connectionId, entityLogicalName),
+    fetchDefaultViewColumnOrder(connectionId, entityLogicalName),
+  ]);
   const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
-  return columnNames.map((name) => ({ key: name, attributeType: typeByName.get(name.toLowerCase()) ?? "String", checked: true }));
+  const ordered = sortColumnsForDisplay(columnNames, primaryIdAttribute, viewOrder);
+  return ordered.map((name) => ({
+    key: name,
+    attributeType: typeByName.get(name.toLowerCase()) ?? "String",
+    checked: !isSystemAuditField(name),
+  }));
 }
 
 export default function DataMigration() {
@@ -124,7 +144,7 @@ export default function DataMigration() {
         });
         const unwrapped = res.value.map(unwrapRow);
         const columnNames = unwrapped.length > 0 ? Object.keys(unwrapped[0]) : parsed.kind === "select-simple" && parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
-        const columns = await buildColumns(activeConnectionId, parsed.entityLogicalName, columnNames);
+        const columns = await buildColumns(activeConnectionId, parsed.entityLogicalName, meta.primaryIdAttribute, columnNames);
         const rows: ImportRow[] = unwrapped.map((r) => ({
           id: String(r[meta.primaryIdAttribute]),
           values: r,
@@ -195,7 +215,7 @@ export default function DataMigration() {
           fetchEntityMeta(activeConnectionId, entityLogicalName),
           fetchManyToManyInfo(activeConnectionId, entityLogicalName),
         ]);
-        const columns = await buildColumns(activeConnectionId, entityLogicalName, Array.from(group.columns));
+        const columns = await buildColumns(activeConnectionId, entityLogicalName, meta.primaryIdAttribute, Array.from(group.columns));
         const rows: ImportRow[] = group.rows.map((r) => ({ id: r.pkValue, values: r.values, checked: true }));
         newTables.push({
           tabId: nextTabId("sql", entityLogicalName),

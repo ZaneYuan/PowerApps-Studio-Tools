@@ -2,7 +2,14 @@ import { useRef, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { downloadTextFile } from "../../native/download";
-import { fetchAttributes, fetchEntityMeta, fetchOptionSetValues } from "../../native/metadataService";
+import {
+  fetchAttributes,
+  fetchDefaultViewColumnOrder,
+  fetchEntityMeta,
+  fetchOptionSetValues,
+  isSystemAuditField,
+  sortColumnsForDisplay,
+} from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { parseSql, type SelectComplexResult, type SelectSimpleResult } from "../sql4cds/translate";
 import { insertRow } from "../sql4cds/writeOps";
@@ -20,6 +27,21 @@ function buildSelectPath(result: SelectSimpleResult | SelectComplexResult, entit
   if (result.orderby) parts.push(`$orderby=${result.orderby}`);
   if (result.top) parts.push(`$top=${result.top}`);
   return parts.length ? `${entitySet}?${parts.join("&")}` : entitySet;
+}
+
+/** Keeps the SQL box's SELECT column list in sync with the checkbox grid instead of leaving a
+ *  stale `*` (or a stale explicit list) once columns get checked/unchecked — text-replaces just
+ *  the column list between `SELECT [TOP n]` and `FROM`, leaving WHERE/ORDER BY/casing/whitespace
+ *  untouched, rather than re-serializing a full parsed statement back to SQL (translate.ts has no
+ *  such serializer, and doesn't need one just for this). No-ops (returns the input unchanged) when
+ *  there are no checked columns — an empty SELECT list isn't valid SQL, and the user still needs
+ *  to see/fix the query rather than have it silently mangled. Only ever called on a query that
+ *  already passed handleRunQuery's select-simple-only check, so the shape is always exactly
+ *  `SELECT [TOP n] <cols> FROM ...`. */
+function replaceSelectColumns(sqlText: string, columnNames: string[]): string {
+  if (columnNames.length === 0) return sqlText;
+  const columnList = columnNames.join(", ");
+  return sqlText.replace(/^(\s*SELECT\s+(?:TOP\s+\d+\s+)?)([\s\S]*?)(\s+FROM\s)/i, (_m, pre: string, _cols: string, post: string) => `${pre}${columnList}${post}`);
 }
 
 /** Dataverse returns a Lookup column as `_logicalname_value` (with `@...` annotations alongside)
@@ -88,28 +110,36 @@ export default function DataCopy() {
         path,
       });
       const unwrapped = res.value.map(unwrapRow);
-      const columnNames =
+      const rawColumnNames =
         unwrapped.length > 0 ? Object.keys(unwrapped[0]) : parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
 
-      const attrs = await fetchAttributes(activeConnectionId, parsed.entityLogicalName);
+      const [attrs, viewOrder] = await Promise.all([
+        fetchAttributes(activeConnectionId, parsed.entityLogicalName),
+        fetchDefaultViewColumnOrder(activeConnectionId, parsed.entityLogicalName),
+      ]);
       const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
+      // Primary key first, then default-view order, then alphabetical — same ordering Data
+      // Migration uses. System/audit columns (createdon, ownerid, statecode, ...) default
+      // unchecked: a copy should get its own from the server, not the source row's.
+      const columnNames = sortColumnsForDisplay(rawColumnNames, meta.primaryIdAttribute, viewOrder);
 
       const newColumns: GridColumn[] = [];
       for (const name of columnNames) {
         const attrType = typeByName.get(name.toLowerCase());
+        const checked = !isSystemAuditField(name);
         if (attrType === "String" || attrType === "Memo") {
-          newColumns.push({ key: name, checked: true, editable: true, editKind: "text" });
+          newColumns.push({ key: name, checked, editable: true, editKind: "text" });
         } else if (attrType === "Picklist") {
           const options = await fetchOptionSetValues(activeConnectionId, parsed.entityLogicalName, name);
           newColumns.push({
             key: name,
-            checked: true,
+            checked,
             editable: true,
             editKind: "select",
             options: options.map((o) => ({ value: String(o.value), label: o.label })),
           });
         } else {
-          newColumns.push({ key: name, checked: true });
+          newColumns.push({ key: name, checked });
         }
       }
       const newRows: GridRow[] = unwrapped.map((r) => ({ id: String(r[meta.primaryIdAttribute]), checked: true, values: r }));
@@ -119,11 +149,23 @@ export default function DataCopy() {
       setPrimaryIdAttribute(meta.primaryIdAttribute);
       setColumns(newColumns);
       setRows(newRows);
+      // Even a `SELECT *` should read back as the actual (now-default) checked column list once
+      // it's run, not stay `*` — same sync `handleColumnsChange` below keeps up on every toggle.
+      const checkedNames = newColumns.filter((c) => c.checked).map((c) => c.key);
+      setSql((prev) => replaceSelectColumns(prev, checkedNames));
     } catch (err) {
       setQueryError(err instanceof Error ? err.message : String(err));
     } finally {
       setQueryRunning(false);
     }
+  }
+
+  /** Keeps the SQL box's SELECT list synced to whichever columns are checked right now — every
+   *  checkbox toggle, not just the initial query run (see handleRunQuery's own sync for that). */
+  function handleColumnsChange(newColumns: GridColumn[]) {
+    setColumns(newColumns);
+    const checkedNames = newColumns.filter((c) => c.checked).map((c) => c.key);
+    setSql((prev) => replaceSelectColumns(prev, checkedNames));
   }
 
   function handleEditCell(rowId: string, columnKey: string, value: string) {
@@ -249,7 +291,7 @@ export default function DataCopy() {
             columns={columns}
             rows={rows}
             columnsLabel="要复制的列（勾选，文本/选项集字段可直接编辑）"
-            onColumnsChange={setColumns}
+            onColumnsChange={handleColumnsChange}
             onRowsChange={setRows}
             onEditCell={handleEditCell}
           />

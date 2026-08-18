@@ -85,6 +85,7 @@ export function clearEntityMetaCache(): void {
   entityListCache.clear();
   manyToManyCache.clear();
   optionSetCache.clear();
+  defaultViewOrderCache.clear();
 }
 
 /** Cached like the rest of this module (`null` is a valid cached value — "confirmed not an
@@ -166,6 +167,104 @@ export function fetchEntityList(connectionId: string): Promise<string[]> {
   entityListCache.set(connectionId, promise);
   promise.catch(() => entityListCache.delete(connectionId));
   return promise;
+}
+
+/** The standard audit/framework columns Dataverse adds to (almost) every entity automatically —
+ *  never something a user actually wants to bulk-copy or migrate 1:1 onto a new record (a copy
+ *  should get its own createdon/modifiedby/etc. from the server, not inherit the source row's).
+ *  Fixed, well-known logical names (part of Dataverse's base entity contract, not something an
+ *  org can rename) — checked as a name set rather than derived from any metadata flag because
+ *  there isn't one: ordinary out-of-box fields (e.g. account.name) are just as much
+ *  `IsCustomAttribute: false` as these are. Used by Data Copy / Data Migration to default these
+ *  columns unchecked instead of matching every other column. */
+const SYSTEM_AUDIT_FIELDS = new Set([
+  "createdon",
+  "createdby",
+  "createdonbehalfby",
+  "modifiedon",
+  "modifiedby",
+  "modifiedonbehalfby",
+  "overriddencreatedon",
+  "organizationid",
+  "importsequencenumber",
+  "timezoneruleversionnumber",
+  "utcconversiontimezonecode",
+  "versionnumber",
+  "statecode",
+  "statuscode",
+  "ownerid",
+  "owninguser",
+  "owningteam",
+  "owningbusinessunit",
+]);
+
+export function isSystemAuditField(logicalName: string): boolean {
+  return SYSTEM_AUDIT_FIELDS.has(logicalName.toLowerCase());
+}
+
+/** An entity's default public view column order (`querytype eq 0 and isdefault eq true` — the
+ *  one that actually shows up as the grid view in Dataverse's own UI, confirmed against a live
+ *  org), parsed from its `layoutxml`'s `<cell name="...">` sequence. Skips linked-entity columns
+ *  (`name` containing "." — a related record's field, not this entity's own attribute) since
+ *  callers only care about ordering this entity's own columns. Falls back to `[]` (not throwing)
+ *  when an entity has no such view or `layoutxml` is null — callers treat that as "no view-order
+ *  signal, fall back to alphabetical" rather than an error. Cached like the rest of this module. */
+const defaultViewOrderCache = new Map<string, Promise<string[]>>();
+
+export function fetchDefaultViewColumnOrder(connectionId: string, entityLogicalName: string): Promise<string[]> {
+  const trimmed = entityLogicalName.trim();
+  const key = cacheKey(connectionId, trimmed);
+  const cached = defaultViewOrderCache.get(key);
+  if (cached) return cached;
+
+  const promise = (async (): Promise<string[]> => {
+    const res = await callNative<{ value: { layoutxml: string | null }[] }>("dataverse.request", {
+      connectionId,
+      method: "GET",
+      path:
+        "savedqueries?$select=layoutxml" +
+        `&$filter=returnedtypecode eq '${trimmed}' and querytype eq 0 and isdefault eq true`,
+    });
+    const layoutXml = res.value[0]?.layoutxml;
+    if (!layoutXml) return [];
+    const names: string[] = [];
+    for (const m of layoutXml.matchAll(/<cell\s+name="([^"]+)"/g)) {
+      if (!m[1].includes(".")) names.push(m[1]);
+    }
+    return names;
+  })().catch((err) => {
+    defaultViewOrderCache.delete(key);
+    throw err;
+  });
+  defaultViewOrderCache.set(key, promise);
+  return promise;
+}
+
+/** Reorders a column-name list for display: the primary key first (if present), then every
+ *  column that appears on the entity's default view in that view's own order, then everything
+ *  else alphabetically. Pure/sync — `defaultViewOrder` and `primaryIdAttribute` are fetched
+ *  separately (see `fetchDefaultViewColumnOrder`/`fetchEntityMeta`) so this can be unit-tested
+ *  and reused without a connection. Case-insensitive matching throughout since Dataverse logical
+ *  names are, but the caller's original casing is preserved in the output. */
+export function sortColumnsForDisplay(columnNames: string[], primaryIdAttribute: string, defaultViewOrder: string[]): string[] {
+  const remaining = new Map(columnNames.map((name) => [name.toLowerCase(), name]));
+  const pkLower = primaryIdAttribute.toLowerCase();
+  const ordered: string[] = [];
+
+  const pk = remaining.get(pkLower);
+  if (pk) {
+    ordered.push(pk);
+    remaining.delete(pkLower);
+  }
+  for (const viewName of defaultViewOrder) {
+    const match = remaining.get(viewName.toLowerCase());
+    if (match) {
+      ordered.push(match);
+      remaining.delete(viewName.toLowerCase());
+    }
+  }
+  ordered.push(...Array.from(remaining.values()).sort((a, b) => a.localeCompare(b)));
+  return ordered;
 }
 
 /** All of an entity's attributes (excluding "Virtual" — compound/image-type fields that either
