@@ -44,6 +44,17 @@ function splitStatements(sql: string): string[] {
     .filter(Boolean);
 }
 
+/** A real (macrotask) yield to the browser — unlike `await` on an already-settled/cached
+ *  promise (which only schedules a *microtask* and never lets the browser paint a frame), this
+ *  actually gives the UI a chance to render before the next chunk of a long synchronous loop
+ *  runs. Used by handleSqlFileChange so a large .sql import (thousands of INSERT statements)
+ *  doesn't look completely frozen — no loading indicator would ever get painted, and the whole
+ *  parse loop would run start-to-finish before the browser draws a single new frame, since
+ *  `fetchEntityMeta`'s cache hits resolve via microtasks too. */
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 /** Dataverse returns a Lookup column as `_logicalname_value` (with `@...` annotations alongside)
  *  — unwrap to the plain attribute name so ImportRow.values reads uniformly regardless of
  *  whether a column is a Lookup, matching the convention this app's other write tools use. */
@@ -86,6 +97,7 @@ export default function DataMigration() {
   const [sql, setSql] = useState("");
   const { schema: editorSchema, defaultTable: editingTable } = useSqlEditorSchema(activeConnectionId, sql);
   const [queryRunning, setQueryRunning] = useState(false);
+  const [fileImporting, setFileImporting] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
   const [fileNote, setFileNote] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -169,6 +181,15 @@ export default function DataMigration() {
     if (!activeConnectionId) return;
     setQueryError(null);
     setFileNote(null);
+    setFileImporting(true);
+    // Let React actually paint the "导入中…" state before the parse loop below starts — a
+    // plain `await` here wouldn't do it: the loop's own `await fetchEntityMeta(...)` calls hit
+    // that function's cache after the first row, and an already-settled promise resolves via a
+    // microtask, which the browser never gets a chance to paint a frame around. Without this,
+    // a large file (thousands of INSERT rows) ran start-to-finish as what looked like one
+    // frozen, unresponsive click — this is the fix for `bugs & requirements/8.18.md` #11
+    // ("选择了sql点了没反应").
+    await yieldToBrowser();
     try {
       const text = await file.text();
       const statements = splitStatements(text);
@@ -176,8 +197,13 @@ export default function DataMigration() {
       let ignoredCount = 0;
       let skippedNoPk = 0;
 
-      for (const stmtText of statements) {
-        const parsed = parseSql(stmtText);
+      for (let i = 0; i < statements.length; i++) {
+        // Periodic yield (not just the one above) — keeps the tab responsive/repainting
+        // through the rest of a long import instead of just showing "导入中…" once and then
+        // still freezing solid for however long the remaining thousands of rows take.
+        if (i > 0 && i % 200 === 0) await yieldToBrowser();
+
+        const parsed = parseSql(statements[i]);
         if (parsed.kind !== "insert") {
           ignoredCount++;
           continue;
@@ -230,6 +256,8 @@ export default function DataMigration() {
       if (notes.length > 0) setFileNote(notes.join("；") + "。");
     } catch (err) {
       setQueryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFileImporting(false);
     }
   }
 
@@ -425,10 +453,10 @@ export default function DataMigration() {
           </button>
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={!activeConnectionId}
+            disabled={!activeConnectionId || fileImporting}
             className="rounded-md border border-gray-300 px-4 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
           >
-            以 SQL 导入…
+            {fileImporting ? "导入中…" : "以 SQL 导入…"}
           </button>
           <input
             ref={fileInputRef}
