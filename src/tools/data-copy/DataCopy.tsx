@@ -12,23 +12,13 @@ import {
   sortColumnsForDisplay,
 } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
-import { parseSql, type SelectComplexResult, type SelectSimpleResult } from "../sql4cds/translate";
+import { buildSelectPath, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
 import { insertRow } from "../sql4cds/writeOps";
 import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry } from "../sql4cds/executionLog";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 
 const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
-
-function buildSelectPath(result: SelectSimpleResult | SelectComplexResult, entitySet: string): string {
-  if (result.kind === "select-complex") return `${entitySet}?fetchXml=${encodeURIComponent(result.fetchXml)}`;
-  const parts: string[] = [];
-  if (result.select) parts.push(`$select=${result.select}`);
-  if (result.filter) parts.push(`$filter=${result.filter}`);
-  if (result.orderby) parts.push(`$orderby=${result.orderby}`);
-  if (result.top) parts.push(`$top=${result.top}`);
-  return parts.length ? `${entitySet}?${parts.join("&")}` : entitySet;
-}
 
 /** Keeps the SQL box's SELECT column list in sync with the checkbox grid instead of leaving a
  *  stale `*` (or a stale explicit list) once columns get checked/unchecked — text-replaces just
@@ -89,7 +79,8 @@ export default function DataCopy() {
     setWriteResults(null);
     setWriteError(null);
     try {
-      const parsed = parseSql(sql);
+      const resolvedSql = sql.trim() ? await resolveSqlSubqueries(activeConnectionId, sql) : sql;
+      const parsed = parseSql(resolvedSql);
       if (parsed.kind === "empty") return;
       if (parsed.kind === "error") {
         setQueryError(parsed.error);

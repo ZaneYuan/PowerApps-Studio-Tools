@@ -3,6 +3,8 @@
 // though we only ever parse transactsql.
 import pkg from "node-sql-parser/build/transactsql";
 import { serializeFetchXml, type FxAggregateFunc, type FxAttribute, type FxCondition, type FxFilter, type FxFilterType, type FxLink, type FxLinkType, type FxOrder, type FxQuery } from "./fetchXml";
+import { callNative } from "../../native/bridge";
+import { fetchEntityMeta } from "../../native/metadataService";
 const { Parser } = pkg;
 
 const GUID_RE =
@@ -155,6 +157,19 @@ export type ParsedStatement =
   | ErrorResult
   | EmptyResult
   | BatchResult;
+
+/** A parsed SELECT's Web API request path — was reimplemented identically in SQL4CDS, Data Copy,
+ *  and Data Migration; consolidated here so all three tools' SELECT execution goes through the
+ *  same code instead of three copies that could quietly drift apart. */
+export function buildSelectPath(result: SelectSimpleResult | SelectComplexResult, entitySetName: string): string {
+  if (result.kind === "select-complex") return `${entitySetName}?fetchXml=${encodeURIComponent(result.fetchXml)}`;
+  const parts: string[] = [];
+  if (result.select) parts.push(`$select=${result.select}`);
+  if (result.filter) parts.push(`$filter=${result.filter}`);
+  if (result.orderby) parts.push(`$orderby=${result.orderby}`);
+  if (result.top) parts.push(`$top=${result.top}`);
+  return parts.length ? `${entitySetName}?${parts.join("&")}` : entitySetName;
+}
 
 const COMPARISON_OPERATORS: Record<string, string> = {
   "=": "eq",
@@ -776,6 +791,85 @@ export function guessEditingTable(sqlText: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Finds the first `[NOT] IN (SELECT ...)` subquery in `sqlText` (case-insensitive) and returns
+ *  the offsets of the parenthesized subquery (parens included) plus its own SQL text (parens
+ *  excluded) — or null if there isn't one. Text-based rather than AST-based: node-sql-parser's
+ *  AST carries no source offsets, so there's nothing to splice a replacement into; parens are
+ *  balanced by hand since a regex can't count nesting depth. `resolveSqlSubqueries` calls this in
+ *  a loop, so it only needs to find one occurrence per call — multiple/nested subqueries in the
+ *  same query still all get resolved, one at a time. */
+function findFirstInSubquery(sqlText: string): { start: number; end: number; subquerySql: string } | null {
+  const m = /\b(?:NOT\s+)?IN\s*\(\s*SELECT\b/i.exec(sqlText);
+  if (!m) return null;
+  const openParenIdx = sqlText.indexOf("(", m.index);
+  let depth = 0;
+  for (let i = openParenIdx; i < sqlText.length; i++) {
+    if (sqlText[i] === "(") depth++;
+    else if (sqlText[i] === ")") {
+      depth--;
+      if (depth === 0) return { start: openParenIdx, end: i + 1, subquerySql: sqlText.slice(openParenIdx + 1, i) };
+    }
+  }
+  throw new Error(`IN 子查询缺少匹配的右括号："${sqlText.slice(m.index, m.index + 40)}…"`);
+}
+
+function formatSubqueryLiteral(value: unknown): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return quoteString(String(value));
+}
+
+/** Runs an already-resolved (no nested subqueries left) single-column single-table subquery
+ *  against Dataverse and returns that column's value from every matching row. */
+async function runSubquerySelect(connectionId: string, subquerySql: string): Promise<unknown[]> {
+  const parsed = parseSql(subquerySql);
+  if (parsed.kind !== "select-simple") {
+    throw new Error(`子查询暂时只支持简单单表 SELECT（不支持 JOIN / GROUP BY / 聚合函数）："${subquerySql.trim()}"`);
+  }
+  if (!parsed.select) {
+    throw new Error(`子查询必须显式 SELECT 一个字段，不支持 SELECT *："${subquerySql.trim()}"`);
+  }
+  const columns = parsed.select.split(",").map((c) => c.trim());
+  if (columns.length !== 1) {
+    throw new Error(`子查询只能 SELECT 一个字段，当前有 ${columns.length} 个："${subquerySql.trim()}"`);
+  }
+  const [column] = columns;
+  const meta = await fetchEntityMeta(connectionId, parsed.entityLogicalName);
+  const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
+    connectionId,
+    method: "GET",
+    path: buildSelectPath({ ...parsed, select: column }, meta.entitySetName),
+  });
+  return res.value.map((row) => row[column]);
+}
+
+/** Resolves every `[NOT] IN (SELECT ...)` subquery in `sqlText` by actually running each one
+ *  against Dataverse and splicing its results back in as a literal list. Dataverse's Web API has
+ *  no correlated-subquery equivalent, so `translateWhere`'s IN/NOT IN branch only ever understood
+ *  a literal list — handed a subquery instead, node-sql-parser still parses it (a subquery is
+ *  syntactically valid there), but the "literal" it hands back stringifies to the text
+ *  `"undefined"`, which is what produced the "Guid should contain 32 digits" 400 this was written
+ *  to fix. A subquery that returns zero rows is spliced in as the nil GUID
+ *  (`00000000-0000-0000-0000-000000000000`) rather than an empty list or NULL — Dataverse's
+ *  `Microsoft.Dynamics.CRM.In` needs a real value it can parse, and the nil GUID reliably matches
+ *  no real record while staying valid for both GUID and non-GUID target columns.
+ *
+ *  Depth-first: a subquery's own nested subqueries are resolved before *it* runs. Every SQL-editor
+ *  tool (SQL4CDS, Data Copy, Data Migration) calls this once, right before executing a SELECT —
+ *  not during live/as-you-type parsing, since that would fire a network round-trip per keystroke. */
+export async function resolveSqlSubqueries(connectionId: string, sqlText: string): Promise<string> {
+  let text = sqlText;
+  for (let i = 0; i < 20; i++) {
+    const found = findFirstInSubquery(text);
+    if (!found) return text;
+    const resolvedSubquery = await resolveSqlSubqueries(connectionId, found.subquerySql);
+    const values = await runSubquerySelect(connectionId, resolvedSubquery);
+    const literal = values.length > 0 ? values.map(formatSubqueryLiteral).join(",") : "'00000000-0000-0000-0000-000000000000'";
+    text = text.slice(0, found.start) + `(${literal})` + text.slice(found.end);
+  }
+  throw new Error("子查询嵌套层数过多（超过 20 层），可能是循环引用，请检查 SQL。");
 }
 
 export function parseSql(sql: string): ParsedStatement {

@@ -7,7 +7,7 @@ import { downloadTextFile } from "../../native/download";
 import { fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
-import { literalToJsValue, parseSql, type InsertResult, type MutateResult, type SqlNode } from "./translate";
+import { buildSelectPath, literalToJsValue, parseSql, resolveSqlSubqueries, type InsertResult, type MutateResult, type SqlNode } from "./translate";
 import {
   deleteRow,
   insertIntersectRow,
@@ -155,32 +155,38 @@ export default function Sql4Cds() {
 
   const { schema: editorSchema, defaultTable: editingTable } = useSqlEditorSchema(activeConnectionId, sql);
 
+  // Live preview only ("请求路径" below) — built from the as-typed SQL without resolving any
+  // IN (SELECT ...) subquery (that needs a network round-trip per subquery, which live/every-
+  // keystroke parsing can't afford), so a query that has one previews with a garbled filter until
+  // Run actually resolves it. handleRun does its own fresh build from the resolved SQL instead of
+  // reusing this.
   const path = useMemo(() => {
-    if (!entitySet) return "";
-    if (result.kind === "select-simple") {
-      const parts: string[] = [];
-      if (result.select) parts.push(`$select=${result.select}`);
-      if (result.filter) parts.push(`$filter=${result.filter}`);
-      if (result.orderby) parts.push(`$orderby=${result.orderby}`);
-      if (result.top) parts.push(`$top=${result.top}`);
-      return parts.length ? `${entitySet}?${parts.join("&")}` : entitySet;
-    }
-    if (result.kind === "select-complex") {
-      return `${entitySet}?fetchXml=${encodeURIComponent(result.fetchXml)}`;
-    }
-    return "";
+    if (!entitySet || (result.kind !== "select-simple" && result.kind !== "select-complex")) return "";
+    return buildSelectPath(result, entitySet);
   }, [entitySet, result]);
 
   async function handleRun() {
-    if (!activeConnectionId || !path) return;
+    if (!activeConnectionId) return;
     setRunning(true);
     setRunError(null);
     setRows(null);
     try {
+      const resolvedSql = await resolveSqlSubqueries(activeConnectionId, sql);
+      const resolvedResult = parseSql(resolvedSql);
+      if (resolvedResult.kind === "error") {
+        setRunError(resolvedResult.error);
+        return;
+      }
+      if (resolvedResult.kind !== "select-simple" && resolvedResult.kind !== "select-complex") {
+        setRunError("请输入一条 SELECT 语句。");
+        return;
+      }
+      const meta = await fetchEntityMeta(activeConnectionId, resolvedResult.entityLogicalName);
+      const entitySetName = meta.entitySetName || resolvedResult.entitySetGuess;
       const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
         connectionId: activeConnectionId,
         method: "GET",
-        path,
+        path: buildSelectPath(resolvedResult, entitySetName),
       });
       setRows(res.value);
     } catch (err) {

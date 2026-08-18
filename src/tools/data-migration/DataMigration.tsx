@@ -12,7 +12,7 @@ import {
   sortColumnsForDisplay,
 } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
-import { literalToJsValue, parseSql, type SelectComplexResult, type SelectSimpleResult } from "../sql4cds/translate";
+import { buildSelectPath, literalToJsValue, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
 import { insertIntersectRow, resolveIntersectRowValues, updateRow } from "../sql4cds/writeOps";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid from "../../shared/CheckableGrid";
@@ -42,16 +42,6 @@ function splitStatements(sql: string): string[] {
     .split(";")
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-function buildSelectPath(result: SelectSimpleResult | SelectComplexResult, entitySet: string): string {
-  if (result.kind === "select-complex") return `${entitySet}?fetchXml=${encodeURIComponent(result.fetchXml)}`;
-  const parts: string[] = [];
-  if (result.select) parts.push(`$select=${result.select}`);
-  if (result.filter) parts.push(`$filter=${result.filter}`);
-  if (result.orderby) parts.push(`$orderby=${result.orderby}`);
-  if (result.top) parts.push(`$top=${result.top}`);
-  return parts.length ? `${entitySet}?${parts.join("&")}` : entitySet;
 }
 
 /** Dataverse returns a Lookup column as `_logicalname_value` (with `@...` annotations alongside)
@@ -129,7 +119,8 @@ export default function DataMigration() {
       const skipped: string[] = [];
 
       for (let i = 0; i < statements.length; i++) {
-        const parsed = parseSql(statements[i]);
+        const resolvedStatement = await resolveSqlSubqueries(activeConnectionId, statements[i]);
+        const parsed = parseSql(resolvedStatement);
         if (parsed.kind !== "select-simple" && parsed.kind !== "select-complex") {
           skipped.push(`第 ${i + 1} 条`);
           continue;
