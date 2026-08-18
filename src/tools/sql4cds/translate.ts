@@ -752,6 +752,32 @@ function parseOneStatement(ast: { type?: string }): ParsedStatement {
   };
 }
 
+/** Best-effort FROM/INTO/UPDATE table name for the SQL editor's autocomplete — parses far more
+ *  leniently than parseSql. parseSql's entityLogicalName goes back to null the instant any
+ *  translate step throws (translateWhere, translateComplexSelect, ...), which happens on every
+ *  WHERE/SET/ON clause that's mid-typed and not yet a complete condition (e.g. "WHERE statecode =
+ *  0 AND contoso_" with the cursor right after "contoso_" — a bare column reference has no operator for
+ *  translateWhere to translate, so it throws even though the SQL itself parses fine). Relying on
+ *  entityLogicalName for the editor's defaultTable would drop column-name completion the moment
+ *  the user starts typing a filter value, which is exactly when they want it most. This only
+ *  returns null when the SQL doesn't parse as valid syntax at all. */
+export function guessEditingTable(sqlText: string): string | null {
+  if (!sqlText.trim()) return null;
+  try {
+    const astResult = new Parser().astify(sqlText, { database: "transactsql" });
+    const stmt = (Array.isArray(astResult) ? astResult[astResult.length - 1] : astResult) as
+      | { type?: string; from?: FromItem[] | null; table?: { table: string }[] }
+      | undefined;
+    if (!stmt) return null;
+    if (stmt.type === "select") return stmt.from?.[0]?.table ?? null;
+    if (stmt.type === "insert" || stmt.type === "update") return stmt.table?.[0]?.table ?? null;
+    if (stmt.type === "delete") return stmt.table?.[0]?.table ?? stmt.from?.[0]?.table ?? null;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function parseSql(sql: string): ParsedStatement {
   if (!sql.trim()) return { kind: "empty" };
 

@@ -6,7 +6,7 @@ import { downloadTextFile } from "../../native/download";
 import { fetchAttributes, fetchEntityList, fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
-import { literalToJsValue, parseSql, type InsertResult, type MutateResult, type SqlNode } from "./translate";
+import { guessEditingTable, literalToJsValue, parseSql, type InsertResult, type MutateResult, type SqlNode } from "./translate";
 import {
   deleteRow,
   insertIntersectRow,
@@ -155,7 +155,11 @@ export default function Sql4Cds() {
   // --- SQL editor autocomplete schema: all entity logical names (for table-name completion,
   // fetched once per connection) plus the current statement's table's columns (fetched lazily as
   // the FROM/INTO/UPDATE table becomes known) — both via metadataService's existing caches, so
-  // switching between tables already visited in this session is instant. ---
+  // switching between tables already visited in this session is instant. Uses guessEditingTable
+  // (lenient re-parse), not entityLogicalName (only set once the *whole* statement translates
+  // successfully) — otherwise column completion would drop out the instant the user starts typing
+  // a WHERE/SET value, which is exactly when they want it. ---
+  const editingTable = useMemo(() => guessEditingTable(sql), [sql]);
   const [editorTables, setEditorTables] = useState<string[]>([]);
   const [editorColumns, setEditorColumns] = useState<Record<string, string[]>>({});
 
@@ -178,12 +182,12 @@ export default function Sql4Cds() {
   }, [activeConnectionId]);
 
   useEffect(() => {
-    if (!activeConnectionId || !entityLogicalName || editorColumns[entityLogicalName]) return;
+    if (!activeConnectionId || !editingTable || editorColumns[editingTable]) return;
     let cancelled = false;
-    fetchAttributes(activeConnectionId, entityLogicalName)
+    fetchAttributes(activeConnectionId, editingTable)
       .then((attrs) => {
         if (!cancelled) {
-          setEditorColumns((prev) => ({ ...prev, [entityLogicalName]: attrs.map((a) => a.logicalName) }));
+          setEditorColumns((prev) => ({ ...prev, [editingTable]: attrs.map((a) => a.logicalName) }));
         }
       })
       .catch(() => {
@@ -192,14 +196,14 @@ export default function Sql4Cds() {
     return () => {
       cancelled = true;
     };
-  }, [activeConnectionId, entityLogicalName, editorColumns]);
+  }, [activeConnectionId, editingTable, editorColumns]);
 
   const editorSchema = useMemo(() => {
     const schema: Record<string, string[]> = {};
     for (const table of editorTables) schema[table] = editorColumns[table] ?? [];
-    if (entityLogicalName && !schema[entityLogicalName]) schema[entityLogicalName] = editorColumns[entityLogicalName] ?? [];
+    if (editingTable && !schema[editingTable]) schema[editingTable] = editorColumns[editingTable] ?? [];
     return schema;
-  }, [editorTables, editorColumns, entityLogicalName]);
+  }, [editorTables, editorColumns, editingTable]);
 
   const path = useMemo(() => {
     if (!entitySet) return "";
@@ -691,7 +695,7 @@ export default function Sql4Cds() {
           value={sql}
           onChange={setSql}
           schema={editorSchema}
-          defaultTable={entityLogicalName ?? undefined}
+          defaultTable={editingTable ?? undefined}
           placeholder="SELECT name FROM account WHERE statecode = 0"
         />
       </div>
