@@ -70,7 +70,15 @@ if (Test-Path $publishDir) {
         }
     }
 }
-dotnet publish $csproj -c Release -o $publishDir
+$publishArgs = @($csproj, "-c", "Release", "-o", $publishDir)
+if ($NoZip) {
+    # ReadyToRun (crossgen) only pays off as faster cold start for the built exe - it's pure
+    # overhead on a same-machine dev-loop rebuild-and-relaunch where nobody's timing cold start.
+    # Skipping it here is the single biggest lever on -NoZip publish time; a real release build
+    # (no -NoZip) keeps R2R on since that's the copy real end users actually launch cold.
+    $publishArgs += "-p:PublishReadyToRun=false"
+}
+dotnet publish @publishArgs
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)" }
 
 Write-Host "==> Copying frontend build into wwwroot/" -ForegroundColor Cyan
