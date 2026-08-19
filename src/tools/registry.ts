@@ -106,6 +106,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./fetchxml-to-odata/FetchXmlToOData")),
   },
   {
+    id: "record-merge",
+    name: "记录引用迁移",
+    description: "输入实体+GUID 定位记录，查询有多少条记录（1:N 查找字段 + N:N 关联，含系统表）引用了它，再批量迁移到另一条同表记录。仅桌面版可用。",
+    category: "数据 & Solution",
+    icon: "🔀",
+    Component: lazy(() => import("./record-merge/RecordMerge")),
+  },
+  {
     id: "solution-diff",
     name: "Solution 深度对比",
     description: "上传两个 solution.zip，对比实体/属性/Web资源/流程等组件的差异。",

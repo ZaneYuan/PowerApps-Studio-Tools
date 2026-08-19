@@ -172,6 +172,7 @@ export default function DataMigration() {
     setQueryRunning(true);
     setQueryError(null);
     setFileNote(null);
+    resetWriteState(); // a previous run's results/log are about to describe a different set of tables
     try {
       const statements = splitStatements(sql);
       const newTables: ImportTable[] = [];
@@ -228,6 +229,7 @@ export default function DataMigration() {
     if (!activeConnectionId) return;
     setQueryError(null);
     setFileNote(null);
+    resetWriteState(); // a previous run's results/log are about to describe a different set of tables
     setFileImporting(true);
     // Let React actually paint the "导入中…" state before the parse loop below starts — a
     // plain `await` here wouldn't do it: the loop's own `await fetchEntityMeta(...)` calls hit
@@ -317,6 +319,16 @@ export default function DataMigration() {
   const [writeConcurrency, setWriteConcurrency] = useState(8);
   const stopRequestedRef = useRef(false);
   const [writeStopped, setWriteStopped] = useState(false);
+
+  /** Loading a fresh batch (a new query run or SQL-file upload) makes any previous run's
+   *  results/log describe tables that are no longer even on screen — cleared so a stale
+   *  "导入成功…" summary and download button don't linger next to unrelated freshly-loaded data. */
+  function resetWriteState() {
+    setWriteResults(null);
+    setWriteLog(null);
+    setWriteError(null);
+    setWriteStopped(false);
+  }
 
   function targetConnectionName(): string {
     return connections.find((c) => c.id === targetConnectionId)?.name ?? targetConnectionId;
