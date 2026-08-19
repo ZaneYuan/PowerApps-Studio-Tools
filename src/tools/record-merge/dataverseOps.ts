@@ -5,6 +5,11 @@ import { runConcurrent } from "../sql4cds/concurrency";
 import { deleteIntersectRow, insertIntersectRow, withRetryOn429, type IntersectRowValues } from "../sql4cds/writeOps";
 import type { ManyToManyRefTable, MigrationLogEntry, OneToManyRefTable, RefTable } from "./types";
 
+export interface ScanResult {
+  tables: RefTable[];
+  failedRelationships: string[];
+}
+
 const SCAN_CONCURRENCY = 8;
 /** Matches the API version literal writeOps.ts's insertIntersectRow already hardcodes for
  *  building `@odata.id` — kept as the same literal rather than a shared constant, since neither
@@ -13,6 +18,19 @@ const API_VERSION_SEGMENT = "/api/data/v9.2/";
 
 async function fetchDataverse<T>(connectionId: string, path: string): Promise<T> {
   return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
+}
+
+/** A Lookup attribute's `$filter`/`$select` property name — Dataverse's OData model exposes some
+ *  lookups (confirmed live: `transactioncurrencyid` on `account`) only as a
+ *  navigation property under the bare logical name, so `$filter=transactioncurrencyid eq <guid>`
+ *  400s with "A binary operator with incompatible types was detected. Found operand types
+ *  'Microsoft.Dynamics.CRM.transactioncurrency' and 'Edm.Guid'" even though the identical bare-name
+ *  filter works for other lookups. The `_name_value` form is the one Dataverse always exposes as a
+ *  real scalar Guid property (also required for `$select` — bare name 400s there too, same as
+ *  Record Explorer's `selectFieldFor`), so every lookup filter/select here goes through it instead
+ *  of relying on the bare name sometimes happening to work. */
+function lookupValueKey(attr: string): string {
+  return `_${attr}_value`;
 }
 
 export interface RecordLookup {
@@ -66,7 +84,8 @@ interface ManyToManyRelRaw {
  *  just readable) and returns one `RefTable` per relationship/side that actually has at least one
  *  matching row. A relationship whose $filter/$count call errors (a handful of system
  *  relationships have quirky Web API support) is skipped rather than failing the whole scan. */
-export async function scanReferences(connectionId: string, entityLogicalName: string, id: string): Promise<RefTable[]> {
+export async function scanReferences(connectionId: string, entityLogicalName: string, id: string): Promise<ScanResult> {
+  const failedRelationships: string[] = [];
   const [oneToMany, manyToMany] = await Promise.all([
     fetchDataverse<{ value: OneToManyRelRaw[] }>(
       connectionId,
@@ -85,7 +104,7 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
     jobs.push(async () => {
       try {
         const childMeta = await fetchEntityMeta(connectionId, rel.ReferencingEntity);
-        const count = await countMatching(connectionId, childMeta.entitySetName, `${rel.ReferencingAttribute} eq ${id}`);
+        const count = await countMatching(connectionId, childMeta.entitySetName, `${lookupValueKey(rel.ReferencingAttribute)} eq ${id}`);
         if (count === 0) return null;
         const table: OneToManyRefTable = {
           kind: "onetomany",
@@ -96,6 +115,7 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
         };
         return table;
       } catch {
+        failedRelationships.push(rel.SchemaName);
         return null;
       }
     });
@@ -122,7 +142,7 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
       jobs.push(async () => {
         try {
           const intersectMeta = await fetchEntityMeta(connectionId, rel.IntersectEntityName);
-          const count = await countMatching(connectionId, intersectMeta.entitySetName, `${s.thisAttr} eq ${id}`);
+          const count = await countMatching(connectionId, intersectMeta.entitySetName, `${lookupValueKey(s.thisAttr)} eq ${id}`);
           if (count === 0) return null;
           const table: ManyToManyRefTable = {
             kind: "manytomany",
@@ -135,6 +155,7 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
           };
           return table;
         } catch {
+          failedRelationships.push(`${rel.SchemaName} (${s.side})`);
           return null;
         }
       });
@@ -150,7 +171,7 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
     },
     () => false,
   );
-  return results.filter((r): r is RefTable => r !== null);
+  return { tables: results.filter((r): r is RefTable => r !== null), failedRelationships };
 }
 
 /** Follows `@odata.nextLink` to collect every matching row past Dataverse's default page size —
@@ -192,7 +213,12 @@ async function migrateOneToManyTable(
     // disambiguates in a way buildRowBody's generic single-candidate check can't.
     getBindNavigationProperty(connectionId, table.entityLogicalName, table.referencingAttribute, entityLogicalName),
   ]);
-  const rows = await fetchAllRows(connectionId, childMeta.entitySetName, childMeta.primaryIdAttribute, `${table.referencingAttribute} eq ${oldId}`);
+  const rows = await fetchAllRows(
+    connectionId,
+    childMeta.entitySetName,
+    childMeta.primaryIdAttribute,
+    `${lookupValueKey(table.referencingAttribute)} eq ${oldId}`,
+  );
   const ids = rows.map((r) => String(r[childMeta.primaryIdAttribute]));
 
   await runConcurrent(
@@ -231,15 +257,16 @@ async function migrateManyToManyTable(
   const thisAttr = table.side === "entity1" ? table.info.entity1IntersectAttribute : table.info.entity2IntersectAttribute;
   const otherAttr = table.side === "entity1" ? table.info.entity2IntersectAttribute : table.info.entity1IntersectAttribute;
 
+  const otherAttrKey = lookupValueKey(otherAttr);
   const [oldRows, newRows] = await Promise.all([
-    fetchAllRows(connectionId, intersectMeta.entitySetName, otherAttr, `${thisAttr} eq ${oldId}`),
-    fetchAllRows(connectionId, intersectMeta.entitySetName, otherAttr, `${thisAttr} eq ${newId}`),
+    fetchAllRows(connectionId, intersectMeta.entitySetName, otherAttrKey, `${lookupValueKey(thisAttr)} eq ${oldId}`),
+    fetchAllRows(connectionId, intersectMeta.entitySetName, otherAttrKey, `${lookupValueKey(thisAttr)} eq ${newId}`),
   ]);
-  const otherIdsForOld = oldRows.map((r) => String(r[otherAttr]));
+  const otherIdsForOld = oldRows.map((r) => String(r[otherAttrKey]));
   // Records already associated with the new target must not be re-associated — Dataverse 400s on
   // a duplicate (entity1, entity2) pair, and this is a real scenario, not just a theoretical edge
   // case, whenever the old and new target already share a common related record.
-  const alreadyOnNew = new Set(newRows.map((r) => String(r[otherAttr])));
+  const alreadyOnNew = new Set(newRows.map((r) => String(r[otherAttrKey])));
 
   function values(thisValue: string, otherId: string): IntersectRowValues {
     return table.side === "entity1" ? { entity1Value: thisValue, entity2Value: otherId } : { entity1Value: otherId, entity2Value: thisValue };

@@ -30,6 +30,11 @@ export interface ReferenceScanResult {
   id: string;
   primaryName: string | null;
   tables: RefTable[];
+  /** Relationship schema names whose count query errored and were skipped — surfaced to the user
+   *  instead of silently folding into "0 references", since a real environment bug (a filter/select
+   *  form Dataverse rejects for a specific lookup) looks identical to "genuinely no references"
+   *  unless something says otherwise. */
+  failedRelationships: string[];
 }
 
 export interface MigrationLogEntry {

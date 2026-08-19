@@ -123,8 +123,8 @@ export default function RecordMerge() {
       const trimmed = entityName.trim();
       const lookup = await lookupRecord(activeConnectionId, trimmed, id);
       if (!lookup.exists) throw new Error(`找不到记录 ${trimmed} (${id})，请检查实体名和 GUID 是否正确。`);
-      const tables = await scanReferences(activeConnectionId, trimmed, id);
-      setScanResult({ entityLogicalName: trimmed, id, primaryName: lookup.primaryName, tables });
+      const { tables, failedRelationships } = await scanReferences(activeConnectionId, trimmed, id);
+      setScanResult({ entityLogicalName: trimmed, id, primaryName: lookup.primaryName, tables, failedRelationships });
     } catch (err) {
       setScanError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -266,6 +266,13 @@ export default function RecordMerge() {
             当前记录：<span className="font-medium">{scanResult.primaryName ?? scanResult.id}</span>{" "}
             <span className="font-mono text-xs text-gray-400">({scanResult.id})</span>
           </p>
+
+          {scanResult.failedRelationships.length > 0 && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+              ⚠ {scanResult.failedRelationships.length} 个关系的引用计数查询失败，被跳过——下面的结果可能不完整，不代表这些表一定没有引用：
+              {scanResult.failedRelationships.join("、")}
+            </div>
+          )}
 
           {scanResult.tables.length === 0 ? (
             <p className="text-sm text-gray-400">没有找到任何引用这条记录的记录。</p>
