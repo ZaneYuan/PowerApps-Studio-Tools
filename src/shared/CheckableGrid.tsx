@@ -1,4 +1,4 @@
-import { useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import AttributePicker from "./AttributePicker";
 import LookupPickerModal from "./LookupPickerModal";
@@ -64,7 +64,19 @@ export default function CheckableGrid({
   connectionId?: string;
   entityLogicalName?: string;
 }) {
-  const checkedColumns = columns.filter((c) => c.checked);
+  // Memoized on `columns` alone (not recomputed on every render) — a wide entity (product-class
+  // tables routinely have 150-280 attributes) turned this into a real, visible cost once a
+  // scroll container had anything actually subscribed to its scroll events (the row virtualizer
+  // below): every scroll tick, *including a purely horizontal drag that never changes which rows
+  // are visible*, re-ran this filter and — worse — handed AttributePicker brand-new array/Set
+  // object references, which broke its own internal useMemo and forced it to rebuild and re-diff
+  // its full (150-280 item) checkbox list on every single tick. A several-thousand-row table with
+  // few columns never showed this (the recompute is cheap when there are only a handful of
+  // columns); a few-dozen-row table with hundreds of columns stalled on every drag — column count,
+  // not row count, was the real variable (see bugs & requirements/8.20.md).
+  const checkedColumns = useMemo(() => columns.filter((c) => c.checked), [columns]);
+  const columnKeys = useMemo(() => columns.map((c) => c.key), [columns]);
+  const checkedColumnKeys = useMemo(() => new Set(checkedColumns.map((c) => c.key)), [checkedColumns]);
   const allRowsChecked = rows.length > 0 && rows.every((r) => r.checked);
   const checkedRowCount = rows.filter((r) => r.checked).length;
   const [lookupEditorCell, setLookupEditorCell] = useState<{ rowId: string; columnKey: string } | null>(null);
@@ -89,12 +101,19 @@ export default function CheckableGrid({
   const topSpacerHeight = virtualRows.length > 0 ? virtualRows[0].start : 0;
   const bottomSpacerHeight = virtualRows.length > 0 ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end : 0;
 
-  function toggleColumn(key: string) {
-    onColumnsChange(columns.map((c) => (c.key === key ? { ...c, checked: !c.checked } : c)));
-  }
-  function toggleAllColumns(selectAll: boolean) {
-    onColumnsChange(columns.map((c) => ({ ...c, checked: selectAll })));
-  }
+  // useCallback (not a plain function declaration) so these stay referentially stable across a
+  // scroll-driven re-render too — otherwise AttributePicker still can't bail out via React.memo
+  // even after the arrays/Set above are stabilized, since onToggle/onToggleAll would still look
+  // "changed" every tick.
+  const toggleColumn = useCallback((key: string) => onColumnsChange(columns.map((c) => (c.key === key ? { ...c, checked: !c.checked } : c))), [columns, onColumnsChange]);
+  const toggleAllColumns = useCallback((selectAll: boolean) => onColumnsChange(columns.map((c) => ({ ...c, checked: selectAll }))), [columns, onColumnsChange]);
+  const renderBadge = useCallback(
+    (key: string) => {
+      const column = columns.find((c) => c.key === key);
+      return column && renderColumnBadge?.(column);
+    },
+    [columns, renderColumnBadge],
+  );
   function toggleRow(id: string) {
     onRowsChange(rows.map((r) => (r.id === id ? { ...r, checked: !r.checked } : r)));
   }
@@ -128,14 +147,11 @@ export default function CheckableGrid({
     <div className="space-y-3">
       <AttributePicker
         label={columnsLabel}
-        options={columns.map((c) => c.key)}
-        selected={new Set(checkedColumns.map((c) => c.key))}
+        options={columnKeys}
+        selected={checkedColumnKeys}
         onToggle={toggleColumn}
         onToggleAll={toggleAllColumns}
-        renderBadge={(key) => {
-          const column = columns.find((c) => c.key === key);
-          return column && renderColumnBadge?.(column);
-        }}
+        renderBadge={renderBadge}
       />
 
       <div ref={scrollRef} className="max-h-[45vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">

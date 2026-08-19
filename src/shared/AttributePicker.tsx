@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 
 const inputCls =
   "w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -6,8 +6,13 @@ const labelCls = "mb-1 block text-xs text-gray-500 dark:text-gray-400";
 
 /** Shared by StepRegisterDialog's "Filtering Attributes", ImageRegisterDialog's "Attributes",
  *  and CheckableGrid's column picker — a search box to cut down a long field list, checkboxes
- *  to pick from it, and a "已选择 N 个" count below instead of spelling out every selected name. */
-export default function AttributePicker({
+ *  to pick from it, and a "已选择 N 个" count below instead of spelling out every selected name.
+ *  Wrapped in `memo`: a wide entity (a product-class table easily has 150-280 attributes) made
+ *  this list expensive enough that re-rendering it on every unrelated parent re-render was a real,
+ *  visible stutter — CheckableGrid now goes out of its way to keep every prop here referentially
+ *  stable across its own scroll-driven re-renders (see its own comments), and `memo` is what
+ *  actually turns "stable props" into "skip re-rendering this" instead of doing the work anyway. */
+function AttributePicker({
   label,
   options,
   selected,
@@ -76,3 +81,5 @@ export default function AttributePicker({
     </div>
   );
 }
+
+export default memo(AttributePicker);
