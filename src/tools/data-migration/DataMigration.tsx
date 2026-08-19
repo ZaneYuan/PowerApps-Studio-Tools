@@ -18,7 +18,13 @@ import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid from "../../shared/CheckableGrid";
 import { planDeferredWrite, phase1Body, phase2Body } from "./deferredWrite";
-import { buildDataMigrationLogText, dataMigrationLogFilename, type DataMigrationLogEntry, type DataMigrationTableLog } from "./importLog";
+import {
+  buildDataMigrationLogText,
+  dataMigrationLogFilename,
+  type DataMigrationLogEntry,
+  type DataMigrationLogPhase,
+  type DataMigrationTableLog,
+} from "./importLog";
 import type { ImportColumn, ImportRow, ImportTable } from "./types";
 
 const inputCls =
@@ -36,13 +42,53 @@ function nextTabId(prefix: string, entityLogicalName: string): string {
 
 /** A raw SELECT's split-by-`;` text still has to go through translate.ts's own `parseSql` per
  *  statement — this only splits the *text*, so each chunk parses as exactly one statement
- *  (never `kind:"batch"`). Naive: doesn't know about a `;` inside a quoted string literal, which
- *  is an accepted, documented limitation rather than something worth a real SQL tokenizer for. */
+ *  (never `kind:"batch"`). Tracks whether it's currently inside a `--` line comment or a
+ *  single-quoted string literal so a `;` inside either doesn't split there — a plain `.split(";")`
+ *  silently corrupted real hand-written migration scripts whose section-header comments happened
+ *  to contain a `;` (e.g. "-- 2. contoso_productroomtype -- Room Type (single room type per
+ *  product; WW/PTL label pair...)"): the comment's `;` cut the file mid-comment, and the orphaned
+ *  continuation text glued onto the front of the next chunk made even the syntactically-fine
+ *  INSERT that followed fail to parse, silently dropping that table's rows with no specific error
+ *  (see bugs & requirements/8.19.md #2 — confirmed against the user's real file, which had this
+ *  exact problem in three separate section comments, not just the one they happened to notice). */
 function splitStatements(sql: string): string[] {
-  return sql
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const statements: string[] = [];
+  let current = "";
+  let inLineComment = false;
+  let inString = false;
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    if (inLineComment) {
+      current += ch;
+      if (ch === "\n") inLineComment = false;
+      continue;
+    }
+    if (inString) {
+      current += ch;
+      if (ch === "'") inString = false;
+      continue;
+    }
+    if (ch === "-" && sql[i + 1] === "-") {
+      inLineComment = true;
+      current += ch;
+      continue;
+    }
+    if (ch === "'") {
+      inString = true;
+      current += ch;
+      continue;
+    }
+    if (ch === ";") {
+      const trimmed = current.trim();
+      if (trimmed) statements.push(trimmed);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  const trimmed = current.trim();
+  if (trimmed) statements.push(trimmed);
+  return statements;
 }
 
 /** A real (macrotask) yield to the browser — unlike `await` on an already-settled/cached
@@ -193,6 +239,7 @@ export default function DataMigration() {
     await yieldToBrowser();
     try {
       const text = await file.text();
+      setSql(text); // show what was actually uploaded, so a statement that didn't get recognized can be seen and checked directly, not just reasoned about from the summary counts
       const statements = splitStatements(text);
       const insertsByEntity = new Map<string, { columns: Set<string>; rows: { pkValue: string; values: Record<string, unknown> }[] }>();
       let ignoredCount = 0;
@@ -264,7 +311,8 @@ export default function DataMigration() {
 
   const [targetConnectionId, setTargetConnectionId] = useState("");
   const [writeRunning, setWriteRunning] = useState(false);
-  const [writeResults, setWriteResults] = useState<{ key: string; state: "success" | "error"; error?: string }[] | null>(null);
+  const [writeResults, setWriteResults] = useState<DataMigrationLogEntry[] | null>(null);
+  const [writeLog, setWriteLog] = useState<{ filename: string; text: string } | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [writeConcurrency, setWriteConcurrency] = useState(8);
   const stopRequestedRef = useRef(false);
@@ -297,6 +345,7 @@ export default function DataMigration() {
 
     setWriteRunning(true);
     setWriteResults([]);
+    setWriteLog(null);
     setWriteError(null);
     stopRequestedRef.current = false;
     setWriteStopped(false);
@@ -307,9 +356,14 @@ export default function DataMigration() {
     }
     let stopped = false;
 
-    function recordResult(tabId: string, entry: DataMigrationLogEntry) {
-      tableLogs.get(tabId)?.entries.push(entry);
-      setWriteResults((r) => [...(r ?? []), { key: entry.key, state: entry.state, error: entry.error }]);
+    function recordResult(
+      tabId: string,
+      phase: DataMigrationLogPhase,
+      entry: { key: string; state: "success" | "error"; error?: string },
+    ) {
+      const fullEntry: DataMigrationLogEntry = { ...entry, phase };
+      tableLogs.get(tabId)?.entries.push(fullEntry);
+      setWriteResults((r) => [...(r ?? []), fullEntry]);
     }
 
     try {
@@ -320,9 +374,9 @@ export default function DataMigration() {
         async (rowPlan) => {
           try {
             await updateRow(targetConnectionId, rowPlan.table.entityLogicalName, rowPlan.table.entitySetName, rowPlan.row.id, phase1Body(rowPlan));
-            recordResult(rowPlan.table.tabId, { key: rowPlan.row.id, state: "success" });
+            recordResult(rowPlan.table.tabId, "create", { key: rowPlan.row.id, state: "success" });
           } catch (err) {
-            recordResult(rowPlan.table.tabId, { key: rowPlan.row.id, state: "error", error: err instanceof Error ? err.message : String(err) });
+            recordResult(rowPlan.table.tabId, "create", { key: rowPlan.row.id, state: "error", error: err instanceof Error ? err.message : String(err) });
           }
         },
         () => stopRequestedRef.current,
@@ -348,9 +402,9 @@ export default function DataMigration() {
             const key = `${rowPlan.row.id} (回填 ${rowPlan.deferredColumns.join(", ")})`;
             try {
               await updateRow(targetConnectionId, rowPlan.table.entityLogicalName, rowPlan.table.entitySetName, rowPlan.row.id, phase2Body(rowPlan));
-              recordResult(rowPlan.table.tabId, { key, state: "success" });
+              recordResult(rowPlan.table.tabId, "backfill", { key, state: "success" });
             } catch (err) {
-              recordResult(rowPlan.table.tabId, { key, state: "error", error: err instanceof Error ? err.message : String(err) });
+              recordResult(rowPlan.table.tabId, "backfill", { key, state: "error", error: err instanceof Error ? err.message : String(err) });
             }
           },
           () => stopRequestedRef.current,
@@ -373,7 +427,7 @@ export default function DataMigration() {
           const checkedRows = table.rows.filter((r) => r.checked);
           if (!table.manyToManyInfo || !envUrl) {
             for (const row of checkedRows) {
-              recordResult(table.tabId, { key: row.id, state: "error", error: "找不到多对多关系元数据或目标连接的环境 URL。" });
+              recordResult(table.tabId, "associate", { key: row.id, state: "error", error: "找不到多对多关系元数据或目标连接的环境 URL。" });
             }
             continue;
           }
@@ -384,9 +438,9 @@ export default function DataMigration() {
               try {
                 const values = resolveIntersectRowValues(table.manyToManyInfo!, row.values);
                 await insertIntersectRow(targetConnectionId, envUrl, table.manyToManyInfo!, values);
-                recordResult(table.tabId, { key: row.id, state: "success" });
+                recordResult(table.tabId, "associate", { key: row.id, state: "success" });
               } catch (err) {
-                recordResult(table.tabId, { key: row.id, state: "error", error: err instanceof Error ? err.message : String(err) });
+                recordResult(table.tabId, "associate", { key: row.id, state: "error", error: err instanceof Error ? err.message : String(err) });
               }
             },
             () => stopRequestedRef.current,
@@ -402,7 +456,7 @@ export default function DataMigration() {
         tables: Array.from(tableLogs.values()).filter((t) => t.entries.length > 0),
         stopped,
       });
-      downloadTextFile(dataMigrationLogFilename(finishedAt), text);
+      setWriteLog({ filename: dataMigrationLogFilename(finishedAt), text });
     } catch (err) {
       setWriteError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -592,33 +646,57 @@ export default function DataMigration() {
             </pre>
           )}
 
-          {writeResults && writeResults.length > 0 && (
-            <div className="max-h-[40vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-              <div className="inline-block min-w-full align-top">
-                <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-                  {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
-                  共 {writeResults.length} 条，成功 {writeResults.filter((r) => r.state === "success").length}，失败{" "}
-                  {writeResults.filter((r) => r.state === "error").length} — 执行日志已自动下载
+          {writeResults &&
+            writeResults.length > 0 &&
+            (() => {
+              // "导入" = create (phase 1) + associate (phase 3) entries — each is one distinct
+              // source row's primary write. "依赖回填" (backfill, phase 2) is a supplementary
+              // follow-up only for rows with deferred columns, so folding it into one flat total
+              // double-counts those rows (see 8.19.md #1: a 52-row batch showed "成功 106").
+              const imported = writeResults.filter((r) => r.phase !== "backfill");
+              const backfilled = writeResults.filter((r) => r.phase === "backfill");
+              const importSuccess = imported.filter((r) => r.state === "success").length;
+              const importError = imported.length - importSuccess;
+              const backfillSuccess = backfilled.filter((r) => r.state === "success").length;
+              const backfillError = backfilled.length - backfillSuccess;
+              return (
+                <div className="max-h-[40vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
+                  <div className="inline-block min-w-full align-top">
+                    <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+                      <span>
+                        {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+                        导入成功 {importSuccess} 行，失败 {importError} 行
+                        {backfilled.length > 0 && `；依赖回填成功 ${backfillSuccess} 处，失败 ${backfillError} 处`}
+                      </span>
+                      {writeLog && (
+                        <button
+                          onClick={() => downloadTextFile(writeLog.filename, writeLog.text)}
+                          className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                        >
+                          下载日志
+                        </button>
+                      )}
+                    </div>
+                    <table className="w-full text-left text-sm">
+                      <tbody>
+                        {writeResults.map((r, i) => (
+                          <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+                            <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
+                            <td className="whitespace-nowrap px-3 py-1.5 text-xs">
+                              {r.state === "success" ? (
+                                <span className="text-green-600 dark:text-green-400">成功</span>
+                              ) : (
+                                <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-                <table className="w-full text-left text-sm">
-                  <tbody>
-                    {writeResults.map((r, i) => (
-                      <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-                        <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
-                        <td className="whitespace-nowrap px-3 py-1.5 text-xs">
-                          {r.state === "success" ? (
-                            <span className="text-green-600 dark:text-green-400">成功</span>
-                          ) : (
-                            <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+              );
+            })()}
         </>
       )}
     </div>

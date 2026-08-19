@@ -11,7 +11,7 @@ import { buildLookupRelationshipMap } from "../../native/navProperty";
  *  `Dataverse 请求失败 (429): ...` — that's the only signal available here (no structured status
  *  code or Retry-After header crosses the native bridge), so this uses a fixed exponential
  *  backoff instead of honoring a real Retry-After. */
-async function withRetryOn429<T>(fn: () => Promise<T>): Promise<T> {
+export async function withRetryOn429<T>(fn: () => Promise<T>): Promise<T> {
   const delaysMs = [1000, 2000, 4000];
   for (let attempt = 0; ; attempt++) {
     try {

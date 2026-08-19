@@ -65,6 +65,7 @@ export default function DataCopy() {
 
   const [writeRunning, setWriteRunning] = useState(false);
   const [writeResults, setWriteResults] = useState<Sql4CdsLogEntry[] | null>(null);
+  const [writeLog, setWriteLog] = useState<{ filename: string; text: string } | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [writeConcurrency, setWriteConcurrency] = useState(8);
   const stopRequestedRef = useRef(false);
@@ -209,6 +210,7 @@ export default function DataCopy() {
 
     setWriteRunning(true);
     setWriteResults([]);
+    setWriteLog(null);
     setWriteError(null);
     stopRequestedRef.current = false;
     setWriteStopped(false);
@@ -252,7 +254,7 @@ export default function DataCopy() {
         entries,
         stopped,
       });
-      downloadTextFile(sql4CdsLogFilename("insert", entityLogicalName, finishedAt), text);
+      setWriteLog({ filename: sql4CdsLogFilename("insert", entityLogicalName, finishedAt), text });
     } catch (err) {
       setWriteError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -368,10 +370,20 @@ export default function DataCopy() {
           {writeResults && writeResults.length > 0 && (
             <div className="max-h-[40vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
               <div className="inline-block min-w-full align-top">
-                <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-                  {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
-                  共 {writeResults.length} 条，成功 {writeResults.filter((r) => r.state === "success").length}，失败{" "}
-                  {writeResults.filter((r) => r.state === "error").length} — 执行日志已自动下载
+                <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+                  <span>
+                    {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+                    共 {writeResults.length} 条，成功 {writeResults.filter((r) => r.state === "success").length}，失败{" "}
+                    {writeResults.filter((r) => r.state === "error").length}
+                  </span>
+                  {writeLog && (
+                    <button
+                      onClick={() => downloadTextFile(writeLog.filename, writeLog.text)}
+                      className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                    >
+                      下载日志
+                    </button>
+                  )}
                 </div>
                 <table className="w-full text-left text-sm">
                   <tbody>

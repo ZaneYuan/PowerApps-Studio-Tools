@@ -101,15 +101,35 @@ function ConcurrencyInput({
   );
 }
 
-function WriteResultTable({ results, stopped }: { results: Sql4CdsLogEntry[]; stopped?: boolean }) {
+/** `log` is null until the run finishes (or if it errored before producing one) — the button only
+ *  ever fires an already-built download, no re-computation on click. */
+function WriteResultTable({
+  results,
+  stopped,
+  log,
+}: {
+  results: Sql4CdsLogEntry[];
+  stopped?: boolean;
+  log: { filename: string; text: string } | null;
+}) {
   const success = results.filter((r) => r.state === "success").length;
   const error = results.length - success;
   return (
     <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
       <div className="inline-block min-w-full align-top">
-        <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-          {stopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
-          共 {results.length} 条，成功 {success}，失败 {error} — 执行日志已自动下载
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+          <span>
+            {stopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+            共 {results.length} 条，成功 {success}，失败 {error}
+          </span>
+          {log && (
+            <button
+              onClick={() => downloadTextFile(log.filename, log.text)}
+              className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+            >
+              下载日志
+            </button>
+          )}
         </div>
         <table className="w-full text-left text-sm">
           <tbody>
@@ -201,6 +221,7 @@ export default function Sql4Cds() {
   // --- write (INSERT/UPDATE/DELETE) execution state ---
   const [writeRunning, setWriteRunning] = useState(false);
   const [writeResults, setWriteResults] = useState<Sql4CdsLogEntry[] | null>(null);
+  const [writeLog, setWriteLog] = useState<{ filename: string; text: string } | null>(null);
   // Anything that goes wrong outside the per-row try/catch below (bad literal, download
   // failure, ...) used to become an unhandled promise rejection: writeRunning never got reset,
   // so the button stayed stuck on "执行中…" forever with no visible error. Every write handler
@@ -221,6 +242,7 @@ export default function Sql4Cds() {
 
   useEffect(() => {
     setWriteResults(null);
+    setWriteLog(null);
     setWriteError(null);
     setWriteStopped(false);
   }, [sql]);
@@ -313,7 +335,7 @@ export default function Sql4Cds() {
       entries,
       stopped,
     });
-    downloadTextFile(filename, text);
+    setWriteLog({ filename, text });
   }
 
   async function handleInsert() {
@@ -323,6 +345,7 @@ export default function Sql4Cds() {
 
     setWriteRunning(true);
     setWriteResults([]);
+    setWriteLog(null);
     setWriteError(null);
     stopRequestedRef.current = false;
     setWriteStopped(false);
@@ -393,6 +416,7 @@ export default function Sql4Cds() {
 
     setWriteRunning(true);
     setWriteResults([]);
+    setWriteLog(null);
     setWriteError(null);
     stopRequestedRef.current = false;
     setWriteStopped(false);
@@ -473,6 +497,7 @@ export default function Sql4Cds() {
 
     setWriteRunning(true);
     setWriteResults([]);
+    setWriteLog(null);
     setWriteError(null);
     stopRequestedRef.current = false;
     setWriteStopped(false);
@@ -614,7 +639,7 @@ export default function Sql4Cds() {
         statements: statementLogs,
         stopped,
       });
-      downloadTextFile(sql4CdsBatchLogFilename(finishedAt), text);
+      setWriteLog({ filename: sql4CdsBatchLogFilename(finishedAt), text });
     } catch (err) {
       setWriteError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -820,7 +845,7 @@ export default function Sql4Cds() {
             </pre>
           )}
 
-          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} />}
+          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} log={writeLog} />}
         </>
       )}
 
@@ -869,7 +894,7 @@ export default function Sql4Cds() {
             </pre>
           )}
 
-          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} />}
+          {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} log={writeLog} />}
         </>
       )}
 
@@ -935,7 +960,7 @@ export default function Sql4Cds() {
               </pre>
             )}
 
-            {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} />}
+            {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} log={writeLog} />}
           </>
         );
       })()}
