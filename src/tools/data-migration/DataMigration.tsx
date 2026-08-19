@@ -8,6 +8,8 @@ import {
   fetchDefaultViewColumnOrder,
   fetchEntityMeta,
   fetchManyToManyInfo,
+  fetchOptionSetValues,
+  isLookupAttributeType,
   isSystemAuditField,
   sortColumnsForDisplay,
 } from "../../native/metadataService";
@@ -118,7 +120,10 @@ function unwrapRow(row: Record<string, unknown>): Record<string, unknown> {
 /** Column order/default-checked state: primary key first, then the entity's default-view columns
  *  in that view's own order, then everything else alphabetically (`sortColumnsForDisplay`) —
  *  system/audit columns (createdon, ownerid, statecode, ...) default unchecked since a migrated
- *  row should get its own from the server, not carry the source row's (`isSystemAuditField`). */
+ *  row should get its own from the server, not carry the source row's (`isSystemAuditField`).
+ *  Also picks each column's cell-edit treatment, same three-way split as Data Copy's own column
+ *  builder (text/select/lookup) — see bugs & requirements/8.19.md #3: the grid here used to be
+ *  entirely read-only, which made no sense once Data Copy got the same three editors. */
 async function buildColumns(
   connectionId: string,
   entityLogicalName: string,
@@ -131,11 +136,33 @@ async function buildColumns(
   ]);
   const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
   const ordered = sortColumnsForDisplay(columnNames, primaryIdAttribute, viewOrder);
-  return ordered.map((name) => ({
-    key: name,
-    attributeType: typeByName.get(name.toLowerCase()) ?? "String",
-    checked: !isSystemAuditField(name),
-  }));
+
+  const columns: ImportColumn[] = [];
+  for (const name of ordered) {
+    const attrType = typeByName.get(name.toLowerCase()) ?? "String";
+    const checked = !isSystemAuditField(name);
+    if (attrType === "String" || attrType === "Memo") {
+      columns.push({ key: name, attributeType: attrType, checked, editable: true, editKind: "text" });
+    } else if (attrType === "Picklist") {
+      const options = await fetchOptionSetValues(connectionId, entityLogicalName, name);
+      columns.push({
+        key: name,
+        attributeType: attrType,
+        checked,
+        editable: true,
+        editKind: "select",
+        options: options.map((o) => ({ value: String(o.value), label: o.label })),
+      });
+    } else if (isLookupAttributeType(attrType)) {
+      // Row's value here is already the unwrapped plain GUID (unwrapRow strips the
+      // `_..._value` suffix on the query path; the SQL-import path never had the suffix to
+      // begin with), which is exactly what the picker edits and writes back.
+      columns.push({ key: name, attributeType: attrType, checked, editable: true, editKind: "lookup" });
+    } else {
+      columns.push({ key: name, attributeType: attrType, checked });
+    }
+  }
+  return columns;
 }
 
 export default function DataMigration() {
@@ -480,6 +507,22 @@ export default function DataMigration() {
     stopRequestedRef.current = true;
   }
 
+  /** Edits one cell in one table's row — needs the table's tabId (unlike Data Copy, which only
+   *  ever has one table on screen) since several tabs stay mounted at once. */
+  function handleEditCell(tabId: string, rowId: string, columnKey: string, value: string) {
+    setTables((ts) =>
+      ts.map((t) => {
+        if (t.tabId !== tabId) return t;
+        const column = t.columns.find((c) => c.key === columnKey);
+        // A Picklist's real value is Edm.Int32 — the shared grid's <select> only ever hands back
+        // a string (native <option> values always are), convert back here rather than teaching
+        // the generic grid component about Dataverse option-set typing.
+        const finalValue: unknown = column?.editKind === "select" ? (value === "" ? null : Number(value)) : value;
+        return { ...t, rows: t.rows.map((r) => (r.id === rowId ? { ...r, values: { ...r.values, [columnKey]: finalValue } } : r)) };
+      }),
+    );
+  }
+
   /** Downloads a standalone `INSERT INTO ... VALUES ...;` for the active tab's checked rows/columns
    *  — one statement per tab (mirrors this tool's whole "one table per tab" model), not the full
    *  multi-table batch at once. */
@@ -509,7 +552,8 @@ export default function DataMigration() {
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         默认模式：写一条或多条 `;` 分隔的 SELECT（可以查不同的表），对本页连接执行，每条查询结果各开一个 Tab，行默认不勾选、列默认全选。也可以点"以
         SQL 导入"上传一个 `.sql` 文件——文件里的 INSERT 语句按表分组同样落进 Tab（行、列都默认全选），非 INSERT
-        语句会被忽略并提示。两种来源的 Tab 共存，配置好勾选后选一个目标连接点导入——自动识别这批数据里"一张表引用了另一张表还没创建的记录"这种依赖，先创建所有行（引用的字段先留空），再统一回填，不需要手动排好表的导入顺序。
+        语句会被忽略并提示。表格里文本、选项集（Picklist）、查找（Lookup/Customer/Owner）字段可直接编辑，列宽可拖拽。两种来源的 Tab
+        共存，配置好勾选后选一个目标连接点导入——自动识别这批数据里"一张表引用了另一张表还没创建的记录"这种依赖，先创建所有行（引用的字段先留空），再统一回填，不需要手动排好表的导入顺序。
       </div>
 
       <div className="space-y-2">
@@ -588,7 +632,7 @@ export default function DataMigration() {
             <CheckableGrid
               columns={activeTable.columns}
               rows={activeTable.rows}
-              columnsLabel="要迁移的列（勾选）"
+              columnsLabel="要迁移的列（勾选，文本/选项集/查找字段可直接编辑，列宽可拖拽）"
               renderColumnBadge={(c) =>
                 (c as ImportColumn).attributeType === "Lookup" && (
                   <span className="text-purple-500 dark:text-purple-400">(Lookup)</span>
@@ -596,6 +640,9 @@ export default function DataMigration() {
               }
               onColumnsChange={(columns) => updateTable(activeTable.tabId, { ...activeTable, columns: columns as ImportColumn[] })}
               onRowsChange={(rows) => updateTable(activeTable.tabId, { ...activeTable, rows })}
+              onEditCell={(rowId, columnKey, value) => handleEditCell(activeTable.tabId, rowId, columnKey, value)}
+              connectionId={activeConnectionId ?? undefined}
+              entityLogicalName={activeTable.entityLogicalName}
             />
           )}
 
