@@ -40,11 +40,14 @@ public static class UpdateChecker
 
             var exePath = Path.Combine(exeDir, "PowerAppsStudioTools.exe");
 
-            MessageBox.Show(
-                "检测到源码有更新，将自动重新发布并重启，请稍候（会弹出一个命令行窗口显示进度）。",
+            var result = MessageBox.Show(
+                $"检测到源码有更新（当前 {builtHead?[..7]} → {currentHead[..7]}）。重新发布并重启会关闭并重启应用，当前未保存的内容会丢失（会弹出一个命令行窗口显示进度）。是否现在更新？",
                 "Power Apps Studio & Tools",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result != MessageBoxResult.Yes)
+                return false;
 
             // Wait a couple seconds so this process fully exits and releases the exe file lock
             // before dotnet publish tries to overwrite it.
