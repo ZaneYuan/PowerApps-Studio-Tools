@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { memo, useCallback, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import AttributePicker from "./AttributePicker";
 import LookupPickerModal from "./LookupPickerModal";
@@ -34,6 +34,92 @@ export interface GridRow {
 
 const inputCls =
   "w-full min-w-24 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
+
+/** One row, split out and `memo`-wrapped so a scroll tick that re-renders the parent grid (see
+ *  the virtualizer below — *every* scroll event re-renders it, vertical or horizontal, whether or
+ *  not the visible row range actually changed) doesn't force React to recreate and re-diff every
+ *  cell of every row that's already correctly rendered. Cheap on a narrow table; on a wide one
+ *  (a product-class entity easily has 150-280 attributes) recreating ~35 rows × 200 columns of
+ *  cells from scratch on every scroll frame was enough sustained allocation to make the whole
+ *  machine feel like it was thrashing, not just the tab — see bugs & requirements/8.20.md. Only
+ *  actually skips work when its own props are referentially stable, so every callback below is
+ *  its own `useCallback` rather than an inline arrow recreated per render. */
+const GridRowView = memo(function GridRowView({
+  row,
+  checkedColumns,
+  onEditCell,
+  onToggleRow,
+  onOpenLookupEditor,
+  connectionId,
+  entityLogicalName,
+}: {
+  row: GridRow;
+  checkedColumns: GridColumn[];
+  onEditCell?: (rowId: string, columnKey: string, value: string) => void;
+  onToggleRow: (id: string) => void;
+  onOpenLookupEditor: (rowId: string, columnKey: string) => void;
+  connectionId?: string;
+  entityLogicalName?: string;
+}) {
+  return (
+    <tr className="border-t border-gray-100 dark:border-gray-800">
+      <td className="px-3 py-1.5">
+        <input type="checkbox" checked={row.checked} onChange={() => onToggleRow(row.id)} />
+      </td>
+      {checkedColumns.map((c) => {
+        const rawValue = row.values[c.key];
+        const displayValue = typeof rawValue === "object" ? JSON.stringify(rawValue) : String(rawValue ?? "");
+        return (
+          <td
+            key={c.key}
+            className="whitespace-nowrap px-3 py-1.5 font-mono text-xs"
+            style={c.width ? { width: c.width, minWidth: c.width, maxWidth: c.width } : undefined}
+          >
+            {c.editable && c.editKind === "select" ? (
+              <select value={String(rawValue ?? "")} onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)} className={inputCls}>
+                <option value="" />
+                {c.options?.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            ) : c.editable && c.editKind === "lookup" ? (
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={String(rawValue ?? "")}
+                  onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
+                  className={`${inputCls} min-w-0 flex-1`}
+                />
+                <button
+                  type="button"
+                  onClick={() => onOpenLookupEditor(row.id, c.key)}
+                  title="搜索并选择记录"
+                  disabled={!connectionId || !entityLogicalName}
+                  className="shrink-0 rounded border border-gray-300 px-1 py-0.5 text-xs hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700"
+                >
+                  🔍
+                </button>
+              </div>
+            ) : c.editable ? (
+              <input
+                type="text"
+                value={String(rawValue ?? "")}
+                onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
+                className={inputCls}
+              />
+            ) : (
+              <span className="block overflow-hidden text-ellipsis" title={displayValue}>
+                {displayValue}
+              </span>
+            )}
+          </td>
+        );
+      })}
+    </tr>
+  );
+});
 
 /** The shared "query a table, review it as a row/column-checkbox grid" surface every write tool
  *  in this app builds on (data-migration's multi-table Tabs, data-copy's single editable table).
@@ -114,13 +200,12 @@ export default function CheckableGrid({
     },
     [columns, renderColumnBadge],
   );
-  function toggleRow(id: string) {
-    onRowsChange(rows.map((r) => (r.id === id ? { ...r, checked: !r.checked } : r)));
-  }
+  const toggleRow = useCallback((id: string) => onRowsChange(rows.map((r) => (r.id === id ? { ...r, checked: !r.checked } : r))), [rows, onRowsChange]);
   function toggleAllRows() {
     const next = !allRowsChecked;
     onRowsChange(rows.map((r) => ({ ...r, checked: next })));
   }
+  const openLookupEditor = useCallback((rowId: string, columnKey: string) => setLookupEditorCell({ rowId, columnKey }), []);
 
   /** Drag-to-resize a column header — same "record start position/width, track via window-level
    *  mousemove/mouseup" pattern already used by Plugin Registration's tree/detail split (see
@@ -191,66 +276,16 @@ export default function CheckableGrid({
               {virtualRows.map((virtualRow) => {
                 const row = rows[virtualRow.index];
                 return (
-                  <tr key={row.id} className="border-t border-gray-100 dark:border-gray-800">
-                    <td className="px-3 py-1.5">
-                      <input type="checkbox" checked={row.checked} onChange={() => toggleRow(row.id)} />
-                    </td>
-                    {checkedColumns.map((c) => {
-                      const rawValue = row.values[c.key];
-                      const displayValue = typeof rawValue === "object" ? JSON.stringify(rawValue) : String(rawValue ?? "");
-                      return (
-                        <td
-                          key={c.key}
-                          className="whitespace-nowrap px-3 py-1.5 font-mono text-xs"
-                          style={c.width ? { width: c.width, minWidth: c.width, maxWidth: c.width } : undefined}
-                        >
-                          {c.editable && c.editKind === "select" ? (
-                            <select
-                              value={String(rawValue ?? "")}
-                              onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
-                              className={inputCls}
-                            >
-                              <option value="" />
-                              {c.options?.map((o) => (
-                                <option key={o.value} value={o.value}>
-                                  {o.label}
-                                </option>
-                              ))}
-                            </select>
-                          ) : c.editable && c.editKind === "lookup" ? (
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="text"
-                                value={String(rawValue ?? "")}
-                                onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
-                                className={`${inputCls} min-w-0 flex-1`}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => setLookupEditorCell({ rowId: row.id, columnKey: c.key })}
-                                title="搜索并选择记录"
-                                disabled={!connectionId || !entityLogicalName}
-                                className="shrink-0 rounded border border-gray-300 px-1 py-0.5 text-xs hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700"
-                              >
-                                🔍
-                              </button>
-                            </div>
-                          ) : c.editable ? (
-                            <input
-                              type="text"
-                              value={String(rawValue ?? "")}
-                              onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
-                              className={inputCls}
-                            />
-                          ) : (
-                            <span className="block overflow-hidden text-ellipsis" title={displayValue}>
-                              {displayValue}
-                            </span>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
+                  <GridRowView
+                    key={row.id}
+                    row={row}
+                    checkedColumns={checkedColumns}
+                    onEditCell={onEditCell}
+                    onToggleRow={toggleRow}
+                    onOpenLookupEditor={openLookupEditor}
+                    connectionId={connectionId}
+                    entityLogicalName={entityLogicalName}
+                  />
                 );
               })}
               {bottomSpacerHeight > 0 && (
