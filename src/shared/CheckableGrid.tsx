@@ -1,6 +1,13 @@
-import { useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import AttributePicker from "./AttributePicker";
 import LookupPickerModal from "./LookupPickerModal";
+
+// Matches this grid's actual rendered row height closely enough for @tanstack/react-virtual's
+// scroll-position math — every cell uses the same py-1.5 padding and whitespace-nowrap (no
+// wrapping, so no row is taller than another), so a fixed estimate is accurate rather than a
+// rough approximation, and there's no need for the library's (pricier) dynamic remeasurement.
+const ROW_HEIGHT_PX = 33;
 
 export interface GridColumn {
   key: string;
@@ -62,8 +69,31 @@ export default function CheckableGrid({
   const checkedRowCount = rows.filter((r) => r.checked).length;
   const [lookupEditorCell, setLookupEditorCell] = useState<{ rowId: string; columnKey: string } | null>(null);
 
+  // A plain `rows.map(...)` over everything used to be fine when cells were read-only text, but
+  // once item 6/8.18 gave every editable cell a real <input>/<select> (plus the resize/lookup
+  // machinery above), a several-thousand-row import (a real one: 4192 rows, see bugs &
+  // requirements/8.19.md #6) rendered tens of thousands of live form elements in one React commit
+  // — tens of seconds of an unresponsive tab. Row virtualization keeps the same scrollable
+  // <table>/<tbody> (column alignment needs real in-flow <tr>s — an absolutely-positioned <tr>
+  // breaks table layout, so this uses the "spacer <tr> before/after the visible slice" technique
+  // rather than transform-positioning every row) but only ever mounts the rows actually in or
+  // near the viewport.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT_PX,
+    overscan: 15,
+  });
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const topSpacerHeight = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const bottomSpacerHeight = virtualRows.length > 0 ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end : 0;
+
   function toggleColumn(key: string) {
     onColumnsChange(columns.map((c) => (c.key === key ? { ...c, checked: !c.checked } : c)));
+  }
+  function toggleAllColumns(selectAll: boolean) {
+    onColumnsChange(columns.map((c) => ({ ...c, checked: selectAll })));
   }
   function toggleRow(id: string) {
     onRowsChange(rows.map((r) => (r.id === id ? { ...r, checked: !r.checked } : r)));
@@ -101,13 +131,14 @@ export default function CheckableGrid({
         options={columns.map((c) => c.key)}
         selected={new Set(checkedColumns.map((c) => c.key))}
         onToggle={toggleColumn}
+        onToggleAll={toggleAllColumns}
         renderBadge={(key) => {
           const column = columns.find((c) => c.key === key);
           return column && renderColumnBadge?.(column);
         }}
       />
 
-      <div className="max-h-[45vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
+      <div ref={scrollRef} className="max-h-[45vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
         <div className="inline-block min-w-full align-top">
           <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
             共 {rows.length} 行，已选 {checkedRowCount} 行
@@ -136,68 +167,81 @@ export default function CheckableGrid({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.id} className="border-t border-gray-100 dark:border-gray-800">
-                  <td className="px-3 py-1.5">
-                    <input type="checkbox" checked={row.checked} onChange={() => toggleRow(row.id)} />
-                  </td>
-                  {checkedColumns.map((c) => {
-                    const rawValue = row.values[c.key];
-                    const displayValue = typeof rawValue === "object" ? JSON.stringify(rawValue) : String(rawValue ?? "");
-                    return (
-                      <td
-                        key={c.key}
-                        className="whitespace-nowrap px-3 py-1.5 font-mono text-xs"
-                        style={c.width ? { width: c.width, minWidth: c.width, maxWidth: c.width } : undefined}
-                      >
-                        {c.editable && c.editKind === "select" ? (
-                          <select
-                            value={String(rawValue ?? "")}
-                            onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
-                            className={inputCls}
-                          >
-                            <option value="" />
-                            {c.options?.map((o) => (
-                              <option key={o.value} value={o.value}>
-                                {o.label}
-                              </option>
-                            ))}
-                          </select>
-                        ) : c.editable && c.editKind === "lookup" ? (
-                          <div className="flex items-center gap-1">
+              {topSpacerHeight > 0 && (
+                <tr style={{ height: topSpacerHeight }} aria-hidden="true">
+                  <td colSpan={checkedColumns.length + 1} />
+                </tr>
+              )}
+              {virtualRows.map((virtualRow) => {
+                const row = rows[virtualRow.index];
+                return (
+                  <tr key={row.id} className="border-t border-gray-100 dark:border-gray-800">
+                    <td className="px-3 py-1.5">
+                      <input type="checkbox" checked={row.checked} onChange={() => toggleRow(row.id)} />
+                    </td>
+                    {checkedColumns.map((c) => {
+                      const rawValue = row.values[c.key];
+                      const displayValue = typeof rawValue === "object" ? JSON.stringify(rawValue) : String(rawValue ?? "");
+                      return (
+                        <td
+                          key={c.key}
+                          className="whitespace-nowrap px-3 py-1.5 font-mono text-xs"
+                          style={c.width ? { width: c.width, minWidth: c.width, maxWidth: c.width } : undefined}
+                        >
+                          {c.editable && c.editKind === "select" ? (
+                            <select
+                              value={String(rawValue ?? "")}
+                              onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
+                              className={inputCls}
+                            >
+                              <option value="" />
+                              {c.options?.map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : c.editable && c.editKind === "lookup" ? (
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={String(rawValue ?? "")}
+                                onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
+                                className={`${inputCls} min-w-0 flex-1`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setLookupEditorCell({ rowId: row.id, columnKey: c.key })}
+                                title="搜索并选择记录"
+                                disabled={!connectionId || !entityLogicalName}
+                                className="shrink-0 rounded border border-gray-300 px-1 py-0.5 text-xs hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700"
+                              >
+                                🔍
+                              </button>
+                            </div>
+                          ) : c.editable ? (
                             <input
                               type="text"
                               value={String(rawValue ?? "")}
                               onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
-                              className={`${inputCls} min-w-0 flex-1`}
+                              className={inputCls}
                             />
-                            <button
-                              type="button"
-                              onClick={() => setLookupEditorCell({ rowId: row.id, columnKey: c.key })}
-                              title="搜索并选择记录"
-                              disabled={!connectionId || !entityLogicalName}
-                              className="shrink-0 rounded border border-gray-300 px-1 py-0.5 text-xs hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700"
-                            >
-                              🔍
-                            </button>
-                          </div>
-                        ) : c.editable ? (
-                          <input
-                            type="text"
-                            value={String(rawValue ?? "")}
-                            onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
-                            className={inputCls}
-                          />
-                        ) : (
-                          <span className="block overflow-hidden text-ellipsis" title={displayValue}>
-                            {displayValue}
-                          </span>
-                        )}
-                      </td>
-                    );
-                  })}
+                          ) : (
+                            <span className="block overflow-hidden text-ellipsis" title={displayValue}>
+                              {displayValue}
+                            </span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+              {bottomSpacerHeight > 0 && (
+                <tr style={{ height: bottomSpacerHeight }} aria-hidden="true">
+                  <td colSpan={checkedColumns.length + 1} />
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>

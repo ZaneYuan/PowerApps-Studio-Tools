@@ -165,6 +165,10 @@ export default function StepRegisterDialog({
     });
   }
 
+  function toggleAllAttributes(selectAll: boolean) {
+    setSelectedAttributes(selectAll ? new Set(attributes) : new Set());
+  }
+
   async function handleSubmit() {
     setSubmitting(true);
     setSubmitError(null);
@@ -344,6 +348,7 @@ export default function StepRegisterDialog({
                 options={attributes}
                 selected={selectedAttributes}
                 onToggle={toggleAttribute}
+                onToggleAll={toggleAllAttributes}
               />
             )}
 

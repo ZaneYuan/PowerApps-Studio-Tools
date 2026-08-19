@@ -18,6 +18,7 @@
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.8",
     "@lezer/highlight": "^1.2.3",
+    "@tanstack/react-virtual": "^3.14.10",
     "codemirror": "^6.0.2",
     "diff": "^9.0.0",
     "jszip": "^3.10.1",

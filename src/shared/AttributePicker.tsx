@@ -4,25 +4,31 @@ const inputCls =
   "w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 const labelCls = "mb-1 block text-xs text-gray-500 dark:text-gray-400";
 
-/** Shared by StepRegisterDialog's "Filtering Attributes" and ImageRegisterDialog's
- *  "Attributes" — a search box to cut down a long field list, checkboxes to pick from it, and
- *  a "已选择 N 个" count below instead of spelling out every selected name. */
+/** Shared by StepRegisterDialog's "Filtering Attributes", ImageRegisterDialog's "Attributes",
+ *  and CheckableGrid's column picker — a search box to cut down a long field list, checkboxes
+ *  to pick from it, and a "已选择 N 个" count below instead of spelling out every selected name. */
 export default function AttributePicker({
   label,
   options,
   selected,
   onToggle,
+  onToggleAll,
   renderBadge,
 }: {
   label: string;
   options: string[];
   selected: Set<string>;
   onToggle: (name: string) => void;
+  /** Selects (true) or clears (false) every option — the *full* list, not just what the search
+   *  box/已勾选/未勾选 filters currently show, matching how a grid's own row-select-all checkbox
+   *  works regardless of any visual filtering. */
+  onToggleAll: (selectAll: boolean) => void;
   renderBadge?: (name: string) => ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [showChecked, setShowChecked] = useState(true);
   const [showUnchecked, setShowUnchecked] = useState(true);
+  const allSelected = options.length > 0 && options.every((o) => selected.has(o));
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -43,6 +49,10 @@ export default function AttributePicker({
         className={`${inputCls} mb-1.5`}
       />
       <div className="mb-1.5 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+        <label className="inline-flex items-center gap-1">
+          <input type="checkbox" checked={allSelected} onChange={(e) => onToggleAll(e.target.checked)} />
+          全选
+        </label>
         <label className="inline-flex items-center gap-1">
           <input type="checkbox" checked={showChecked} onChange={(e) => setShowChecked(e.target.checked)} />
           已勾选

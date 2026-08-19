@@ -96,6 +96,10 @@ export default function ImageRegisterDialog({
     });
   }
 
+  function toggleAllAttributes(selectAll: boolean) {
+    setSelectedAttributes(selectAll && attributeOptions ? new Set(attributeOptions) : new Set());
+  }
+
   async function handleSubmit() {
     if (!alias.trim()) return;
     setSubmitting(true);
@@ -159,6 +163,7 @@ export default function ImageRegisterDialog({
                 options={attributeOptions}
                 selected={selectedAttributes}
                 onToggle={toggleAttribute}
+                onToggleAll={toggleAllAttributes}
               />
             ) : (
               <div>
