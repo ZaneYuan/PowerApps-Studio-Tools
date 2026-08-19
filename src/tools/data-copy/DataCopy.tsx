@@ -8,6 +8,7 @@ import {
   fetchDefaultViewColumnOrder,
   fetchEntityMeta,
   fetchOptionSetValues,
+  isLookupAttributeType,
   isSystemAuditField,
   sortColumnsForDisplay,
 } from "../../native/metadataService";
@@ -15,6 +16,7 @@ import { runConcurrent } from "../sql4cds/concurrency";
 import { buildSelectPath, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
 import { insertRow } from "../sql4cds/writeOps";
 import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry } from "../sql4cds/executionLog";
+import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 
@@ -131,6 +133,11 @@ export default function DataCopy() {
             editKind: "select",
             options: options.map((o) => ({ value: String(o.value), label: o.label })),
           });
+        } else if (attrType && isLookupAttributeType(attrType)) {
+          // The row's value here is already the unwrapped plain GUID (unwrapRow strips the
+          // `_..._value` suffix), which is exactly what the picker edits and writes back — no
+          // extra conversion needed, unlike the Picklist branch's string<->number juggling.
+          newColumns.push({ key: name, checked, editable: true, editKind: "lookup" });
         } else {
           newColumns.push({ key: name, checked });
         }
@@ -172,6 +179,23 @@ export default function DataCopy() {
 
   function handleStop() {
     stopRequestedRef.current = true;
+  }
+
+  /** Downloads a standalone `INSERT INTO ... VALUES ...;` for whatever's currently checked — the
+   *  primary key stays in if the user hasn't unchecked it (unlike handleCreate, which always
+   *  drops it), since this is meant to produce a portable script (e.g. for Data Migration's own
+   *  "以 SQL 导入", or hand-carrying exact GUIDs into another org), not a fresh-id copy. */
+  function handleGenerateSql() {
+    if (!entityLogicalName) return;
+    const checkedColumns = columns.filter((c) => c.checked);
+    const checkedRows = rows.filter((r) => r.checked);
+    if (checkedColumns.length === 0 || checkedRows.length === 0) return;
+    const sql = buildInsertSql(
+      entityLogicalName,
+      checkedColumns.map((c) => c.key),
+      checkedRows.map((r) => r.values),
+    );
+    downloadTextFile(insertSqlFilename("data-copy", entityLogicalName, new Date()), sql);
   }
 
   async function handleCreate() {
@@ -249,7 +273,8 @@ export default function DataCopy() {
   return (
     <div className="max-w-5xl space-y-4">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        写一条单表 SELECT 查出要复制的数据（对本页连接执行），结果表格可以直接编辑——v1 支持文本和选项集（Picklist）两种类型的字段编辑，其余类型只读展示。行、列默认全部勾选，改好之后点"创建"，会把勾选的行按当前（编辑后的）值创建成全新记录——主键
+        写一条单表 SELECT 查出要复制的数据（对本页连接执行），结果表格可以直接编辑——支持文本、选项集（Picklist）、查找（Lookup/Customer/Owner，点 🔍
+        搜索选择目标记录）三种类型的字段编辑，其余类型只读展示；列标题右边缘可拖拽调整宽度。行、列默认全部勾选，改好之后点"创建"，会把勾选的行按当前（编辑后的）值创建成全新记录——主键
         ID 列不会被带上，由 Dataverse 自动生成新的。只支持单表，不支持 JOIN / 聚合。
       </div>
 
@@ -289,10 +314,12 @@ export default function DataCopy() {
           <CheckableGrid
             columns={columns}
             rows={rows}
-            columnsLabel="要复制的列（勾选，文本/选项集字段可直接编辑）"
+            columnsLabel="要复制的列（勾选，文本/选项集/查找字段可直接编辑，列宽可拖拽）"
             onColumnsChange={handleColumnsChange}
             onRowsChange={setRows}
             onEditCell={handleEditCell}
+            connectionId={activeConnectionId ?? undefined}
+            entityLogicalName={entityLogicalName ?? undefined}
           />
 
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
@@ -302,6 +329,13 @@ export default function DataCopy() {
               className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
             >
               {writeRunning ? "创建中…" : `创建 ${checkedRowCount} 条新记录`}
+            </button>
+            <button
+              onClick={handleGenerateSql}
+              disabled={checkedRowCount === 0}
+              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+            >
+              生成 INSERT SQL
             </button>
             {writeRunning && (
               <button

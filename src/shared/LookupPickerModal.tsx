@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { callNative } from "../../native/bridge";
-import { fetchEntityMeta, type EntityMeta } from "../../native/metadataService";
-import { buildLookupRelationshipMap, type RelationshipMeta } from "../../native/navProperty";
-import { escapeODataString } from "../../native/odata";
+import { callNative } from "../native/bridge";
+import { fetchEntityMeta, type EntityMeta } from "../native/metadataService";
+import { buildLookupRelationshipMap, type RelationshipMeta } from "../native/navProperty";
+import { escapeODataString } from "../native/odata";
 
 const inputCls =
   "w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";

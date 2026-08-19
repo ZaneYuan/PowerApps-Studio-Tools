@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchOptionSetValues, type OptionSetValue } from "../../native/metadataService";
 import { useEntityAttributes } from "../../native/useEntityAttributes";
-import LookupPickerModal from "./LookupPickerModal";
+import LookupPickerModal from "../../shared/LookupPickerModal";
 import { MULTI_VALUE_OPERATORS, type ConditionOperator } from "./types";
 
 const inputCls =

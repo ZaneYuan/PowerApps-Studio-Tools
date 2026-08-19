@@ -1,5 +1,5 @@
 import { callNative } from "../../native/bridge";
-import { fetchAttributes, fetchEntityMeta, type ManyToManyInfo } from "../../native/metadataService";
+import { fetchAttributes, fetchEntityMeta, isLookupAttributeType, type ManyToManyInfo } from "../../native/metadataService";
 import { buildLookupRelationshipMap } from "../../native/navProperty";
 
 /** Now that Sql4Cds.tsx fires several row writes concurrently instead of one at a time (see
@@ -62,7 +62,7 @@ export async function buildRowBody(
       continue;
     }
 
-    const isLookup = attrType === "Lookup";
+    const isLookup = !!attrType && isLookupAttributeType(attrType);
     if (!isLookup) {
       body[col] = value;
       continue;

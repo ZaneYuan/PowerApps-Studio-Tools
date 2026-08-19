@@ -14,6 +14,7 @@ import {
 import { runConcurrent } from "../sql4cds/concurrency";
 import { buildSelectPath, literalToJsValue, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
 import { insertIntersectRow, resolveIntersectRowValues, updateRow } from "../sql4cds/writeOps";
+import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid from "../../shared/CheckableGrid";
 import { planDeferredWrite, phase1Body, phase2Body } from "./deferredWrite";
@@ -413,6 +414,22 @@ export default function DataMigration() {
     stopRequestedRef.current = true;
   }
 
+  /** Downloads a standalone `INSERT INTO ... VALUES ...;` for the active tab's checked rows/columns
+   *  — one statement per tab (mirrors this tool's whole "one table per tab" model), not the full
+   *  multi-table batch at once. */
+  function handleGenerateSql() {
+    if (!activeTable) return;
+    const checkedColumns = activeTable.columns.filter((c) => c.checked);
+    const checkedRows = activeTable.rows.filter((r) => r.checked);
+    if (checkedColumns.length === 0 || checkedRows.length === 0) return;
+    const sql = buildInsertSql(
+      activeTable.entityLogicalName,
+      checkedColumns.map((c) => c.key),
+      checkedRows.map((r) => r.values),
+    );
+    downloadTextFile(insertSqlFilename("data-migration", activeTable.entityLogicalName, new Date()), sql);
+  }
+
   if (!isNativeBridgeAvailable()) {
     return (
       <div className="max-w-xl rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
@@ -514,6 +531,18 @@ export default function DataMigration() {
               onColumnsChange={(columns) => updateTable(activeTable.tabId, { ...activeTable, columns: columns as ImportColumn[] })}
               onRowsChange={(rows) => updateTable(activeTable.tabId, { ...activeTable, rows })}
             />
+          )}
+
+          {activeTable && (
+            <div className="flex justify-end">
+              <button
+                onClick={handleGenerateSql}
+                disabled={activeTable.rows.filter((r) => r.checked).length === 0}
+                className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                生成当前表的 INSERT SQL
+              </button>
+            </div>
           )}
 
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
