@@ -43,7 +43,7 @@ export interface Edge {
   fromStageId: string;
   toStageId: string;
   kind: EdgeKind;
-  /** Branch label + best-effort condition text, e.g. "Check If MQ is not required (contoso_ismqrequired op:6 ...)" — only set for "condition" edges. */
+  /** Branch label + best-effort condition text, e.g. "Check If review is required (contoso_isreviewrequired op:6 ...)" — only set for "condition" edges. */
   label?: string;
 }
 

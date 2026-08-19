@@ -177,7 +177,7 @@ export function resolveIntersectRowValues(rel: ManyToManyInfo, columnValues: Rec
  *  intersect entity's Web API EntitySet (a plain POST 400s, see ManyToManyInfo's doc comment).
  *  `environmentUrl` (from ConnectionDto, already exposed to the JS side) is needed because
  *  `@odata.id` must be an absolute URL per Dataverse's Web API contract for association requests.
- *  Confirmed against contoso-dev: `contoso_paymentfrequency_product` (contoso_paymentfrequency ↔ product,
+ *  Confirmed against a live org: `contoso_paymentfrequency_product` (contoso_paymentfrequency ↔ product,
  *  via contoso_paymentfrequencyid/productid) associates correctly through this endpoint after the
  *  same INSERT that 400'd as a plain POST. */
 export async function insertIntersectRow(

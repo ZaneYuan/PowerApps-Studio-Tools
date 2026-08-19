@@ -360,7 +360,7 @@ export default function Sql4Cds() {
     // is always released.
     try {
       // An N:N intersect entity's Web API EntitySet 400s on a plain POST ("Invalid property ...
-      // was found") — confirmed against contoso-dev inserting into contoso_paymentfrequency_product.
+      // was found") — confirmed against a live org inserting into an intersect table.
       // Detected once up front; every row below goes through insertIntersectRow's $ref endpoint
       // instead of the normal insertRow POST when this is set.
       const manyToMany = await fetchManyToManyInfo(activeConnectionId, result.entityLogicalName);

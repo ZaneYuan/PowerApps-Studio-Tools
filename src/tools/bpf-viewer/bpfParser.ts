@@ -1,7 +1,7 @@
 import type { BpfGraph, Edge, Stage, Step, TriggeredProcess } from "./types";
 
 /** Loose shape of one node in the `Microsoft.Crm.Workflow.ObjectModel` tree stored in a BPF's
- *  `clientdata` — confirmed live against a real org (contoso-dev's "Example Quotation Process"),
+ *  `clientdata` — confirmed live against a real org's actual BPF process definitions,
  *  not from any Microsoft doc (there isn't a public one for this internal format). Only the
  *  fields this parser actually reads are declared; everything else is untyped passthrough. */
 interface RawNode {

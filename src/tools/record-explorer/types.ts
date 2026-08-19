@@ -63,7 +63,7 @@ export const ADMIN_LOOKUP_BLACKLIST = new Set([
  *  Dataverse platform housekeeping tables present on nearly every entity. Concrete activity
  *  types are excluded in favor of the single unified `activitypointer` relationship so the
  *  same records don't show up under several tabs. Custom relationships are never filtered by
- *  this list. Grounded in a real query against contoso-datamaster's `quote` entity (56 relationships,
+ *  this list. Grounded in a real query against a live org's `quote` entity (56 relationships,
  *  9 custom, the rest almost entirely covered by this list) — edit here if a future entity/org
  *  needs adjustment. */
 export const CHILD_ENTITY_BLACKLIST = new Set([

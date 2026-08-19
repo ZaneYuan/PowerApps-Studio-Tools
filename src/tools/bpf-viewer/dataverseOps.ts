@@ -5,8 +5,8 @@ async function fetchDataverse<T>(connectionId: string, path: string): Promise<T>
   return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
 }
 
-/** workflow.category = 4 is Business Process Flow — confirmed live against a real org
- *  (contoso-dev's "Example Quotation Process" etc.), not from docs. */
+/** workflow.category = 4 is Business Process Flow — confirmed live against a real org's
+ *  actual BPF processes, not from docs. */
 const BPF_CATEGORY = 4;
 
 export async function fetchBusinessProcessFlows(connectionId: string): Promise<BpfListItem[]> {
