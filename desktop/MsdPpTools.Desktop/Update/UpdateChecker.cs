@@ -7,8 +7,13 @@ namespace MsdPpTools.Desktop.Update;
 /// <summary>
 /// Release-build-only: compares the git commit this exe was published from (stamped into
 /// build-commit.txt by scripts/publish-desktop.ps1) against the source checkout's current
-/// HEAD. If they differ, hands off to publish.bat to rebuild and relaunch, then exits this
-/// process immediately so the exe file lock is released before publish.bat overwrites it.
+/// HEAD. If they differ, rebuilds via `publish-desktop.ps1 -NoZip` — this is a same-machine
+/// dev-loop refresh (rebuild publish\MsdPpTools.Desktop\ in place and relaunch), not a release,
+/// so it deliberately skips publish.bat's zip-packaging step; that only matters when someone's
+/// deliberately preparing a GitHub Release (see publish.bat itself, and
+/// GitHubReleaseUpdateChecker for the update path real end users without a source checkout get
+/// instead). Exits this process immediately after handing off so the exe file lock is released
+/// before the rebuild tries to overwrite it.
 /// </summary>
 public static class UpdateChecker
 {
@@ -18,9 +23,9 @@ public static class UpdateChecker
         {
             var exeDir = AppContext.BaseDirectory;
             var repoRoot = Path.GetFullPath(Path.Combine(exeDir, "..", ".."));
-            var publishBat = Path.Combine(repoRoot, "publish.bat");
+            var publishScript = Path.Combine(repoRoot, "scripts", "publish-desktop.ps1");
 
-            if (!Directory.Exists(Path.Combine(repoRoot, ".git")) || !File.Exists(publishBat))
+            if (!Directory.Exists(Path.Combine(repoRoot, ".git")) || !File.Exists(publishScript))
                 return false; // not running next to a source checkout; nothing to compare against
 
             var currentHead = RunGit(repoRoot, "rev-parse HEAD");
@@ -41,12 +46,11 @@ public static class UpdateChecker
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
 
-            // Wait a couple seconds so this process fully exits and releases the exe file
-            // lock before publish.bat's dotnet publish tries to overwrite it. `< nul` makes
-            // publish.bat's trailing `pause` no-op instead of hanging the auto-relaunch.
+            // Wait a couple seconds so this process fully exits and releases the exe file lock
+            // before dotnet publish tries to overwrite it.
             var script =
                 "timeout /t 2 /nobreak >nul & " +
-                $"call \"{publishBat}\" < nul & " +
+                $"powershell -NoProfile -ExecutionPolicy Bypass -File \"{publishScript}\" -NoZip & " +
                 $"if errorlevel 1 (pause) else (start \"\" \"{exePath}\")";
 
             Process.Start(new ProcessStartInfo
