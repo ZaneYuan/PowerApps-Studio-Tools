@@ -9,6 +9,22 @@ import LookupPickerModal from "./LookupPickerModal";
 // rough approximation, and there's no need for the library's (pricier) dynamic remeasurement.
 const ROW_HEIGHT_PX = 33;
 
+// The <table> below never set `table-layout`, so it defaulted to `auto` — which requires the
+// browser to examine content across *every* row to size columns, and re-examine it whenever
+// anything affecting layout changes, including the virtualizer's own spacer-<tr> height changing
+// on every scroll tick. On a handful of columns this is cheap; on a product-class entity (150-280
+// columns is normal) this auto-layout recalculation is a real, expensive synchronous browser cost
+// that memoizing React components (see GridRowView/GridHeader below) can't touch at all — it
+// happens in the layout engine, not in JS. `table-layout: fixed` makes column widths authoritative
+// from each cell's own `width` style instead of content-scanning the whole table, which is also
+// more correct now that resized columns already carry an explicit width — unresized ones need an
+// explicit fallback too, or `fixed` layout has nothing to size them by.
+const DEFAULT_COLUMN_WIDTH_PX = 160;
+// `table-fixed` needs an explicit width on *every* column, including this one — without it, the
+// browser's fallback distribution for un-widthed fixed-layout columns is inconsistent enough not
+// to rely on for a column that's supposed to always be exactly "one checkbox wide".
+const CHECKBOX_COLUMN_WIDTH_PX = 40;
+
 export interface GridColumn {
   key: string;
   checked: boolean;
@@ -61,20 +77,28 @@ const GridRowView = memo(function GridRowView({
   connectionId?: string;
   entityLogicalName?: string;
 }) {
+  // TEMP diagnostic (bugs & requirements/8.19.md #6) — remove once the wide-table scroll stutter
+  // is confirmed fixed. Deliberately NOT gated behind import.meta.env.DEV: the report this is
+  // chasing only reproduces against the real published desktop build (a production Vite build),
+  // not `npm run dev`. One shared counter (not per-row) so it reads as a single number in DevTools
+  // Console — reset it (right-click the console → Clear console, or the 🚫 icon) right before a
+  // scroll drag, then read it after: this component actually executing its render body dozens of
+  // times per second during the drag means memoization genuinely isn't taking effect (the bug is
+  // still in React-land); a low, roughly-visible-row-count number instead means rows are correctly
+  // being skipped and the remaining cost is elsewhere (browser layout, GC, something outside this
+  // component entirely).
+  console.count("GridRowView render");
   return (
     <tr className="border-t border-gray-100 dark:border-gray-800">
-      <td className="px-3 py-1.5">
+      <td className="px-3 py-1.5" style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
         <input type="checkbox" checked={row.checked} onChange={() => onToggleRow(row.id)} />
       </td>
       {checkedColumns.map((c) => {
         const rawValue = row.values[c.key];
         const displayValue = typeof rawValue === "object" ? JSON.stringify(rawValue) : String(rawValue ?? "");
+        const width = c.width ?? DEFAULT_COLUMN_WIDTH_PX;
         return (
-          <td
-            key={c.key}
-            className="whitespace-nowrap px-3 py-1.5 font-mono text-xs"
-            style={c.width ? { width: c.width, minWidth: c.width, maxWidth: c.width } : undefined}
-          >
+          <td key={c.key} className="whitespace-nowrap overflow-hidden px-3 py-1.5 font-mono text-xs" style={{ width, minWidth: width, maxWidth: width }}>
             {c.editable && c.editKind === "select" ? (
               <select value={String(rawValue ?? "")} onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)} className={inputCls}>
                 <option value="" />
@@ -137,6 +161,11 @@ const GridHeader = memo(function GridHeader({
   onToggleAllRows: () => void;
   onResizeColumn: (key: string, width: number) => void;
 }) {
+  // TEMP diagnostic — see the matching comment on GridRowView's own counter above; same idea, so
+  // a header that's *also* re-executing every scroll tick (vs. only GridRowView) narrows down
+  // whether it's specifically the header, specifically the rows, or (if both stay low but the
+  // stutter persists anyway) something outside React's render cycle entirely.
+  console.count("GridHeader render");
   function startResize(e: ReactMouseEvent<HTMLDivElement>, key: string) {
     e.preventDefault();
     const th = e.currentTarget.parentElement;
@@ -156,24 +185,27 @@ const GridHeader = memo(function GridHeader({
   return (
     <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
       <tr>
-        <th className="px-3 py-2">
+        <th className="px-3 py-2" style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
           <input type="checkbox" checked={allRowsChecked} onChange={onToggleAllRows} />
         </th>
-        {checkedColumns.map((c) => (
-          <th
-            key={c.key}
-            className="relative whitespace-nowrap px-3 py-2 pr-4 font-mono"
-            style={c.width ? { width: c.width, minWidth: c.width, maxWidth: c.width } : undefined}
-          >
-            <span className="block overflow-hidden text-ellipsis" title={c.key}>
-              {c.key}
-            </span>
-            <div
-              onMouseDown={(e) => startResize(e, c.key)}
-              className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none hover:bg-blue-400 dark:hover:bg-blue-500"
-            />
-          </th>
-        ))}
+        {checkedColumns.map((c) => {
+          const width = c.width ?? DEFAULT_COLUMN_WIDTH_PX;
+          return (
+            <th
+              key={c.key}
+              className="relative whitespace-nowrap px-3 py-2 pr-4 font-mono"
+              style={{ width, minWidth: width, maxWidth: width }}
+            >
+              <span className="block overflow-hidden text-ellipsis" title={c.key}>
+                {c.key}
+              </span>
+              <div
+                onMouseDown={(e) => startResize(e, c.key)}
+                className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none hover:bg-blue-400 dark:hover:bg-blue-500"
+              />
+            </th>
+          );
+        })}
       </tr>
     </thead>
   );
@@ -208,6 +240,11 @@ export default function CheckableGrid({
   connectionId?: string;
   entityLogicalName?: string;
 }) {
+  // TEMP diagnostic — the parent's own render count is *expected* to climb fast during a scroll
+  // drag (the virtualizer's internal scroll-offset state lives here, so that's just it doing its
+  // job) — this counter is the baseline the GridRowView/GridHeader counters should be compared
+  // against, not a sign of a bug on its own.
+  console.count("CheckableGrid render");
   // Memoized on `columns` alone (not recomputed on every render) — a wide entity (product-class
   // tables routinely have 150-280 attributes) turned this into a real, visible cost once a
   // scroll container had anything actually subscribed to its scroll events (the row virtualizer
@@ -285,7 +322,7 @@ export default function CheckableGrid({
           <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
             共 {rows.length} 行，已选 {checkedRowCount} 行
           </div>
-          <table className="w-full text-left text-sm">
+          <table className="w-full table-fixed text-left text-sm">
             <GridHeader
               checkedColumns={checkedColumns}
               allRowsChecked={allRowsChecked}
