@@ -121,6 +121,64 @@ const GridRowView = memo(function GridRowView({
   );
 });
 
+/** The header row, split out and `memo`-wrapped for the same reason as `GridRowView` above — its
+ *  content (the column list/widths) has nothing to do with which rows are scrolled into view, but
+ *  living inline in CheckableGrid's own render meant it got recreated (all 150-280 `<th>`s, each
+ *  with its own resize-handle closure) on every one of the re-renders vertical scrolling causes,
+ *  same as the rows did before they were split out — see bugs & requirements/8.19.md #6. */
+const GridHeader = memo(function GridHeader({
+  checkedColumns,
+  allRowsChecked,
+  onToggleAllRows,
+  onResizeColumn,
+}: {
+  checkedColumns: GridColumn[];
+  allRowsChecked: boolean;
+  onToggleAllRows: () => void;
+  onResizeColumn: (key: string, width: number) => void;
+}) {
+  function startResize(e: ReactMouseEvent<HTMLDivElement>, key: string) {
+    e.preventDefault();
+    const th = e.currentTarget.parentElement;
+    const startWidth = th?.getBoundingClientRect().width ?? 140;
+    const startX = e.clientX;
+    function onMouseMove(ev: MouseEvent) {
+      onResizeColumn(key, Math.max(60, startWidth + (ev.clientX - startX)));
+    }
+    function onMouseUp() {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    }
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  }
+
+  return (
+    <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+      <tr>
+        <th className="px-3 py-2">
+          <input type="checkbox" checked={allRowsChecked} onChange={onToggleAllRows} />
+        </th>
+        {checkedColumns.map((c) => (
+          <th
+            key={c.key}
+            className="relative whitespace-nowrap px-3 py-2 pr-4 font-mono"
+            style={c.width ? { width: c.width, minWidth: c.width, maxWidth: c.width } : undefined}
+          >
+            <span className="block overflow-hidden text-ellipsis" title={c.key}>
+              {c.key}
+            </span>
+            <div
+              onMouseDown={(e) => startResize(e, c.key)}
+              className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none hover:bg-blue-400 dark:hover:bg-blue-500"
+            />
+          </th>
+        ))}
+      </tr>
+    </thead>
+  );
+});
+
 /** The shared "query a table, review it as a row/column-checkbox grid" surface every write tool
  *  in this app builds on (data-migration's multi-table Tabs, data-copy's single editable table).
  *  Purely controlled — holds no state of its own, so two tools using two different underlying
@@ -201,32 +259,15 @@ export default function CheckableGrid({
     [columns, renderColumnBadge],
   );
   const toggleRow = useCallback((id: string) => onRowsChange(rows.map((r) => (r.id === id ? { ...r, checked: !r.checked } : r))), [rows, onRowsChange]);
-  function toggleAllRows() {
+  const toggleAllRows = useCallback(() => {
     const next = !allRowsChecked;
     onRowsChange(rows.map((r) => ({ ...r, checked: next })));
-  }
+  }, [allRowsChecked, rows, onRowsChange]);
   const openLookupEditor = useCallback((rowId: string, columnKey: string) => setLookupEditorCell({ rowId, columnKey }), []);
-
-  /** Drag-to-resize a column header — same "record start position/width, track via window-level
-   *  mousemove/mouseup" pattern already used by Plugin Registration's tree/detail split (see
-   *  01-开发进度.md's 2026-08-11 entry), reimplemented here since that one lives in a different
-   *  component with a single fixed splitter rather than N independently resizable columns. */
-  function startResize(e: ReactMouseEvent<HTMLDivElement>, key: string) {
-    e.preventDefault();
-    const th = e.currentTarget.parentElement;
-    const startWidth = th?.getBoundingClientRect().width ?? 140;
-    const startX = e.clientX;
-    function onMouseMove(ev: MouseEvent) {
-      const next = Math.max(60, startWidth + (ev.clientX - startX));
-      onColumnsChange(columns.map((c) => (c.key === key ? { ...c, width: next } : c)));
-    }
-    function onMouseUp() {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    }
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-  }
+  const resizeColumn = useCallback(
+    (key: string, width: number) => onColumnsChange(columns.map((c) => (c.key === key ? { ...c, width } : c))),
+    [columns, onColumnsChange],
+  );
 
   return (
     <div className="space-y-3">
@@ -245,28 +286,12 @@ export default function CheckableGrid({
             共 {rows.length} 行，已选 {checkedRowCount} 行
           </div>
           <table className="w-full text-left text-sm">
-            <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
-              <tr>
-                <th className="px-3 py-2">
-                  <input type="checkbox" checked={allRowsChecked} onChange={toggleAllRows} />
-                </th>
-                {checkedColumns.map((c) => (
-                  <th
-                    key={c.key}
-                    className="relative whitespace-nowrap px-3 py-2 pr-4 font-mono"
-                    style={c.width ? { width: c.width, minWidth: c.width, maxWidth: c.width } : undefined}
-                  >
-                    <span className="block overflow-hidden text-ellipsis" title={c.key}>
-                      {c.key}
-                    </span>
-                    <div
-                      onMouseDown={(e) => startResize(e, c.key)}
-                      className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none hover:bg-blue-400 dark:hover:bg-blue-500"
-                    />
-                  </th>
-                ))}
-              </tr>
-            </thead>
+            <GridHeader
+              checkedColumns={checkedColumns}
+              allRowsChecked={allRowsChecked}
+              onToggleAllRows={toggleAllRows}
+              onResizeColumn={resizeColumn}
+            />
             <tbody>
               {topSpacerHeight > 0 && (
                 <tr style={{ height: topSpacerHeight }} aria-hidden="true">
