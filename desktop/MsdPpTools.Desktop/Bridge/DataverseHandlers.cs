@@ -11,6 +11,9 @@ public static class DataverseHandlers
         public string Path { get; set; } = "";
         public JsonElement? Body { get; set; }
         public bool IncludeFormattedValues { get; set; }
+        /// <summary>Associates a record this request creates (a solution component — table/column/
+        /// etc.) with the named unmanaged solution, via the MSCRM.SolutionUniqueName header.</summary>
+        public string? SolutionUniqueName { get; set; }
     }
 
     public static void Register(NativeBridge bridge, DataverseApiClient client)
@@ -20,7 +23,8 @@ public static class DataverseHandlers
             var input = @params.Deserialize<RequestParams>(NativeBridge.JsonOptions)
                 ?? throw new ArgumentException("缺少请求参数");
             var result = await client.RequestAsync(
-                input.ConnectionId, input.Method, input.Path, input.Body, input.IncludeFormattedValues);
+                input.ConnectionId, input.Method, input.Path, input.Body, input.IncludeFormattedValues,
+                input.SolutionUniqueName);
             return result;
         });
     }

@@ -1,7 +1,9 @@
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using MsdPpTools.Desktop.Auth;
 using MsdPpTools.Desktop.Connections;
 
@@ -25,8 +27,16 @@ public sealed class DataverseApiClient
         _store = store;
     }
 
+    // Matches the trailing `(<guid>)` in an OData-EntityId response header, e.g.
+    // ".../EntityDefinitions(00aa00aa-bb11-cc22-dd33-44ee44ee44ee)" or
+    // ".../EntityDefinitions(LogicalName='x')/Attributes(11bb...)" — always the last parenthesized
+    // GUID regardless of which collection (EntityDefinitions vs its Attributes nav property) or
+    // key style (MetadataId vs LogicalName=' ') precedes it.
+    private static readonly Regex EntityIdGuidPattern = new(@"\(([0-9a-fA-F-]{36})\)(?!.*\()", RegexOptions.Compiled);
+
     public async Task<JsonElement?> RequestAsync(
-        string connectionId, string method, string path, JsonElement? body, bool includeFormattedValues = false)
+        string connectionId, string method, string path, JsonElement? body, bool includeFormattedValues = false,
+        string? solutionUniqueName = null)
     {
         var connection = _store.FindById(connectionId)
             ?? throw new InvalidOperationException("找不到该连接，可能已被删除。");
@@ -38,6 +48,13 @@ public sealed class DataverseApiClient
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.Add("OData-MaxVersion", "4.0");
         request.Headers.Add("OData-Version", "4.0");
+        // Associates a solution component created by this request (table/column/etc.) with a
+        // specific unmanaged solution — the Web API metadata docs' documented mechanism, an
+        // optional request header rather than a query parameter or body property.
+        if (!string.IsNullOrEmpty(solutionUniqueName))
+        {
+            request.Headers.Add("MSCRM.SolutionUniqueName", solutionUniqueName);
+        }
         // return=representation: without this, POST creates return 204 + empty body (new id only
         // in the OData-EntityId response header). Plugin Registration needs the created record's
         // id back inline to chain the next create, so ask for the full representation always.
@@ -63,8 +80,27 @@ public sealed class DataverseApiClient
             throw new InvalidOperationException($"Dataverse 请求失败 ({(int)response.StatusCode}): {responseText}");
         }
 
-        return string.IsNullOrWhiteSpace(responseText)
-            ? null
-            : JsonSerializer.Deserialize<JsonElement>(responseText);
+        if (!string.IsNullOrWhiteSpace(responseText))
+        {
+            return JsonSerializer.Deserialize<JsonElement>(responseText);
+        }
+
+        // Metadata writes (POST EntityDefinitions / its Attributes nav property) don't honor
+        // `Prefer: return=representation` the way normal record writes do — they always answer
+        // 204 No Content, with the new MetadataId only in the OData-EntityId response header, per
+        // Microsoft's current Web API docs. Synthesize a small body from that header so callers
+        // (solution-editor's createTable/createColumn) can still get the new id back; every other
+        // caller either gets a real body already (normal POST/PATCH) or has never sent a
+        // metadata-write request, so this branch is unreachable for existing call sites.
+        if (response.Headers.TryGetValues("OData-EntityId", out var entityIdHeaderValues))
+        {
+            var match = EntityIdGuidPattern.Match(entityIdHeaderValues.FirstOrDefault() ?? "");
+            if (match.Success)
+            {
+                return JsonSerializer.SerializeToElement(new { odataEntityId = match.Groups[1].Value });
+            }
+        }
+
+        return null;
     }
 }

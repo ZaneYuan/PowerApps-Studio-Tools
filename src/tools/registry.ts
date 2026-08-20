@@ -82,6 +82,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./data-edit/DataEdit")),
   },
   {
+    id: "solution-editor",
+    name: "Solution 编辑器",
+    description: "Solution 列表/新建，进入后浏览组件、添加已有表、新建表、新建 8 种基础类型字段、发布。雏形版，UI 参考 make.powerapps。仅桌面版可用。",
+    category: "数据 & Solution",
+    icon: "🏗️",
+    Component: lazy(() => import("./solution-editor/SolutionEditor")),
+  },
+  {
     id: "ribbon-workbench",
     name: "Ribbon Workbench",
     description: "编辑表的 RibbonDiffXml（原始 XML）：导出 solution → 改 → 重新导入 → 发布。仅桌面版可用，v1 只支持单表。",
