@@ -523,20 +523,27 @@ export default function DataMigration() {
     );
   }
 
-  /** Downloads a standalone `INSERT INTO ... VALUES ...;` for the active tab's checked rows/columns
-   *  — one statement per tab (mirrors this tool's whole "one table per tab" model), not the full
-   *  multi-table batch at once. */
+  /** Downloads one `INSERT INTO ... VALUES ...;` per tab that has checked rows/columns, all tabs
+   *  concatenated into a single file with a `-- N. entityLogicalName` header per table (same
+   *  numbered-comment shape "以 SQL 导入" already re-parses back into tabs) — not just the active
+   *  tab, so the output covers everything the user has checked across all tabs in one download. */
   function handleGenerateSql() {
-    if (!activeTable) return;
-    const checkedColumns = activeTable.columns.filter((c) => c.checked);
-    const checkedRows = activeTable.rows.filter((r) => r.checked);
-    if (checkedColumns.length === 0 || checkedRows.length === 0) return;
-    const sql = buildInsertSql(
-      activeTable.entityLogicalName,
-      checkedColumns.map((c) => c.key),
-      checkedRows.map((r) => r.values),
-    );
-    downloadTextFile(insertSqlFilename("data-migration", activeTable.entityLogicalName, new Date()), sql);
+    const parts: string[] = [];
+    let n = 0;
+    for (const table of tables) {
+      const checkedColumns = table.columns.filter((c) => c.checked);
+      const checkedRows = table.rows.filter((r) => r.checked);
+      if (checkedColumns.length === 0 || checkedRows.length === 0) continue;
+      n += 1;
+      const sql = buildInsertSql(
+        table.entityLogicalName,
+        checkedColumns.map((c) => c.key),
+        checkedRows.map((r) => r.values),
+      );
+      parts.push(`-- ${n}. ${table.entityLogicalName}\n${sql}`);
+    }
+    if (parts.length === 0) return;
+    downloadTextFile(insertSqlFilename("data-migration", "all-tables", new Date()), parts.join("\n\n"));
   }
 
   if (!isNativeBridgeAvailable()) {
@@ -650,10 +657,10 @@ export default function DataMigration() {
             <div className="flex justify-end">
               <button
                 onClick={handleGenerateSql}
-                disabled={activeTable.rows.filter((r) => r.checked).length === 0}
+                disabled={totalCheckedRows === 0}
                 className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
               >
-                生成当前表的 INSERT SQL
+                生成 Insert SQL
               </button>
             </div>
           )}
