@@ -74,6 +74,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./data-copy/DataCopy")),
   },
   {
+    id: "data-edit",
+    name: "数据编辑",
+    description: "单表 SELECT 查询，结果表格可编辑：勾选主键 ID 列则更新原记录（仅提交真正变更的行），取消勾选则复制为新记录。仅桌面版可用。",
+    category: "数据 & Solution",
+    icon: "✏️",
+    Component: lazy(() => import("./data-edit/DataEdit")),
+  },
+  {
     id: "ribbon-workbench",
     name: "Ribbon Workbench",
     description: "编辑表的 RibbonDiffXml（原始 XML）：导出 solution → 改 → 重新导入 → 发布。仅桌面版可用，v1 只支持单表。",
