@@ -6,13 +6,19 @@ import { downloadTextFile } from "../../native/download";
 import { extractGuid, parseRecordUrl } from "../record-explorer/types";
 import { lookupRecord, migrateReferences, scanReferences } from "./dataverseOps";
 import { buildRecordMergeLogText, recordMergeLogFilename } from "./mergeLog";
-import { totalReferenceCount, type MigrationLogEntry, type ReferenceScanResult } from "./types";
+import { COUNT_CAP, totalReferenceCount, type MigrationLogEntry, type ReferenceScanResult } from "./types";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 
 const DEFAULT_CONCURRENCY = 8;
 const MAX_CONCURRENCY = 20;
+
+/** ">100000" once a table's real count was too expensive to pin down exactly (see
+ *  countMatchingCapped) — the plain number otherwise. */
+function formatCount(t: { count: number; exceedsCap: boolean }): string {
+  return t.exceedsCap ? `>${COUNT_CAP}` : String(t.count);
+}
 
 function ConcurrencyInput({ value, onChange, disabled }: { value: number; onChange: (next: number) => void; disabled: boolean }) {
   return (
@@ -151,9 +157,9 @@ export default function RecordMerge() {
   }, [activeConnectionId, scanResult, newId]);
 
   const isSameRecord = !!newId && !!scanResult && newId.toLowerCase() === scanResult.id.toLowerCase();
-  const total = scanResult ? totalReferenceCount(scanResult.tables) : 0;
+  const total = scanResult ? totalReferenceCount(scanResult.tables) : { count: 0, exceedsCap: false };
   const canMigrate =
-    !!activeConnectionId && !!scanResult && total > 0 && !!newId && !isSameRecord && newIdCheck.exists === true && !writeRunning;
+    !!activeConnectionId && !!scanResult && total.count > 0 && !!newId && !isSameRecord && newIdCheck.exists === true && !writeRunning;
 
   function handleStop() {
     stopRequestedRef.current = true;
@@ -168,7 +174,7 @@ export default function RecordMerge() {
     }
     if (
       !confirm(
-        `即将把 ${scanResult.tables.length} 张表、共 ${total} 条引用记录，从 ${scanResult.primaryName ?? scanResult.id}（${scanResult.id}）迁移到 ${newIdCheck.primaryName ?? newId}（${newId}），确定吗？`,
+        `即将把 ${scanResult.tables.length} 张表、共 ${total.exceedsCap ? `至少 ${total.count}` : total.count} 条引用记录，从 ${scanResult.primaryName ?? scanResult.id}（${scanResult.id}）迁移到 ${newIdCheck.primaryName ?? newId}（${newId}），确定吗？`,
       )
     )
       return;
@@ -269,8 +275,14 @@ export default function RecordMerge() {
 
           {scanResult.failedRelationships.length > 0 && (
             <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-              ⚠ {scanResult.failedRelationships.length} 个关系的引用计数查询失败，被跳过——下面的结果可能不完整，不代表这些表一定没有引用：
-              {scanResult.failedRelationships.join("、")}
+              <p className="mb-1">⚠ {scanResult.failedRelationships.length} 个关系的引用计数查询失败，被跳过——下面的结果可能不完整，不代表这些表一定没有引用：</p>
+              <ul className="list-disc space-y-0.5 pl-4">
+                {scanResult.failedRelationships.map((f, i) => (
+                  <li key={i}>
+                    <span className="font-mono">{f.relationship}</span> — {f.error}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -295,7 +307,7 @@ export default function RecordMerge() {
                       <td className="px-3 py-1.5 font-mono text-xs text-gray-500 dark:text-gray-400">
                         {t.kind === "onetomany" ? t.referencingAttribute : t.intersectEntityName}
                       </td>
-                      <td className="px-3 py-1.5">{t.count}</td>
+                      <td className="px-3 py-1.5">{formatCount(t)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -304,7 +316,7 @@ export default function RecordMerge() {
                     <td className="px-3 py-2" colSpan={3}>
                       共 {scanResult.tables.length} 张表
                     </td>
-                    <td className="px-3 py-2">{total} 条</td>
+                    <td className="px-3 py-2">{total.exceedsCap ? `≥ ${total.count}` : total.count} 条</td>
                   </tr>
                 </tfoot>
               </table>

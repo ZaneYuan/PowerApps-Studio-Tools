@@ -3,11 +3,11 @@ import { fetchEntityMeta, type ManyToManyInfo } from "../../native/metadataServi
 import { getBindNavigationProperty } from "../../native/navProperty";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { deleteIntersectRow, insertIntersectRow, withRetryOn429, type IntersectRowValues } from "../sql4cds/writeOps";
-import type { ManyToManyRefTable, MigrationLogEntry, OneToManyRefTable, RefTable } from "./types";
+import { COUNT_CAP, type FailedRelationship, type ManyToManyRefTable, type MigrationLogEntry, type OneToManyRefTable, type RefTable } from "./types";
 
 export interface ScanResult {
   tables: RefTable[];
-  failedRelationships: string[];
+  failedRelationships: FailedRelationship[];
 }
 
 const SCAN_CONCURRENCY = 8;
@@ -15,6 +15,9 @@ const SCAN_CONCURRENCY = 8;
  *  building `@odata.id` — kept as the same literal rather than a shared constant, since neither
  *  file introduces an abstraction the other doesn't already forgo. */
 const API_VERSION_SEGMENT = "/api/data/v9.2/";
+/** Dataverse's default Web API page size — also the threshold `@odata.count` stops being
+ *  trustworthy at (see countMatchingCapped's doc comment). */
+const PAGE_SIZE = 5000;
 
 async function fetchDataverse<T>(connectionId: string, path: string): Promise<T> {
   return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
@@ -57,9 +60,43 @@ export async function lookupRecord(connectionId: string, entityLogicalName: stri
   }
 }
 
-async function countMatching(connectionId: string, entitySetName: string, filter: string): Promise<number> {
-  const res = await fetchDataverse<{ "@odata.count"?: number }>(connectionId, `${entitySetName}?$filter=${filter}&$count=true&$top=1`);
-  return res["@odata.count"] ?? 0;
+interface CountOutcome {
+  count: number;
+  exceedsCap: boolean;
+}
+
+/** `@odata.count` is only a real total below one page's worth of matching rows — confirmed live
+ *  (two unrelated tables both reported exactly 5000 against a currency record that clearly has
+ *  more real references than that): once the true count reaches the page size, Dataverse stops
+ *  counting and just reports the page size itself instead of the real total. Below that threshold
+ *  the cheap `$count=true&$top=1` call is trusted as-is; at/above it, this pages through
+ *  `$select=<primary key>` results instead and counts real rows, stopping at `COUNT_CAP` — a
+ *  reference-count display doesn't need to page through an unbounded number of rows just to prove
+ *  the real number is bigger than anyone needs to see. */
+async function countMatchingCapped(
+  connectionId: string,
+  entitySetName: string,
+  primaryIdAttribute: string,
+  filter: string,
+): Promise<CountOutcome> {
+  const initial = await fetchDataverse<{ "@odata.count"?: number }>(connectionId, `${entitySetName}?$filter=${filter}&$count=true&$top=1`);
+  // Some tables (SharePoint-integration ones observed live) report a negative sentinel instead of
+  // throwing, e.g. when the feature the table backs is disabled org-wide — never meaningful as a
+  // reference count regardless of the reason, so clamp rather than surface "-1 条引用".
+  const reported = Math.max(0, initial["@odata.count"] ?? 0);
+  if (reported < PAGE_SIZE) return { count: reported, exceedsCap: false };
+
+  let counted = 0;
+  let path: string | null = `${entitySetName}?$select=${primaryIdAttribute}&$filter=${filter}&$top=${PAGE_SIZE}`;
+  while (path) {
+    const res: { value: unknown[]; "@odata.nextLink"?: string } = await fetchDataverse(connectionId, path);
+    counted += res.value.length;
+    if (counted >= COUNT_CAP) return { count: COUNT_CAP, exceedsCap: true };
+    const next = res["@odata.nextLink"];
+    const idx = next ? next.indexOf(API_VERSION_SEGMENT) : -1;
+    path = idx >= 0 ? next!.slice(idx + API_VERSION_SEGMENT.length) : null;
+  }
+  return { count: counted, exceedsCap: false };
 }
 
 interface OneToManyRelRaw {
@@ -85,7 +122,7 @@ interface ManyToManyRelRaw {
  *  matching row. A relationship whose $filter/$count call errors (a handful of system
  *  relationships have quirky Web API support) is skipped rather than failing the whole scan. */
 export async function scanReferences(connectionId: string, entityLogicalName: string, id: string): Promise<ScanResult> {
-  const failedRelationships: string[] = [];
+  const failedRelationships: FailedRelationship[] = [];
   const [oneToMany, manyToMany] = await Promise.all([
     fetchDataverse<{ value: OneToManyRelRaw[] }>(
       connectionId,
@@ -104,7 +141,12 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
     jobs.push(async () => {
       try {
         const childMeta = await fetchEntityMeta(connectionId, rel.ReferencingEntity);
-        const count = await countMatching(connectionId, childMeta.entitySetName, `${lookupValueKey(rel.ReferencingAttribute)} eq ${id}`);
+        const { count, exceedsCap } = await countMatchingCapped(
+          connectionId,
+          childMeta.entitySetName,
+          childMeta.primaryIdAttribute,
+          `${lookupValueKey(rel.ReferencingAttribute)} eq ${id}`,
+        );
         if (count === 0) return null;
         const table: OneToManyRefTable = {
           kind: "onetomany",
@@ -112,10 +154,11 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
           entityLogicalName: rel.ReferencingEntity,
           referencingAttribute: rel.ReferencingAttribute,
           count,
+          exceedsCap,
         };
         return table;
-      } catch {
-        failedRelationships.push(rel.SchemaName);
+      } catch (err) {
+        failedRelationships.push({ relationship: rel.SchemaName, error: err instanceof Error ? err.message : String(err) });
         return null;
       }
     });
@@ -142,7 +185,12 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
       jobs.push(async () => {
         try {
           const intersectMeta = await fetchEntityMeta(connectionId, rel.IntersectEntityName);
-          const count = await countMatching(connectionId, intersectMeta.entitySetName, `${lookupValueKey(s.thisAttr)} eq ${id}`);
+          const { count, exceedsCap } = await countMatchingCapped(
+            connectionId,
+            intersectMeta.entitySetName,
+            intersectMeta.primaryIdAttribute,
+            `${lookupValueKey(s.thisAttr)} eq ${id}`,
+          );
           if (count === 0) return null;
           const table: ManyToManyRefTable = {
             kind: "manytomany",
@@ -150,12 +198,13 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
             intersectEntityName: rel.IntersectEntityName,
             otherEntityLogicalName: s.otherEntity,
             count,
+            exceedsCap,
             info,
             side: s.side,
           };
           return table;
-        } catch {
-          failedRelationships.push(`${rel.SchemaName} (${s.side})`);
+        } catch (err) {
+          failedRelationships.push({ relationship: `${rel.SchemaName} (${s.side})`, error: err instanceof Error ? err.message : String(err) });
           return null;
         }
       });
