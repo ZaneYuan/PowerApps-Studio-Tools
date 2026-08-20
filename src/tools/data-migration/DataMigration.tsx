@@ -346,6 +346,13 @@ export default function DataMigration() {
   const [writeConcurrency, setWriteConcurrency] = useState(8);
   const stopRequestedRef = useRef(false);
   const [writeStopped, setWriteStopped] = useState(false);
+  /** handleImport only builds the real `writeLog` once every phase finishes — for a large batch
+   *  that leaves a long stretch where rows are already streaming into the results table but there's
+   *  nothing to download yet (see bugs & requirements/8.20.md #3: user watched ~2900 rows come in
+   *  and asked why the 下载日志 button never showed up). These two refs mirror handleImport's local
+   *  `startedAt`/`tableLogs` so a snapshot can be built on demand mid-run too, not just at the end. */
+  const writeStartedAtRef = useRef<Date | null>(null);
+  const writeTableLogsRef = useRef<Map<string, DataMigrationTableLog>>(new Map());
 
   /** Loading a fresh batch (a new query run or SQL-file upload) makes any previous run's
    *  results/log describe tables that are no longer even on screen — cleared so a stale
@@ -389,7 +396,9 @@ export default function DataMigration() {
     stopRequestedRef.current = false;
     setWriteStopped(false);
     const startedAt = new Date();
+    writeStartedAtRef.current = startedAt;
     const tableLogs = new Map<string, DataMigrationTableLog>();
+    writeTableLogsRef.current = tableLogs;
     for (const t of tables) {
       tableLogs.set(t.tabId, { entityLogicalName: t.entityLogicalName, entitySetName: t.entitySetName, source: t.source, entries: [] });
     }
@@ -521,6 +530,31 @@ export default function DataMigration() {
         return { ...t, rows: t.rows.map((r) => (r.id === rowId ? { ...r, values: { ...r.values, [columnKey]: finalValue } } : r)) };
       }),
     );
+  }
+
+  /** Downloads the import log at any point after the first row has landed — not just once
+   *  handleImport's own `setWriteLog` fires at the very end of all phases. If the run already
+   *  finished (or was stopped), `writeLog` is the real, final text and this just re-downloads it.
+   *  Otherwise it's still `writeRunning`: build a snapshot from the same refs handleImport is still
+   *  writing into, so what's already visible in the results table can be grabbed without waiting for
+   *  a large batch (thousands of rows across create/backfill/associate phases) to fully finish. */
+  function handleDownloadLog() {
+    if (writeLog) {
+      downloadTextFile(writeLog.filename, writeLog.text);
+      return;
+    }
+    if (!writeStartedAtRef.current) return;
+    const now = new Date();
+    const text =
+      (writeRunning ? "⚠ 导入仍在进行中，这是当前进度的快照，不是最终结果——完成后请重新点击下载获取完整日志。\n\n" : "") +
+      buildDataMigrationLogText({
+        startedAt: writeStartedAtRef.current,
+        finishedAt: now,
+        targetConnectionName: targetConnectionName(),
+        tables: Array.from(writeTableLogsRef.current.values()).filter((t) => t.entries.length > 0),
+        stopped: writeStopped,
+      });
+    downloadTextFile(dataMigrationLogFilename(now), text);
   }
 
   /** Downloads one `INSERT INTO ... VALUES ...;` per tab that has checked rows/columns, all tabs
@@ -734,14 +768,12 @@ export default function DataMigration() {
                         导入成功 {importSuccess} 行，失败 {importError} 行
                         {backfilled.length > 0 && `；依赖回填成功 ${backfillSuccess} 处，失败 ${backfillError} 处`}
                       </span>
-                      {writeLog && (
-                        <button
-                          onClick={() => downloadTextFile(writeLog.filename, writeLog.text)}
-                          className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
-                        >
-                          下载日志
-                        </button>
-                      )}
+                      <button
+                        onClick={handleDownloadLog}
+                        className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                      >
+                        下载日志
+                      </button>
                     </div>
                     <table className="w-full text-left text-sm">
                       <tbody>
