@@ -1,15 +1,33 @@
 import { useEffect, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
-import { fetchEntityFields, fetchSolutionComponents, fetchSolutions, publishAll } from "./dataverseOps";
+import { fetchEntityBasicInfo, fetchEntityFields, fetchSolutionComponents, fetchSolutions, publishAll } from "./dataverseOps";
 import AddExistingTableDialog from "./AddExistingTableDialog";
 import NewColumnDialog from "./NewColumnDialog";
 import NewSolutionDialog from "./NewSolutionDialog";
 import NewTableDialog from "./NewTableDialog";
-import { COMPONENT_TYPE_LABELS, ENTITY_COMPONENT_TYPE, type ColumnFieldMeta, type SolutionComponentRow, type SolutionSummary } from "./types";
+import {
+  COMPONENT_TYPE_LABELS,
+  ENTITY_COMPONENT_TYPE,
+  ENTITY_SUBCOMPONENT_TYPES,
+  type ColumnFieldMeta,
+  type EntityBasicInfo,
+  type SolutionComponentRow,
+  type SolutionSummary,
+} from "./types";
 
 const rowBase = "flex w-full items-center gap-1.5 truncate px-2 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800";
 const rowSelected = "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400";
+
+/** Which node in the component tree is currently shown in the right-hand detail pane — an Entity
+ *  node itself shows basic table properties (make.powerapps' "Table properties" card), its nested
+ *  "字段" child shows the live column list (make.powerapps' "Columns" page), everything else falls
+ *  back to a generic name/type/GUID view. Kept as one discriminated union (not two separate
+ *  "selected entity" / "selected other" states) so exactly one thing is ever selected at a time. */
+type SelectedNode =
+  | { kind: "entity"; component: SolutionComponentRow }
+  | { kind: "entity-columns"; component: SolutionComponentRow }
+  | { kind: "other"; component: SolutionComponentRow };
 
 export default function SolutionEditor() {
   const { activeConnectionId } = useActiveConnection();
@@ -21,9 +39,13 @@ export default function SolutionEditor() {
   const [selected, setSelected] = useState<SolutionSummary | null>(null);
   const [components, setComponents] = useState<SolutionComponentRow[] | null>(null);
   const [componentsError, setComponentsError] = useState<string | null>(null);
-  const [expandedTypes, setExpandedTypes] = useState<Set<number>>(new Set());
-  const [selectedComponent, setSelectedComponent] = useState<SolutionComponentRow | null>(null);
+  const [tablesGroupOpen, setTablesGroupOpen] = useState(true);
+  const [expandedEntities, setExpandedEntities] = useState<Set<string>>(new Set());
+  const [expandedOtherTypes, setExpandedOtherTypes] = useState<Set<number>>(new Set());
+  const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
 
+  const [entityBasicInfo, setEntityBasicInfo] = useState<EntityBasicInfo | null>(null);
+  const [entityBasicInfoError, setEntityBasicInfoError] = useState<string | null>(null);
   const [entityFields, setEntityFields] = useState<ColumnFieldMeta[] | null>(null);
   const [entityFieldsError, setEntityFieldsError] = useState<string | null>(null);
 
@@ -61,26 +83,37 @@ export default function SolutionEditor() {
   function openSolution(s: SolutionSummary) {
     if (s.ismanaged) return; // read-only in v1 — nothing to edit on a managed solution
     setSelected(s);
-    setSelectedComponent(null);
-    setEntityFields(null);
-    setExpandedTypes(new Set([ENTITY_COMPONENT_TYPE]));
+    setSelectedNode(null);
+    setTablesGroupOpen(true);
+    setExpandedEntities(new Set());
+    setExpandedOtherTypes(new Set());
     loadComponents(s.solutionid);
   }
 
   function backToList() {
     setSelected(null);
     setComponents(null);
-    setSelectedComponent(null);
-    setEntityFields(null);
+    setSelectedNode(null);
     setPublishDone(false);
     loadSolutions();
   }
 
-  function selectComponent(c: SolutionComponentRow) {
-    setSelectedComponent(c);
+  function selectEntity(c: SolutionComponentRow) {
+    setSelectedNode({ kind: "entity", component: c });
+    setEntityBasicInfo(null);
+    setEntityBasicInfoError(null);
+    if (c.logicalName && activeConnectionId) {
+      fetchEntityBasicInfo(activeConnectionId, c.logicalName)
+        .then(setEntityBasicInfo)
+        .catch((err) => setEntityBasicInfoError(err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  function selectEntityColumns(c: SolutionComponentRow) {
+    setSelectedNode({ kind: "entity-columns", component: c });
     setEntityFields(null);
     setEntityFieldsError(null);
-    if (c.componenttype === ENTITY_COMPONENT_TYPE && c.logicalName && activeConnectionId) {
+    if (c.logicalName && activeConnectionId) {
       fetchEntityFields(activeConnectionId, c.logicalName)
         .then(setEntityFields)
         .catch((err) => setEntityFieldsError(err instanceof Error ? err.message : String(err)));
@@ -88,8 +121,8 @@ export default function SolutionEditor() {
   }
 
   function reloadEntityFields() {
-    if (!activeConnectionId || !selectedComponent?.logicalName) return;
-    fetchEntityFields(activeConnectionId, selectedComponent.logicalName)
+    if (!activeConnectionId || selectedNode?.kind !== "entity-columns" || !selectedNode.component.logicalName) return;
+    fetchEntityFields(activeConnectionId, selectedNode.component.logicalName)
       .then(setEntityFields)
       .catch((err) => setEntityFieldsError(err instanceof Error ? err.message : String(err)));
   }
@@ -109,8 +142,17 @@ export default function SolutionEditor() {
     }
   }
 
-  function toggleType(type: number) {
-    setExpandedTypes((s) => {
+  function toggleEntity(id: string) {
+    setExpandedEntities((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleOtherType(type: number) {
+    setExpandedOtherTypes((s) => {
       const next = new Set(s);
       if (next.has(type)) next.delete(type);
       else next.add(type);
@@ -205,13 +247,20 @@ export default function SolutionEditor() {
   }
 
   // ---- Detail view ----
-  const grouped = new Map<number, SolutionComponentRow[]>();
+  // Entity(1) rows become their own "表" group (each with a nested "字段" child that live-fetches
+  // the table's full column list); everything in ENTITY_SUBCOMPONENT_TYPES (a field/relationship
+  // row that's really *part of* some table) is dropped from the flat grouping entirely rather than
+  // shown as an unresolvable top-level GUID — see ENTITY_SUBCOMPONENT_TYPES' doc comment in
+  // types.ts for why. Every other componenttype keeps the old flat "group by type" treatment.
+  const entityRows = (components ?? []).filter((c) => c.componenttype === ENTITY_COMPONENT_TYPE);
+  const otherGrouped = new Map<number, SolutionComponentRow[]>();
   for (const c of components ?? []) {
-    const list = grouped.get(c.componenttype) ?? [];
+    if (c.componenttype === ENTITY_COMPONENT_TYPE || ENTITY_SUBCOMPONENT_TYPES.has(c.componenttype)) continue;
+    const list = otherGrouped.get(c.componenttype) ?? [];
     list.push(c);
-    grouped.set(c.componenttype, list);
+    otherGrouped.set(c.componenttype, list);
   }
-  const groupTypes = [...grouped.keys()].sort((a, b) => (COMPONENT_TYPE_LABELS[a] ?? "").localeCompare(COMPONENT_TYPE_LABELS[b] ?? ""));
+  const otherGroupTypes = [...otherGrouped.keys()].sort((a, b) => (COMPONENT_TYPE_LABELS[a] ?? "").localeCompare(COMPONENT_TYPE_LABELS[b] ?? ""));
 
   return (
     <div className="max-w-6xl space-y-4">
@@ -258,12 +307,53 @@ export default function SolutionEditor() {
           {!components && !componentsError && <p className="p-2 text-xs text-gray-400">加载中…</p>}
           {components && components.length === 0 && <p className="p-2 text-xs text-gray-400">这个 solution 还没有任何组件。</p>}
           <ul className="p-1">
-            {groupTypes.map((type) => {
-              const items = grouped.get(type)!;
-              const open = expandedTypes.has(type);
+            {entityRows.length > 0 && (
+              <li>
+                <button onClick={() => setTablesGroupOpen((v) => !v)} className={rowBase}>
+                  <span className="inline-block w-3 shrink-0 text-gray-400">{tablesGroupOpen ? "▾" : "▸"}</span>
+                  <span className="flex-1 truncate">表（Tables）</span>
+                  <span className="shrink-0 text-xs text-gray-400">{entityRows.length}</span>
+                </button>
+                {tablesGroupOpen && (
+                  <ul className="ml-4 border-l border-gray-100 pl-2 dark:border-gray-800">
+                    {entityRows.map((c) => {
+                      const eOpen = expandedEntities.has(c.solutioncomponentid);
+                      const isEntitySelected = selectedNode?.kind === "entity" && selectedNode.component.solutioncomponentid === c.solutioncomponentid;
+                      const isColumnsSelected =
+                        selectedNode?.kind === "entity-columns" && selectedNode.component.solutioncomponentid === c.solutioncomponentid;
+                      return (
+                        <li key={c.solutioncomponentid}>
+                          <div className={`${rowBase} ${isEntitySelected ? rowSelected : ""}`}>
+                            <button onClick={() => toggleEntity(c.solutioncomponentid)}>
+                              <span className="inline-block w-3 shrink-0 text-gray-400">{eOpen ? "▾" : "▸"}</span>
+                            </button>
+                            <button className="flex-1 truncate text-left" onClick={() => selectEntity(c)} title={c.name ?? c.objectid}>
+                              🗄️ {c.name ?? c.objectid}
+                            </button>
+                          </div>
+                          {eOpen && (
+                            <ul className="ml-4 border-l border-gray-100 pl-2 dark:border-gray-800">
+                              <li>
+                                <button onClick={() => selectEntityColumns(c)} className={`${rowBase} ${isColumnsSelected ? rowSelected : ""}`}>
+                                  <span className="inline-block w-3 shrink-0" />
+                                  字段（Columns）
+                                </button>
+                              </li>
+                            </ul>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </li>
+            )}
+            {otherGroupTypes.map((type) => {
+              const items = otherGrouped.get(type)!;
+              const open = expandedOtherTypes.has(type);
               return (
                 <li key={type}>
-                  <button onClick={() => toggleType(type)} className={rowBase}>
+                  <button onClick={() => toggleOtherType(type)} className={rowBase}>
                     <span className="inline-block w-3 shrink-0 text-gray-400">{open ? "▾" : "▸"}</span>
                     <span className="flex-1 truncate">{COMPONENT_TYPE_LABELS[type] ?? `类型 ${type}`}</span>
                     <span className="shrink-0 text-xs text-gray-400">{items.length}</span>
@@ -273,8 +363,10 @@ export default function SolutionEditor() {
                       {items.map((c) => (
                         <li key={c.solutioncomponentid}>
                           <button
-                            onClick={() => selectComponent(c)}
-                            className={`${rowBase} ${selectedComponent?.solutioncomponentid === c.solutioncomponentid ? rowSelected : ""}`}
+                            onClick={() => setSelectedNode({ kind: "other", component: c })}
+                            className={`${rowBase} ${
+                              selectedNode?.kind === "other" && selectedNode.component.solutioncomponentid === c.solutioncomponentid ? rowSelected : ""
+                            }`}
                             title={c.name ?? c.objectid}
                           >
                             {c.name ?? <span className="font-mono text-xs text-gray-400">{c.objectid}</span>}
@@ -290,25 +382,86 @@ export default function SolutionEditor() {
         </div>
 
         <div className="min-w-0 flex-1 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-          {!selectedComponent && <p className="text-sm text-gray-400">从左侧选一个组件查看详情。</p>}
-          {selectedComponent && selectedComponent.componenttype !== ENTITY_COMPONENT_TYPE && (
+          {!selectedNode && <p className="text-sm text-gray-400">从左侧选一个组件查看详情。</p>}
+
+          {selectedNode?.kind === "other" && (
             <div className="text-sm text-gray-700 dark:text-gray-300">
-              <p className="font-medium">{selectedComponent.name ?? "(无法解析名称)"}</p>
+              <p className="font-medium">{selectedNode.component.name ?? "(无法解析名称)"}</p>
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {COMPONENT_TYPE_LABELS[selectedComponent.componenttype] ?? `类型 ${selectedComponent.componenttype}`}
+                {COMPONENT_TYPE_LABELS[selectedNode.component.componenttype] ?? `类型 ${selectedNode.component.componenttype}`}
               </p>
-              <p className="mt-1 font-mono text-xs text-gray-400">{selectedComponent.objectid}</p>
+              <p className="mt-1 font-mono text-xs text-gray-400">{selectedNode.component.objectid}</p>
             </div>
           )}
-          {selectedComponent && selectedComponent.componenttype === ENTITY_COMPONENT_TYPE && (
+
+          {selectedNode?.kind === "entity" && (
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                🗄️ {selectedNode.component.name} <span className="font-mono text-xs text-gray-400">({selectedNode.component.logicalName})</span>
+              </h3>
+              {entityBasicInfoError && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{entityBasicInfoError}</p>}
+              {!entityBasicInfo && !entityBasicInfoError && <p className="mt-2 text-xs text-gray-400">加载中…</p>}
+              {entityBasicInfo && (
+                <>
+                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <div>
+                      <dt className="text-xs text-gray-400">显示名称</dt>
+                      <dd>{entityBasicInfo.displayName}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-gray-400">复数显示名称</dt>
+                      <dd>{entityBasicInfo.displayCollectionName}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-gray-400">主键列（LogicalName）</dt>
+                      <dd className="font-mono text-xs">{entityBasicInfo.primaryNameAttribute}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-gray-400">类型</dt>
+                      <dd>{entityBasicInfo.isCustomEntity ? "Custom（自定义）" : "Standard（系统内置）"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-gray-400">所有权类型</dt>
+                      <dd>{entityBasicInfo.ownershipType}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-gray-400">EntitySetName</dt>
+                      <dd className="font-mono text-xs">{entityBasicInfo.entitySetName}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-gray-400">最后修改</dt>
+                      <dd>{entityBasicInfo.modifiedOn ? new Date(entityBasicInfo.modifiedOn).toLocaleString() : "—"}</dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-xs text-gray-400">描述</dt>
+                      <dd>{entityBasicInfo.description ?? "—"}</dd>
+                    </div>
+                  </dl>
+                  <button
+                    onClick={() => selectEntityColumns(selectedNode.component)}
+                    className="mt-4 rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+                  >
+                    查看/管理字段 →
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {selectedNode?.kind === "entity-columns" && (
             <div>
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                  {selectedComponent.name} <span className="font-mono text-xs text-gray-400">({selectedComponent.logicalName})</span>
-                </h3>
+                <div>
+                  <button onClick={() => selectEntity(selectedNode.component)} className="text-xs text-blue-600 hover:underline dark:text-blue-400">
+                    ← {selectedNode.component.name}
+                  </button>
+                  <h3 className="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    {selectedNode.component.name} · 字段（Columns）
+                  </h3>
+                </div>
                 <button
                   onClick={() => setShowNewColumn(true)}
-                  disabled={!selectedComponent.logicalName}
+                  disabled={!selectedNode.component.logicalName}
                   className="rounded-md border border-blue-300 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
                 >
                   + 新建字段
@@ -323,6 +476,7 @@ export default function SolutionEditor() {
                       <th className="py-1 pr-3">显示名称</th>
                       <th className="py-1 pr-3">LogicalName</th>
                       <th className="py-1 pr-3">类型</th>
+                      <th className="py-1 pr-3">必填</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -334,6 +488,7 @@ export default function SolutionEditor() {
                         </td>
                         <td className="py-1 pr-3 font-mono text-xs">{f.logicalName}</td>
                         <td className="py-1 pr-3 text-xs">{f.attributeType}</td>
+                        <td className="py-1 pr-3 text-xs">{f.required ? "是" : "否"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -367,11 +522,11 @@ export default function SolutionEditor() {
           }}
         />
       )}
-      {showNewColumn && selectedComponent?.logicalName && (
+      {showNewColumn && selectedNode?.kind === "entity-columns" && selectedNode.component.logicalName && (
         <NewColumnDialog
           connectionId={activeConnectionId}
           solutionUniqueName={selected.uniquename}
-          entityLogicalName={selectedComponent.logicalName}
+          entityLogicalName={selectedNode.component.logicalName}
           publisherPrefix={selected.publisherPrefix}
           onClose={() => setShowNewColumn(false)}
           onCreated={() => {

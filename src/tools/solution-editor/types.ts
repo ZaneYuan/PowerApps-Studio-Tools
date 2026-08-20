@@ -113,6 +113,17 @@ export const COMPONENT_TYPE_LABELS: Record<number, string> = {
 
 export const ENTITY_COMPONENT_TYPE = 1;
 
+/** componenttype values that are really *sub*-components of a specific table (a field, a
+ *  relationship) rather than standalone objects — Dataverse's solutioncomponents list still gives
+ *  each of these its own row/type, but showing them as top-level tree groups (with unresolvable
+ *  GUIDs as labels, since none of them are in COMPONENT_NAME_RESOLVERS) doesn't match how
+ *  make.powerapps actually presents them: nested under their owning table's Columns/Relationships
+ *  pages instead. This tool doesn't correlate each row back to its owning table id (no cheap,
+ *  confirmed Web API way to do that from just the row), so it takes the simpler route of nesting
+ *  a live "字段" page under every Entity node (fetchEntityFields, not scoped to solutioncomponents)
+ *  and excluding these types from the flat top-level grouping entirely — see SolutionEditor.tsx. */
+export const ENTITY_SUBCOMPONENT_TYPES = new Set([2, 3, 10, 11, 12]);
+
 /** componenttype → {entitySet, nameField} for the ordinary (non-metadata) component types this
  *  tool resolves a friendly name for — deliberately a short, high-confidence list rather than
  *  every type in COMPONENT_TYPE_LABELS. `pluginassemblies`/`plugintypes`/`sdkmessageprocessingsteps`
@@ -170,4 +181,20 @@ export interface ColumnFieldMeta {
   attributeType: string;
   isPrimaryName: boolean;
   isCustomAttribute: boolean;
+  required: boolean;
+}
+
+/** The "Table properties" card make.powerapps shows on a table's own overview page — basic
+ *  metadata only, deliberately not the field list (that's its own "Columns" page, see
+ *  ColumnFieldMeta above and SolutionEditor.tsx's entity-columns view). */
+export interface EntityBasicInfo {
+  logicalName: string;
+  displayName: string;
+  displayCollectionName: string;
+  description: string | null;
+  primaryNameAttribute: string;
+  ownershipType: string;
+  isCustomEntity: boolean;
+  entitySetName: string;
+  modifiedOn: string | null;
 }

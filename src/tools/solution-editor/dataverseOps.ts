@@ -4,6 +4,7 @@ import {
   ENTITY_COMPONENT_TYPE,
   type BasicColumnType,
   type ColumnFieldMeta,
+  type EntityBasicInfo,
   type Publisher,
   type SolutionComponentRow,
   type SolutionSummary,
@@ -368,11 +369,12 @@ export async function fetchEntityFields(connectionId: string, entityLogicalName:
       IsPrimaryName: boolean;
       IsCustomAttribute: boolean;
       DisplayName?: { UserLocalizedLabel?: { Label: string } | null } | null;
+      RequiredLevel?: { Value: string } | null;
     }[];
   }>(
     connectionId,
     `EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes` +
-      "?$select=LogicalName,AttributeType,IsPrimaryName,IsCustomAttribute,DisplayName",
+      "?$select=LogicalName,AttributeType,IsPrimaryName,IsCustomAttribute,DisplayName,RequiredLevel",
   );
   return res.value
     .filter((a) => a.AttributeType !== "Virtual")
@@ -382,7 +384,40 @@ export async function fetchEntityFields(connectionId: string, entityLogicalName:
       attributeType: a.AttributeType,
       isPrimaryName: a.IsPrimaryName,
       isCustomAttribute: a.IsCustomAttribute,
+      required: !!a.RequiredLevel && a.RequiredLevel.Value !== "None",
     }));
+}
+
+/** The handful of fields make.powerapps' own table overview page ("Table properties" card)
+ *  shows — deliberately not the field list, which lives on its own "Columns" page instead (see
+ *  fetchEntityFields above and SolutionEditor.tsx's entity vs entity-columns views). */
+export async function fetchEntityBasicInfo(connectionId: string, entityLogicalName: string): Promise<EntityBasicInfo> {
+  const meta = await fetchDataverse<{
+    LogicalName: string;
+    DisplayName?: { UserLocalizedLabel?: { Label: string } | null } | null;
+    DisplayCollectionName?: { UserLocalizedLabel?: { Label: string } | null } | null;
+    Description?: { UserLocalizedLabel?: { Label: string } | null } | null;
+    PrimaryNameAttribute: string;
+    OwnershipType: string;
+    IsCustomEntity: boolean;
+    EntitySetName: string;
+    ModifiedOn: string | null;
+  }>(
+    connectionId,
+    `EntityDefinitions(LogicalName='${entityLogicalName}')` +
+      "?$select=LogicalName,DisplayName,DisplayCollectionName,Description,PrimaryNameAttribute,OwnershipType,IsCustomEntity,EntitySetName,ModifiedOn",
+  );
+  return {
+    logicalName: meta.LogicalName,
+    displayName: meta.DisplayName?.UserLocalizedLabel?.Label ?? meta.LogicalName,
+    displayCollectionName: meta.DisplayCollectionName?.UserLocalizedLabel?.Label ?? meta.LogicalName,
+    description: meta.Description?.UserLocalizedLabel?.Label ?? null,
+    primaryNameAttribute: meta.PrimaryNameAttribute,
+    ownershipType: meta.OwnershipType,
+    isCustomEntity: meta.IsCustomEntity,
+    entitySetName: meta.EntitySetName,
+    modifiedOn: meta.ModifiedOn,
+  };
 }
 
 /** Republishes every customization org-wide — Dataverse's Web API has no "publish only this one
