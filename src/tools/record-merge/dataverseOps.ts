@@ -23,17 +23,33 @@ async function fetchDataverse<T>(connectionId: string, path: string): Promise<T>
   return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
 }
 
-/** A Lookup attribute's `$filter`/`$select` property name — Dataverse's OData model exposes some
- *  lookups (confirmed live: `transactioncurrencyid` on `account`) only as a
+/** An ordinary Lookup attribute's `$filter`/`$select` property name — Dataverse's OData model
+ *  exposes some lookups (confirmed live: `transactioncurrencyid` on `account`) only as a
  *  navigation property under the bare logical name, so `$filter=transactioncurrencyid eq <guid>`
  *  400s with "A binary operator with incompatible types was detected. Found operand types
  *  'Microsoft.Dynamics.CRM.transactioncurrency' and 'Edm.Guid'" even though the identical bare-name
  *  filter works for other lookups. The `_name_value` form is the one Dataverse always exposes as a
  *  real scalar Guid property (also required for `$select` — bare name 400s there too, same as
- *  Record Explorer's `selectFieldFor`), so every lookup filter/select here goes through it instead
- *  of relying on the bare name sometimes happening to work. */
+ *  Record Explorer's `selectFieldFor`), so every ordinary-entity lookup filter/select here goes
+ *  through it instead of relying on the bare name sometimes happening to work.
+ *
+ *  Only for ordinary entities — an N:N intersect entity's two join columns are NOT modeled this
+ *  way (confirmed live: `_productid_value` 400s with "Could not find a property named
+ *  '_productid_value'" on an intersect entity, while the bare `productid` succeeds for both
+ *  `$filter` and `$select`), matching this codebase's existing note on `ManyToManyInfo` that an
+ *  intersect entity's columns "aren't ordinary writable properties" — don't call this for
+ *  `ManyToManyRefTable`/intersect-entity queries, use the bare attribute name directly. */
 function lookupValueKey(attr: string): string {
   return `_${attr}_value`;
+}
+
+/** Dataverse errors that mean "this relationship can never be queried, full stop" — a disabled
+ *  org feature (confirmed live: SharePoint/Teams integration) or an entity type `RetrieveMultiple`
+ *  fundamentally doesn't support (confirmed live: `postregarding`/`postrole`). No query fix would
+ *  ever make these succeed, so they're skipped silently rather than surfaced as a failure — unlike
+ *  a real bug (wrong $filter form, etc.), which should still show up in `failedRelationships`. */
+function isUnsupportedSystemRelationshipError(message: string): boolean {
+  return message.includes("does not support entities of type") || message.includes("integration is not enabled for this org");
 }
 
 export interface RecordLookup {
@@ -119,8 +135,10 @@ interface ManyToManyRelRaw {
 /** Scans every 1:N and N:N relationship this entity participates in (system tables included —
  *  unlike Record Explorer's browsing view, a reference-migration tool needs to be complete, not
  *  just readable) and returns one `RefTable` per relationship/side that actually has at least one
- *  matching row. A relationship whose $filter/$count call errors (a handful of system
- *  relationships have quirky Web API support) is skipped rather than failing the whole scan. */
+ *  matching row. A relationship whose $filter/$count call errors is skipped rather than failing
+ *  the whole scan — silently, if it's a structurally-unqueryable system relationship
+ *  (`isUnsupportedSystemRelationshipError`; no query fix would ever help), otherwise recorded in
+ *  `failedRelationships` since that kind of failure is worth a user's/a future fix's attention. */
 export async function scanReferences(connectionId: string, entityLogicalName: string, id: string): Promise<ScanResult> {
   const failedRelationships: FailedRelationship[] = [];
   const [oneToMany, manyToMany] = await Promise.all([
@@ -158,7 +176,8 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
         };
         return table;
       } catch (err) {
-        failedRelationships.push({ relationship: rel.SchemaName, error: err instanceof Error ? err.message : String(err) });
+        const message = err instanceof Error ? err.message : String(err);
+        if (!isUnsupportedSystemRelationshipError(message)) failedRelationships.push({ relationship: rel.SchemaName, error: message });
         return null;
       }
     });
@@ -185,12 +204,9 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
       jobs.push(async () => {
         try {
           const intersectMeta = await fetchEntityMeta(connectionId, rel.IntersectEntityName);
-          const { count, exceedsCap } = await countMatchingCapped(
-            connectionId,
-            intersectMeta.entitySetName,
-            intersectMeta.primaryIdAttribute,
-            `${lookupValueKey(s.thisAttr)} eq ${id}`,
-          );
+          // Bare attribute name, not lookupValueKey() — see that function's doc comment for why
+          // intersect entities are the one case where the underscore form is wrong.
+          const { count, exceedsCap } = await countMatchingCapped(connectionId, intersectMeta.entitySetName, intersectMeta.primaryIdAttribute, `${s.thisAttr} eq ${id}`);
           if (count === 0) return null;
           const table: ManyToManyRefTable = {
             kind: "manytomany",
@@ -204,7 +220,8 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
           };
           return table;
         } catch (err) {
-          failedRelationships.push({ relationship: `${rel.SchemaName} (${s.side})`, error: err instanceof Error ? err.message : String(err) });
+          const message = err instanceof Error ? err.message : String(err);
+          if (!isUnsupportedSystemRelationshipError(message)) failedRelationships.push({ relationship: `${rel.SchemaName} (${s.side})`, error: message });
           return null;
         }
       });
@@ -306,16 +323,17 @@ async function migrateManyToManyTable(
   const thisAttr = table.side === "entity1" ? table.info.entity1IntersectAttribute : table.info.entity2IntersectAttribute;
   const otherAttr = table.side === "entity1" ? table.info.entity2IntersectAttribute : table.info.entity1IntersectAttribute;
 
-  const otherAttrKey = lookupValueKey(otherAttr);
+  // Bare attribute names, not lookupValueKey() — intersect entities expose their two join columns
+  // as plain properties (see lookupValueKey's doc comment).
   const [oldRows, newRows] = await Promise.all([
-    fetchAllRows(connectionId, intersectMeta.entitySetName, otherAttrKey, `${lookupValueKey(thisAttr)} eq ${oldId}`),
-    fetchAllRows(connectionId, intersectMeta.entitySetName, otherAttrKey, `${lookupValueKey(thisAttr)} eq ${newId}`),
+    fetchAllRows(connectionId, intersectMeta.entitySetName, otherAttr, `${thisAttr} eq ${oldId}`),
+    fetchAllRows(connectionId, intersectMeta.entitySetName, otherAttr, `${thisAttr} eq ${newId}`),
   ]);
-  const otherIdsForOld = oldRows.map((r) => String(r[otherAttrKey]));
+  const otherIdsForOld = oldRows.map((r) => String(r[otherAttr]));
   // Records already associated with the new target must not be re-associated — Dataverse 400s on
   // a duplicate (entity1, entity2) pair, and this is a real scenario, not just a theoretical edge
   // case, whenever the old and new target already share a common related record.
-  const alreadyOnNew = new Set(newRows.map((r) => String(r[otherAttrKey])));
+  const alreadyOnNew = new Set(newRows.map((r) => String(r[otherAttr])));
 
   function values(thisValue: string, otherId: string): IntersectRowValues {
     return table.side === "entity1" ? { entity1Value: thisValue, entity2Value: otherId } : { entity1Value: otherId, entity2Value: thisValue };
