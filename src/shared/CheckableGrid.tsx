@@ -35,9 +35,16 @@ export interface GridColumn {
    *  to a number before writing); this component only ever hands back the raw string a native
    *  `<input>`/`<select>` produced (a picked Lookup record's id, in "lookup"'s case). */
   editable?: boolean;
-  editKind?: "text" | "select" | "lookup";
-  /** Required when editKind is "select" — `value` is always a string (native `<option>` values
-   *  always are), even for a numeric-backed Picklist option; the caller converts back. */
+  /** "select" (Picklist/State/Status, single value) and "multiselect" (MultiSelectPicklist, a
+   *  comma-separated value list) both need `options`. "number"/"date"/"boolean" are native
+   *  `<input type="number"|"date">`/`<select>` widgets with no options list of their own — the
+   *  caller converts their raw string back to a real number/ISO datetime/boolean, same spirit as
+   *  "select"'s own Picklist-code conversion. PartyList and any attribute type this app doesn't
+   *  recognize have no editor at all (see gridColumns.ts's buildEditableGridColumns) and stay
+   *  plain read-only text regardless of `editable`. */
+  editKind?: "text" | "select" | "multiselect" | "lookup" | "number" | "date" | "boolean";
+  /** Required when editKind is "select" or "multiselect" — `value` is always a string (native
+   *  `<option>` values always are), even for a numeric-backed option; the caller converts back. */
   options?: { value: string; label: string }[];
   /** Drag-resized column width in px — unset until the user drags this column's resize handle,
    *  at which point it renders at its natural (whitespace-nowrap) width same as before. */
@@ -147,9 +154,19 @@ const GridRowView = memo(function GridRowView({
         const displayValue =
           c.editKind === "select"
             ? (c.options?.find((o) => o.value === String(rawValue ?? ""))?.label ?? String(rawValue ?? ""))
-            : typeof rawValue === "object"
-              ? JSON.stringify(rawValue)
-              : String(rawValue ?? "");
+            : c.editKind === "multiselect"
+              ? // Dataverse's Web API returns a MultiSelectPicklist as a comma-separated string of
+                // numeric codes, same convention as Picklist's single code — resolve each to its
+                // label the same way, joined back with ", " for display.
+                String(rawValue ?? "")
+                  .split(",")
+                  .map((v) => v.trim())
+                  .filter(Boolean)
+                  .map((v) => c.options?.find((o) => o.value === v)?.label ?? v)
+                  .join(", ")
+              : typeof rawValue === "object"
+                ? JSON.stringify(rawValue)
+                : String(rawValue ?? "");
         const width = c.width ?? DEFAULT_COLUMN_WIDTH_PX;
         return (
           <td key={c.key} className="whitespace-nowrap overflow-hidden px-3 py-1.5 font-mono text-xs" style={{ width, minWidth: width, maxWidth: width }}>
@@ -207,6 +224,67 @@ const GridRowView = memo(function GridRowView({
                   🔍
                 </button>
               </div>
+            ) : c.editKind === "multiselect" ? (
+              // A native multi-select: ctrl/cmd-click (or shift-click for a range) toggles
+              // options, same interaction every OS trains users on for a multi-select list. The
+              // selected values join back into the same comma-separated-codes string Dataverse's
+              // Web API expects to receive on write, mirroring the shape it returns on read.
+              <select
+                autoFocus
+                multiple
+                value={String(rawValue ?? "")
+                  .split(",")
+                  .map((v) => v.trim())
+                  .filter(Boolean)}
+                onChange={(e) =>
+                  onEditCell?.(row.id, c.key, Array.from(e.target.selectedOptions, (o) => o.value).join(","))
+                }
+                onBlur={() => onDeactivateCell(row.id, c.key)}
+                className={`${inputCls} h-24`}
+              >
+                {c.options?.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            ) : c.editKind === "boolean" ? (
+              <select
+                autoFocus
+                value={String(rawValue ?? "")}
+                onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
+                onBlur={() => onDeactivateCell(row.id, c.key)}
+                className={inputCls}
+              >
+                <option value="" />
+                <option value="true">True</option>
+                <option value="false">False</option>
+              </select>
+            ) : c.editKind === "number" ? (
+              <input
+                autoFocus
+                type="number"
+                value={String(rawValue ?? "")}
+                onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
+                onBlur={() => onDeactivateCell(row.id, c.key)}
+                className={inputCls}
+              />
+            ) : c.editKind === "date" ? (
+              <input
+                autoFocus
+                type="date"
+                // Best-effort: Dataverse can report a DateTime value in the org's local time zone
+                // or as UTC depending on the attribute's DateTimeBehavior (Date Only/User Local/
+                // Time-Zone Independent), which this app doesn't fetch anywhere — slicing the
+                // first 10 chars of whatever ISO-ish string comes back is right for the common
+                // "Date Only" case and close enough (may be off by the local UTC offset right
+                // around midnight) for the other two, same honest scope limit as this grid's date
+                // *filter* already documents for fiscal-period conditions.
+                value={String(rawValue ?? "").slice(0, 10)}
+                onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
+                onBlur={() => onDeactivateCell(row.id, c.key)}
+                className={inputCls}
+              />
             ) : (
               <input
                 autoFocus

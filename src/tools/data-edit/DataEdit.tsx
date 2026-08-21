@@ -4,15 +4,7 @@ import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
 import { unwrapODataRow } from "../../native/odata";
-import {
-  fetchAttributes,
-  fetchDefaultViewColumnOrder,
-  fetchEntityMeta,
-  fetchOptionSetValues,
-  isLookupAttributeType,
-  isSystemAuditField,
-  sortColumnsForDisplay,
-} from "../../native/metadataService";
+import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { buildSelectPath, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
 import { insertRow, updateRow } from "../sql4cds/writeOps";
@@ -20,6 +12,7 @@ import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry } from ".
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
+import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
 
 const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
 
@@ -130,32 +123,7 @@ export default function DataEdit() {
       // key itself isn't an audit field, so it defaults checked — meaning this tool opens in
       // "更新" mode by default, matching its primary use case (edit-in-place).
       const columnNames = sortColumnsForDisplay(rawColumnNames, meta.primaryIdAttribute, viewOrder);
-
-      const newColumns: GridColumn[] = [];
-      for (const name of columnNames) {
-        const attrType = typeByName.get(name.toLowerCase());
-        const checked = !isSystemAuditField(name);
-        if (attrType === "String" || attrType === "Memo") {
-          newColumns.push({ key: name, attributeType: attrType, checked, editable: true, editKind: "text" });
-        } else if (attrType === "Picklist") {
-          const options = await fetchOptionSetValues(activeConnectionId, parsed.entityLogicalName, name);
-          newColumns.push({
-            key: name,
-            attributeType: attrType,
-            checked,
-            editable: true,
-            editKind: "select",
-            options: options.map((o) => ({ value: String(o.value), label: o.label })),
-          });
-        } else if (attrType && isLookupAttributeType(attrType)) {
-          // The row's value here is already the unwrapped plain GUID (unwrapODataRow strips the
-          // `_..._value` suffix), which is exactly what the picker edits and writes back — no
-          // extra conversion needed, unlike the Picklist branch's string<->number juggling.
-          newColumns.push({ key: name, attributeType: attrType, checked, editable: true, editKind: "lookup" });
-        } else {
-          newColumns.push({ key: name, attributeType: attrType, checked });
-        }
-      }
+      const newColumns = await buildEditableGridColumns(activeConnectionId, parsed.entityLogicalName, columnNames, typeByName);
       const newRows: GridRow[] = unwrapped.map((r) => ({ id: String(r[meta.primaryIdAttribute]), checked: true, values: r }));
       originalValuesRef.current = Object.fromEntries(newRows.map((r) => [r.id, r.values]));
 
@@ -184,11 +152,7 @@ export default function DataEdit() {
   }
 
   function handleEditCell(rowId: string, columnKey: string, value: string) {
-    const column = columns.find((c) => c.key === columnKey);
-    // A Picklist's real value is Edm.Int32 — the shared grid's <select> only ever hands back a
-    // string (native <option> values always are), convert back here rather than teaching the
-    // generic grid component about Dataverse option-set typing.
-    const finalValue: unknown = column?.editKind === "select" ? (value === "" ? null : Number(value)) : value;
+    const finalValue = convertEditedCellValue(columns.find((c) => c.key === columnKey), value);
     setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, values: { ...r.values, [columnKey]: finalValue } } : r)));
   }
 

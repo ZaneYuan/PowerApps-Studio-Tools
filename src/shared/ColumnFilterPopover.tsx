@@ -166,7 +166,7 @@ export default function ColumnFilterPopover({
               className={`${inputCls} mb-1`}
             />
           )}
-          <div className="max-h-48 overflow-y-auto rounded border border-gray-200 dark:border-gray-700">
+          <div className="max-h-48 overflow-y-auto rounded border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
             {visibleOptions.length === 0 && <p className="p-2 text-xs text-gray-400">没有匹配的选项。</p>}
             {visibleOptions.map((o) => (
               <label

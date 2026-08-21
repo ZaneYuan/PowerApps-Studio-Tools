@@ -4,22 +4,14 @@ import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
 import { unwrapODataRow } from "../../native/odata";
-import {
-  fetchAttributes,
-  fetchDefaultViewColumnOrder,
-  fetchEntityMeta,
-  fetchManyToManyInfo,
-  fetchOptionSetValues,
-  isLookupAttributeType,
-  isSystemAuditField,
-  sortColumnsForDisplay,
-} from "../../native/metadataService";
+import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, fetchManyToManyInfo, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { buildSelectPath, literalToJsValue, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
 import { insertIntersectRow, resolveIntersectRowValues, updateRow } from "../sql4cds/writeOps";
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid from "../../shared/CheckableGrid";
+import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
 import { planDeferredWrite, phase1Body, phase2Body } from "./deferredWrite";
 import {
   buildDataMigrationLogText,
@@ -124,33 +116,15 @@ async function buildColumns(
   ]);
   const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
   const ordered = sortColumnsForDisplay(columnNames, primaryIdAttribute, viewOrder);
-
-  const columns: ImportColumn[] = [];
-  for (const name of ordered) {
-    const attrType = typeByName.get(name.toLowerCase()) ?? "String";
-    const checked = !isSystemAuditField(name);
-    if (attrType === "String" || attrType === "Memo") {
-      columns.push({ key: name, attributeType: attrType, checked, editable: true, editKind: "text" });
-    } else if (attrType === "Picklist") {
-      const options = await fetchOptionSetValues(connectionId, entityLogicalName, name);
-      columns.push({
-        key: name,
-        attributeType: attrType,
-        checked,
-        editable: true,
-        editKind: "select",
-        options: options.map((o) => ({ value: String(o.value), label: o.label })),
-      });
-    } else if (isLookupAttributeType(attrType)) {
-      // Row's value here is already the unwrapped plain GUID (unwrapODataRow strips the
-      // `_..._value` suffix on the query path; the SQL-import path never had the suffix to
-      // begin with), which is exactly what the picker edits and writes back.
-      columns.push({ key: name, attributeType: attrType, checked, editable: true, editKind: "lookup" });
-    } else {
-      columns.push({ key: name, attributeType: attrType, checked });
-    }
-  }
-  return columns;
+  const columns = await buildEditableGridColumns(connectionId, entityLogicalName, ordered, typeByName);
+  // A column whose type didn't resolve at all (typically the SQL-file-import path, where a column
+  // name may not match a real attribute) stays non-editable in buildEditableGridColumns' stricter
+  // default — this tool's own established behavior instead treats that as plain editable text
+  // (the common case is an unusual/typo'd name, not something structurally different) and needs a
+  // concrete attributeType regardless (ImportColumn, unlike the shared GridColumn, requires one).
+  return columns.map((c): ImportColumn =>
+    c.attributeType === undefined ? { ...c, attributeType: "String", editable: true, editKind: "text" } : (c as ImportColumn),
+  );
 }
 
 export default function DataMigration() {
@@ -510,11 +484,7 @@ export default function DataMigration() {
     setTables((ts) =>
       ts.map((t) => {
         if (t.tabId !== tabId) return t;
-        const column = t.columns.find((c) => c.key === columnKey);
-        // A Picklist's real value is Edm.Int32 — the shared grid's <select> only ever hands back
-        // a string (native <option> values always are), convert back here rather than teaching
-        // the generic grid component about Dataverse option-set typing.
-        const finalValue: unknown = column?.editKind === "select" ? (value === "" ? null : Number(value)) : value;
+        const finalValue = convertEditedCellValue(t.columns.find((c) => c.key === columnKey), value);
         return { ...t, rows: t.rows.map((r) => (r.id === rowId ? { ...r, values: { ...r.values, [columnKey]: finalValue } } : r)) };
       }),
     );
