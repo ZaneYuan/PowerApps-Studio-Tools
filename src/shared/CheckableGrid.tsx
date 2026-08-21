@@ -68,20 +68,41 @@ const inputCls =
  *  cells from scratch on every scroll frame was enough sustained allocation to make the whole
  *  machine feel like it was thrashing, not just the tab — see bugs & requirements/8.20.md. Only
  *  actually skips work when its own props are referentially stable, so every callback below is
- *  its own `useCallback` rather than an inline arrow recreated per render. */
+ *  its own `useCallback` rather than an inline arrow recreated per render.
+ *
+ *  memo alone wasn't the whole story, though: real usage on a product-class table (150-280
+ *  editable columns, so up to that many live `<input>`/`<select>` elements per row) kept stuttering
+ *  on plain vertical scroll even once every re-render here was confirmed (via the `console.count`
+ *  below) to be legitimately skipped — the cost wasn't React re-rendering these cells, it was the
+ *  browser having to keep that many real form controls laid out and painted at once, scaling
+ *  directly with *checked column count* regardless of row count (a 5000-row/20-column table never
+ *  stuttered; a 37-row/165-column one did). Standard fix, same one every serious data-grid uses
+ *  (Excel Online, Google Sheets, AG Grid): an editable cell is a plain `<span>` until clicked, and
+ *  only the *one* cell currently being edited (`activeColumnKey`) actually mounts a real control —
+ *  so the live-control count is bounded by 1, not by rows × checked columns. */
 const GridRowView = memo(function GridRowView({
   row,
   checkedColumns,
+  activeColumnKey,
   onEditCell,
   onToggleRow,
+  onActivateCell,
+  onDeactivateCell,
   onOpenLookupEditor,
   connectionId,
   entityLogicalName,
 }: {
   row: GridRow;
   checkedColumns: GridColumn[];
+  /** The key of this row's own cell currently in edit mode, or null — computed by the caller as
+   *  a plain string (not the raw `{rowId, columnKey}` selection object) specifically so a click
+   *  that activates/deactivates a cell in some *other* row doesn't change this prop's value at
+   *  all, and `memo` correctly leaves every other row alone. */
+  activeColumnKey: string | null;
   onEditCell?: (rowId: string, columnKey: string, value: string) => void;
   onToggleRow: (id: string) => void;
+  onActivateCell: (rowId: string, columnKey: string) => void;
+  onDeactivateCell: (rowId: string, columnKey: string) => void;
   onOpenLookupEditor: (rowId: string, columnKey: string) => void;
   connectionId?: string;
   entityLogicalName?: string;
@@ -104,12 +125,44 @@ const GridRowView = memo(function GridRowView({
       </td>
       {checkedColumns.map((c) => {
         const rawValue = row.values[c.key];
-        const displayValue = typeof rawValue === "object" ? JSON.stringify(rawValue) : String(rawValue ?? "");
+        // A Picklist's stored value is its numeric option code, not the human label — the old
+        // always-on `<select>` resolved this for free (the browser matches `value` to the
+        // matching `<option>`'s text), but the inactive span below renders plain text and has to
+        // do that lookup itself, or every unclicked Picklist cell in the grid would show a bare
+        // code number instead of its label.
+        const displayValue =
+          c.editKind === "select"
+            ? (c.options?.find((o) => o.value === String(rawValue ?? ""))?.label ?? String(rawValue ?? ""))
+            : typeof rawValue === "object"
+              ? JSON.stringify(rawValue)
+              : String(rawValue ?? "");
         const width = c.width ?? DEFAULT_COLUMN_WIDTH_PX;
         return (
           <td key={c.key} className="whitespace-nowrap overflow-hidden px-3 py-1.5 font-mono text-xs" style={{ width, minWidth: width, maxWidth: width }}>
-            {c.editable && c.editKind === "select" ? (
-              <select value={String(rawValue ?? "")} onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)} className={inputCls}>
+            {!c.editable ? (
+              <span className="block overflow-hidden text-ellipsis" title={displayValue}>
+                {displayValue}
+              </span>
+            ) : activeColumnKey !== c.key ? (
+              // Not the active cell — a plain, cheap span standing in for the real control (see
+              // the block comment above GridRowView). Click activates it; the value shown is
+              // exactly what the real control would've shown, so there's no visible flash when it
+              // swaps in.
+              <span
+                onClick={() => onActivateCell(row.id, c.key)}
+                className="block cursor-text overflow-hidden text-ellipsis rounded px-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
+                title={displayValue}
+              >
+                {displayValue || " "}
+              </span>
+            ) : c.editKind === "select" ? (
+              <select
+                autoFocus
+                value={String(rawValue ?? "")}
+                onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
+                onBlur={() => onDeactivateCell(row.id, c.key)}
+                className={inputCls}
+              >
                 <option value="" />
                 {c.options?.map((o) => (
                   <option key={o.value} value={o.value}>
@@ -117,9 +170,14 @@ const GridRowView = memo(function GridRowView({
                   </option>
                 ))}
               </select>
-            ) : c.editable && c.editKind === "lookup" ? (
-              <div className="flex items-center gap-1">
+            ) : c.editKind === "lookup" ? (
+              // Blur lives on the wrapping div (not the text input) and checks `relatedTarget` —
+              // same "ignore a blur that's just focus moving to a sibling inside this same widget"
+              // technique as GridHeader's own `handleMenuBlur` — so clicking 🔍 doesn't itself
+              // deactivate the cell out from under the click.
+              <div onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && onDeactivateCell(row.id, c.key)} className="flex items-center gap-1">
                 <input
+                  autoFocus
                   type="text"
                   value={String(rawValue ?? "")}
                   onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
@@ -135,17 +193,15 @@ const GridRowView = memo(function GridRowView({
                   🔍
                 </button>
               </div>
-            ) : c.editable ? (
+            ) : (
               <input
+                autoFocus
                 type="text"
                 value={String(rawValue ?? "")}
                 onChange={(e) => onEditCell?.(row.id, c.key, e.target.value)}
+                onBlur={() => onDeactivateCell(row.id, c.key)}
                 className={inputCls}
               />
-            ) : (
-              <span className="block overflow-hidden text-ellipsis" title={displayValue}>
-                {displayValue}
-              </span>
             )}
           </td>
         );
@@ -411,6 +467,12 @@ export default function CheckableGrid({
   const checkedColumnKeys = useMemo(() => new Set(checkedColumns.map((c) => c.key)), [checkedColumns]);
   const checkedRowCount = rows.filter((r) => r.checked).length;
   const [lookupEditorCell, setLookupEditorCell] = useState<{ rowId: string; columnKey: string } | null>(null);
+  // Which single cell (if any) is currently showing a real editor instead of its cheap span — see
+  // the click-to-edit block comment above GridRowView. Deliberately not per-row state: a click
+  // activating a cell in row B must be able to deactivate whatever was active in row A too, and
+  // one shared piece of state is the simplest way to guarantee "at most one real control at a
+  // time" without the two rows needing to coordinate directly.
+  const [activeCell, setActiveCell] = useState<{ rowId: string; columnKey: string } | null>(null);
 
   // Sort/filter are view-only concerns local to this component — they reorder/narrow what's
   // *displayed*, never `rows` itself (see displayRows below), so switching tables/tabs doesn't
@@ -490,6 +552,16 @@ export default function CheckableGrid({
     onRowsChange(rows.map((r) => (displayIds.has(r.id) ? { ...r, checked: next } : r)));
   }, [allRowsChecked, displayRows, rows, onRowsChange]);
   const openLookupEditor = useCallback((rowId: string, columnKey: string) => setLookupEditorCell({ rowId, columnKey }), []);
+  const activateCell = useCallback((rowId: string, columnKey: string) => setActiveCell({ rowId, columnKey }), []);
+  // Guarded by a functional update that only clears the cell it was called for — a blur firing
+  // for the *previously* active cell must not clobber a newer activation that already landed
+  // (e.g. the DOM blur/focusout a removed input emits can arrive after the click that activated
+  // a different cell already updated state), so this only ever nulls out a match to itself.
+  const deactivateCell = useCallback(
+    (rowId: string, columnKey: string) =>
+      setActiveCell((prev) => (prev?.rowId === rowId && prev?.columnKey === columnKey ? null : prev)),
+    [],
+  );
   const resizeColumn = useCallback(
     (key: string, width: number) => onColumnsChange(columns.map((c) => (c.key === key ? { ...c, width } : c))),
     [columns, onColumnsChange],
@@ -553,13 +625,21 @@ export default function CheckableGrid({
               )}
               {virtualRows.map((virtualRow) => {
                 const row = displayRows[virtualRow.index];
+                // A plain string (or null), not the raw `activeCell` object — so a row that isn't
+                // the active one keeps getting the exact same `null` value across renders, and
+                // `memo` can actually tell "nothing changed for me" apart from "some other row's
+                // active cell changed".
+                const activeColumnKey = activeCell?.rowId === row.id ? activeCell.columnKey : null;
                 return (
                   <GridRowView
                     key={row.id}
                     row={row}
                     checkedColumns={checkedColumns}
+                    activeColumnKey={activeColumnKey}
                     onEditCell={onEditCell}
                     onToggleRow={toggleRow}
+                    onActivateCell={activateCell}
+                    onDeactivateCell={deactivateCell}
                     onOpenLookupEditor={openLookupEditor}
                     connectionId={connectionId}
                     entityLogicalName={entityLogicalName}
