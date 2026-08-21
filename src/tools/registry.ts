@@ -11,7 +11,7 @@ export const tools: ToolDefinition[] = [
   {
     id: "connections",
     name: "我的连接",
-    description: "管理 Dataverse 连接（交互式登录 / Client Secret），登录后可用 WhoAmI 验证连通性。仅桌面版可用。",
+    description: "管理 Dataverse 连接（交互式登录 / Client Secret / 证书认证），支持从连接字符串导入、按连接开关允许写入，登录后可用 WhoAmI 验证连通性。仅桌面版可用。",
     category: "连接管理",
     icon: "🔌",
     connectionScoped: false,
@@ -28,7 +28,7 @@ export const tools: ToolDefinition[] = [
   {
     id: "sql4cds",
     name: "SQL4CDS",
-    description: "只读单表 SQL SELECT，翻译成 Dataverse Web API 查询并真实执行。仅桌面版可用。",
+    description: "SELECT（含 JOIN/GROUP BY/聚合函数）、INSERT/UPDATE/DELETE，用 T-SQL 语法写，翻译成 Dataverse Web API/FetchXML 查询后真实执行。仅桌面版可用。",
     category: "查询工具",
     icon: "🗄️",
     Component: lazy(() => import("./sql4cds/Sql4Cds")),
@@ -44,7 +44,7 @@ export const tools: ToolDefinition[] = [
   {
     id: "plugin-registration",
     name: "Plugin Registration",
-    description: "浏览/注册插件程序集、类型、步骤、镜像，模拟 XrmToolBox Plugin Registration Tool。仅桌面版可用。",
+    description: "浏览/注册/更新插件程序集、类型、步骤、镜像，支持启用停用 Step、级联删除，模拟 XrmToolBox Plugin Registration Tool。仅桌面版可用。",
     category: "插件开发",
     icon: "🔧",
     Component: lazy(() => import("./plugin-registration/PluginRegistration")),
@@ -52,7 +52,7 @@ export const tools: ToolDefinition[] = [
   {
     id: "plugin-trace-viewer",
     name: "Plugin Trace Viewer",
-    description: "查看/过滤 Plugin Trace Log，含异常详情、耗时、org 级别 trace 设置开关。仅桌面版可用。",
+    description: "查看/过滤/删除 Plugin Trace Log，含异常详情、耗时、org 级别 trace 设置开关。仅桌面版可用。",
     category: "插件开发",
     icon: "📜",
     Component: lazy(() => import("./plugin-trace-viewer/PluginTraceViewer")),
@@ -68,7 +68,7 @@ export const tools: ToolDefinition[] = [
   {
     id: "data-copy",
     name: "数据复制",
-    description: "单表 SELECT 查询，结果表格可编辑（文本/选项集）后批量创建为新记录，行/列勾选，默认全选。仅桌面版可用。",
+    description: "单表 SELECT 查询，结果表格可编辑（文本/选项集/查找，查找可搜索选择目标记录）后批量创建为新记录，行/列勾选，默认全选。仅桌面版可用。",
     category: "数据 & Solution",
     icon: "📋",
     Component: lazy(() => import("./data-copy/DataCopy")),
@@ -116,7 +116,7 @@ export const tools: ToolDefinition[] = [
   {
     id: "record-merge",
     name: "记录引用查看与迁移",
-    description: "输入实体+GUID 定位记录，查询有多少条记录（1:N 查找字段 + N:N 关联，含系统表）引用了它，点击表名展开查看实际引用它的记录（默认视图字段），再批量迁移到另一条同表记录。仅桌面版可用。",
+    description: "输入实体+GUID（或粘贴记录的 D365 表单 URL）定位记录，查询有多少条记录（1:N 查找字段 + N:N 关联，含系统表）引用了它，点击表名展开查看实际引用它的记录（默认视图字段），再批量迁移到另一条同表记录。仅桌面版可用。",
     category: "数据 & Solution",
     icon: "🔀",
     Component: lazy(() => import("./record-merge/RecordMerge")),
