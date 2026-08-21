@@ -10,6 +10,12 @@ const { Parser } = pkg;
 const GUID_RE =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+// Same shape as GUID_RE but also accepts the classic curly-braced CRM GUID text form users copy
+// out of a browser URL or an old CRM screen — used only by the field-name heuristics below, not
+// by formatLiteral (which has its own, narrower notion of "should this be quoted").
+const GUID_LOOSE_RE =
+  /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
+
 /** Minimal shape of the bits of node-sql-parser's AST this translator actually reads — the
  *  library's own types are broad unions that don't narrow well, so we describe just what we use
  *  and validate everything else explicitly rather than trusting `any`. Shapes below were
@@ -203,6 +209,17 @@ function isStringLiteral(node: SqlNode): boolean {
   return node.type === "single_quote_string" || node.type === "string" || node.type === "var_string";
 }
 
+/** An `IN (SELECT ...)` subquery that hasn't been resolved to a literal list yet parses to a
+ *  `{tableList, columnList, ast}` descriptor with no `.type` at all — distinct from every real
+ *  literal node, which always has one. Callers hit this only if they run translateWhere/
+ *  translateFetchXmlCondition on raw (unresolved) SQL text; resolveSqlSubqueries is what's
+ *  supposed to replace these with real literals before execution (see its own doc comment) —
+ *  this is a defensive check for whatever reaches these functions without going through it, e.g.
+ *  a live/every-keystroke preview call. */
+function isUnresolvedSubqueryNode(node: SqlNode): boolean {
+  return node.type === undefined;
+}
+
 /** node-sql-parser's `.value` for a string literal node preserves the source text verbatim,
  *  including a doubled `''` a user wrote to escape a literal quote — confirmed by parsing
  *  `N'O''Brien'` directly: `.value` comes back as `"O''Brien"`, not the unescaped `"O'Brien"`.
@@ -271,6 +288,42 @@ function parseColumnRef(node: SqlNode): { table: string | null; column: string }
   return { table: node.table ?? null, column: node.column };
 }
 
+/** Same as parseColumnRef, but also normalizes a Lookup/Customer/Owner column's name down to its
+ *  bare logical name (see stripValueWrapper below) — every reader of a field name inside a
+ *  FetchXML-routed query (translateComplexSelect, translateFetchXmlCondition) wants this form,
+ *  since FetchXML's `<attribute>`/`<condition attribute="">` never use OData's `_..._value` shadow
+ *  property convention. */
+function parseColumnRefNormalized(node: SqlNode): { table: string | null; column: string } {
+  const r = parseColumnRef(node);
+  return { table: r.table, column: stripValueWrapper(r.column) };
+}
+
+/** OData's Web API addresses a Lookup/Customer/Owner column's raw GUID value through a shadow
+ *  property named `_<attribute>_value` in $filter/$orderby — never in $select, and FetchXML never
+ *  uses this form at all. Writing SQL against this tool shouldn't require knowing that Web-API-
+ *  specific convention, so every reader of a field name normalizes it down to the bare logical
+ *  name wherever the wrapped form is definitely wrong (this is a pure, unambiguous text
+ *  transform — no metadata needed), and `addValueWrapperForGuidFilter` below adds it back
+ *  heuristically in the one place (OData $filter) where it's sometimes required. */
+function stripValueWrapper(field: string): string {
+  const m = /^_(.+)_value$/.exec(field);
+  return m ? m[1] : field;
+}
+
+/** Adds the `_<field>_value` OData shadow-property wrapper for a $filter comparison against a
+ *  literal that looks like a GUID, mirroring the one other place this codebase already solves the
+ *  same problem (fetchxml-to-odata/convert.ts's resolveFieldName) — without real attribute-type
+ *  metadata to consult synchronously (parseSql runs on every keystroke for the live preview),
+ *  "the compared literal looks like a GUID and the field isn't already wrapped" is the same
+ *  good-enough signal used there. Leaves the field alone (a) if it's already wrapped — an
+ *  explicit `_x_value` the user typed keeps working exactly as before — or (b) if the literal
+ *  doesn't look like a GUID, since wrapping a non-Lookup column would just break the request. */
+function addValueWrapperForGuidFilter(field: string, literalNode: SqlNode): string {
+  if (/^_.*_value$/.test(field)) return field;
+  if (!isStringLiteral(literalNode) || !GUID_LOOSE_RE.test(stringLiteralValue(literalNode))) return field;
+  return `_${field}_value`;
+}
+
 function translateWhere(node: SqlNode, warnings: string[]): string {
   const op = node.operator;
 
@@ -281,7 +334,7 @@ function translateWhere(node: SqlNode, warnings: string[]): string {
   }
 
   if (op && op in COMPARISON_OPERATORS) {
-    const field = columnName(node.left!);
+    const field = addValueWrapperForGuidFilter(columnName(node.left!), node.right!);
     const lit = formatLiteral(node.right!);
     return `${field} ${COMPARISON_OPERATORS[op]} ${lit}`;
   }
@@ -315,12 +368,19 @@ function translateWhere(node: SqlNode, warnings: string[]): string {
   if (op === "IN" || op === "NOT IN") {
     const field = columnName(node.left!);
     const right = node.right as unknown as { value: SqlNode[] };
+    if (right.value.some(isUnresolvedSubqueryNode)) {
+      throw new Error(
+        `${field} 的 IN 子查询还没有被解析成字面量列表——这是内部错误（应在执行前先调用 resolveSqlSubqueries），如果你是在看实时预览，这个提示会在点击"执行查询"后自动消失。`,
+      );
+    }
     // Microsoft.Dynamics.CRM.In/NotIn's PropertyValues is always Edm.String, regardless of
     // the target field's real type — confirmed against a live org (int/picklist values sent
     // unquoted come back "Cannot convert the literal '0' to the expected type 'Edm.String'").
+    const allGuidLike = right.value.every((v) => isStringLiteral(v) && GUID_LOOSE_RE.test(stringLiteralValue(v)));
+    const resolvedField = allGuidLike ? addValueWrapperForGuidFilter(field, right.value[0]) : field;
     const values = right.value.map((v) => quoteString(String(v.value))).join(",");
     const fn = op === "IN" ? "In" : "NotIn";
-    return `Microsoft.Dynamics.CRM.${fn}(PropertyName='${field}',PropertyValues=[${values}])`;
+    return `Microsoft.Dynamics.CRM.${fn}(PropertyName='${resolvedField}',PropertyValues=[${values}])`;
   }
 
   throw new Error(`不支持的操作符 "${op ?? node.type}"`);
@@ -335,7 +395,7 @@ function translateSelectColumns(columns: ColumnItem[] | string): string | null {
       if (c.expr.type !== "column_ref") {
         throw new Error("SELECT 列表暂不支持函数/聚合（如 COUNT），只支持列名");
       }
-      return columnName(c.expr);
+      return stripValueWrapper(columnName(c.expr));
     })
     .join(",");
 }
@@ -350,7 +410,7 @@ function translateOrderBy(orderby: OrderByItem[] | null): string | null {
   if (!orderby) return null;
   return orderby
     .map((o) => {
-      const col = columnName(o.expr);
+      const col = stripValueWrapper(columnName(o.expr));
       return o.type === "DESC" ? `${col} desc` : col;
     })
     .join(",");
@@ -374,10 +434,17 @@ function guessPrimaryIdAttribute(entityLogicalName: string): string {
 }
 
 function resolveLinkType(joinKeyword: string): FxLinkType {
-  const kw = joinKeyword.toUpperCase();
+  // node-sql-parser hands back whatever case/spacing the grammar happened to produce per keyword
+  // combination (confirmed directly: "LEFT JOIN" comes back as-is, but "LEFT OUTER JOIN" comes
+  // back as "LEFT outer JOIN" — mixed case) — normalize both before comparing instead of matching
+  // exact literal strings.
+  const kw = joinKeyword.trim().toUpperCase().replace(/\s+/g, " ");
   if (kw === "JOIN" || kw === "INNER JOIN") return "inner";
-  if (kw === "LEFT JOIN") return "outer";
-  throw new Error(`不支持的 JOIN 类型 "${joinKeyword}"（只支持 JOIN / INNER JOIN / LEFT JOIN）。`);
+  if (kw === "LEFT JOIN" || kw === "LEFT OUTER JOIN") return "outer";
+  if (kw === "FULL JOIN" || kw === "FULL OUTER JOIN") {
+    throw new Error("不支持 FULL [OUTER] JOIN——FetchXML 的 <link-entity> 没有全外连接的等价物。");
+  }
+  throw new Error(`不支持的 JOIN 类型 "${joinKeyword}"（只支持 JOIN / INNER JOIN / LEFT JOIN / LEFT OUTER JOIN）。`);
 }
 
 function refEntityName(alias: string, rootAlias: string): string | undefined {
@@ -388,7 +455,7 @@ function translateFetchXmlCondition(node: SqlNode, knownAliases: Set<string>, ro
   const op = node.operator;
 
   function ref(refNode: SqlNode): { attribute: string; entityname?: string } {
-    const r = parseColumnRef(refNode);
+    const r = parseColumnRefNormalized(refNode);
     const alias = r.table ?? rootAlias;
     if (!knownAliases.has(alias)) throw new Error(`条件里引用了未知的表别名 "${r.table}"。`);
     return { attribute: r.column, entityname: refEntityName(alias, rootAlias) };
@@ -405,6 +472,11 @@ function translateFetchXmlCondition(node: SqlNode, knownAliases: Set<string>, ro
   }
   if (op === "IN" || op === "NOT IN") {
     const right = node.right as unknown as { value: SqlNode[] };
+    if (right.value.some(isUnresolvedSubqueryNode)) {
+      throw new Error(
+        "IN 子查询还没有被解析成字面量列表——这是内部错误（应在执行前先调用 resolveSqlSubqueries），如果你是在看实时预览，这个提示会在点击\"执行查询\"后自动消失。",
+      );
+    }
     return { ...ref(node.left!), operator: op === "IN" ? "in" : "not-in", values: right.value.map(formatFxLiteral) };
   }
 
@@ -457,8 +529,8 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
       throw new Error(`JOIN ${f.table} 的 ON 条件只支持单个等值判断（如 a.col = b.col）。`);
     }
 
-    const leftRef = parseColumnRef(f.on.left);
-    const rightRef = parseColumnRef(f.on.right);
+    const leftRef = parseColumnRefNormalized(f.on.left);
+    const rightRef = parseColumnRefNormalized(f.on.right);
     if (!leftRef.table || !rightRef.table) {
       throw new Error(`JOIN ${f.table} 的 ON 条件两侧字段都必须带表别名前缀（如 a.col = b.col）。`);
     }
@@ -500,7 +572,7 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
   const groupBySet = new Set<string>();
   if (ast.groupby) {
     for (const g of ast.groupby.columns) {
-      const ref = parseColumnRef(g);
+      const ref = parseColumnRefNormalized(g);
       const alias = ref.table ?? rootAlias;
       if (!attrTargets.has(alias)) throw new Error(`GROUP BY 引用了未知的表别名 "${ref.table}"。`);
       groupBySet.add(`${alias}.${ref.column}`);
@@ -535,7 +607,7 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
         );
       } else if (fnName === "COUNT" || fnName === "SUM" || fnName === "AVG" || fnName === "MIN" || fnName === "MAX") {
         if (argsExpr.type !== "column_ref") throw new Error(`${fnName}(...) 里只支持字段名，不支持表达式。`);
-        const ref = parseColumnRef(argsExpr);
+        const ref = parseColumnRefNormalized(argsExpr);
         const refAlias = ref.table ?? rootAlias;
         const t = attrTargets.get(refAlias);
         if (!t) throw new Error(`${fnName}(${ref.column}) 引用了未知的表别名 "${ref.table}"。`);
@@ -554,7 +626,7 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
     if (expr.type !== "column_ref") {
       throw new Error("SELECT 列表暂不支持除聚合函数外的表达式，只支持字段名。");
     }
-    const ref = parseColumnRef(expr);
+    const ref = parseColumnRefNormalized(expr);
     const alias = ref.table ?? rootAlias;
     const target = attrTargets.get(alias);
     if (!target) throw new Error(`SELECT 列表引用了未知的表别名 "${ref.table}"。`);
@@ -582,7 +654,7 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
   const orders: FxOrder[] = [];
   if (ast.orderby) {
     for (const o of ast.orderby) {
-      const ref = parseColumnRef(o.expr);
+      const ref = parseColumnRefNormalized(o.expr);
       if (ref.table && ref.table !== rootAlias) {
         throw new Error(`ORDER BY 暂不支持引用 JOIN 进来的表的字段（"${ref.table}.${ref.column}"），请只对根表字段排序。`);
       }
@@ -859,6 +931,26 @@ async function runSubquerySelect(connectionId: string, subquerySql: string): Pro
  *  Depth-first: a subquery's own nested subqueries are resolved before *it* runs. Every SQL-editor
  *  tool (SQL4CDS, Data Copy, Data Migration) calls this once, right before executing a SELECT —
  *  not during live/as-you-type parsing, since that would fire a network round-trip per keystroke. */
+/** Live/as-you-type preview only: replaces every `[NOT] IN (SELECT ...)` with a syntactically
+ *  valid placeholder literal — purely so parseSql can produce *a* preview without an unresolved
+ *  subquery's `{tableList, columnList, ast}` descriptor reaching translateWhere/
+ *  translateFetchXmlCondition (which used to either throw "不支持的字面量类型: undefined", for a
+ *  JOIN'd query, or silently stringify to the literal text "undefined", for a simple one) — and
+ *  without firing a network round-trip per keystroke, which actually resolving the subquery would
+ *  require. resolveSqlSubqueries does the real resolution, once, right before execution; this is
+ *  only ever used for the request-path/FetchXML preview text shown while the user is still
+ *  typing. The placeholder is deliberately distinctive (not a real-looking value) so a preview
+ *  showing it can't be mistaken for the actual resolved filter. */
+export function previewSql(sqlText: string): string {
+  let text = sqlText;
+  for (let i = 0; i < 20; i++) {
+    const found = findFirstInSubquery(text);
+    if (!found) return text;
+    text = text.slice(0, found.start) + "('<子查询：执行时解析>')" + text.slice(found.end);
+  }
+  return text;
+}
+
 export async function resolveSqlSubqueries(connectionId: string, sqlText: string): Promise<string> {
   let text = sqlText;
   for (let i = 0; i < 20; i++) {
@@ -872,8 +964,25 @@ export async function resolveSqlSubqueries(connectionId: string, sqlText: string
   throw new Error("子查询嵌套层数过多（超过 20 层），可能是循环引用，请检查 SQL。");
 }
 
+// node-sql-parser's transactsql grammar has no concept of RIGHT [OUTER] JOIN at all — confirmed
+// by running it directly: "RIGHT OUTER JOIN"/bare "OUTER JOIN" fail with a cryptic parser syntax
+// error, but bare "RIGHT JOIN" is worse — it *parses successfully*, silently treating "right" as
+// an alias on the preceding table and the actual "join" keyword as a plain inner join, producing
+// a query that runs but returns the wrong rows with no error at all. FetchXML has no right-join
+// primitive either way (`<link-entity>` is always expressed from the "outer" table's point of
+// view), so there's no translation to fall back to — caught here, on the raw SQL text, before the
+// parser gets a chance to either mis-parse or reject it.
+const RIGHT_JOIN_RE = /\bright\s+(outer\s+)?join\b/i;
+
 export function parseSql(sql: string): ParsedStatement {
   if (!sql.trim()) return { kind: "empty" };
+  if (RIGHT_JOIN_RE.test(sql)) {
+    return {
+      kind: "error",
+      error:
+        '不支持 RIGHT [OUTER] JOIN——FetchXML 没有右连接的概念，请把两张表的书写顺序对调，改写成等价的 LEFT [OUTER] JOIN（"a RIGHT JOIN b" 等价于 "b LEFT JOIN a"）。',
+    };
+  }
 
   const parser = new Parser();
   let astResult: unknown;

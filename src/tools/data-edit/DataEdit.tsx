@@ -3,6 +3,7 @@ import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
+import { unwrapODataRow } from "../../native/odata";
 import {
   fetchAttributes,
   fetchDefaultViewColumnOrder,
@@ -37,18 +38,6 @@ function replaceSelectColumns(sqlText: string, columnNames: string[]): string {
   return sqlText.replace(/^(\s*SELECT\s+(?:TOP\s+\d+\s+)?)([\s\S]*?)(\s+FROM\s)/i, (_m, pre: string, _cols: string, post: string) => `${pre}${columnList}${post}`);
 }
 
-/** Dataverse returns a Lookup column as `_logicalname_value` (with `@...` annotations alongside)
- *  — unwrap to the plain attribute name, same convention every other write tool here uses. */
-function unwrapRow(row: Record<string, unknown>): Record<string, unknown> {
-  const unwrapped: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(row)) {
-    if (key.includes("@")) continue;
-    const plain = key.startsWith("_") && key.endsWith("_value") ? key.slice(1, -"_value".length) : key;
-    unwrapped[plain] = value;
-  }
-  return unwrapped;
-}
-
 /** A null source cell renders as `""` in the grid's text/lookup `<input>` (CheckableGrid always
  *  does `String(rawValue ?? "")`), so a user who clicks in and clicks back out without really
  *  changing anything can still produce `""` where the query originally had `null`. Treat those as
@@ -76,7 +65,7 @@ export default function DataEdit() {
   const [rows, setRows] = useState<GridRow[]>([]);
   // Snapshot of each row's values exactly as the query returned them, keyed by row id — the
   // baseline "更新" mode diffs edited rows against to decide which rows actually need a PATCH.
-  // Never mutated in place (unwrapRow always hands back a fresh object, and edits replace
+  // Never mutated in place (unwrapODataRow always hands back a fresh object, and edits replace
   // `row.values` wholesale via spread), so it stays a safe read-only reference to compare against.
   const originalValuesRef = useRef<Record<string, Record<string, unknown>>>({});
 
@@ -126,7 +115,7 @@ export default function DataEdit() {
         method: "GET",
         path,
       });
-      const unwrapped = res.value.map(unwrapRow);
+      const unwrapped = res.value.map(unwrapODataRow);
       const rawColumnNames =
         unwrapped.length > 0 ? Object.keys(unwrapped[0]) : parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
 
@@ -159,7 +148,7 @@ export default function DataEdit() {
             options: options.map((o) => ({ value: String(o.value), label: o.label })),
           });
         } else if (attrType && isLookupAttributeType(attrType)) {
-          // The row's value here is already the unwrapped plain GUID (unwrapRow strips the
+          // The row's value here is already the unwrapped plain GUID (unwrapODataRow strips the
           // `_..._value` suffix), which is exactly what the picker edits and writes back — no
           // extra conversion needed, unlike the Picklist branch's string<->number juggling.
           newColumns.push({ key: name, attributeType: attrType, checked, editable: true, editKind: "lookup" });

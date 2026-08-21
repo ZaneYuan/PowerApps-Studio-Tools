@@ -3,6 +3,7 @@ import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
+import { unwrapODataRow } from "../../native/odata";
 import {
   fetchAttributes,
   fetchDefaultViewColumnOrder,
@@ -104,19 +105,6 @@ function yieldToBrowser(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** Dataverse returns a Lookup column as `_logicalname_value` (with `@...` annotations alongside)
- *  — unwrap to the plain attribute name so ImportRow.values reads uniformly regardless of
- *  whether a column is a Lookup, matching the convention this app's other write tools use. */
-function unwrapRow(row: Record<string, unknown>): Record<string, unknown> {
-  const unwrapped: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(row)) {
-    if (key.includes("@")) continue;
-    const plain = key.startsWith("_") && key.endsWith("_value") ? key.slice(1, -"_value".length) : key;
-    unwrapped[plain] = value;
-  }
-  return unwrapped;
-}
-
 /** Column order/default-checked state: primary key first, then the entity's default-view columns
  *  in that view's own order, then everything else alphabetically (`sortColumnsForDisplay`) —
  *  system/audit columns (createdon, ownerid, statecode, ...) default unchecked since a migrated
@@ -154,7 +142,7 @@ async function buildColumns(
         options: options.map((o) => ({ value: String(o.value), label: o.label })),
       });
     } else if (isLookupAttributeType(attrType)) {
-      // Row's value here is already the unwrapped plain GUID (unwrapRow strips the
+      // Row's value here is already the unwrapped plain GUID (unwrapODataRow strips the
       // `_..._value` suffix on the query path; the SQL-import path never had the suffix to
       // begin with), which is exactly what the picker edits and writes back.
       columns.push({ key: name, attributeType: attrType, checked, editable: true, editKind: "lookup" });
@@ -222,7 +210,7 @@ export default function DataMigration() {
           method: "GET",
           path,
         });
-        const unwrapped = res.value.map(unwrapRow);
+        const unwrapped = res.value.map(unwrapODataRow);
         const columnNames = unwrapped.length > 0 ? Object.keys(unwrapped[0]) : parsed.kind === "select-simple" && parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
         const columns = await buildColumns(activeConnectionId, parsed.entityLogicalName, meta.primaryIdAttribute, columnNames);
         const rows: ImportRow[] = unwrapped.map((r) => ({

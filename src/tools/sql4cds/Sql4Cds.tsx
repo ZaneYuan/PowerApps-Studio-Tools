@@ -4,10 +4,11 @@ import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
+import { unwrapODataRow } from "../../native/odata";
 import { fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
-import { buildSelectPath, literalToJsValue, parseSql, resolveSqlSubqueries, type InsertResult, type MutateResult, type SqlNode } from "./translate";
+import { buildSelectPath, literalToJsValue, parseSql, previewSql, resolveSqlSubqueries, type InsertResult, type MutateResult, type SqlNode } from "./translate";
 import {
   deleteRow,
   insertIntersectRow,
@@ -159,7 +160,12 @@ export default function Sql4Cds() {
   const [runError, setRunError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
 
-  const result = useMemo(() => parseSql(sql), [sql]);
+  // previewSql placeholders out any `IN (SELECT ...)` before this parse — a raw, unresolved
+  // subquery used to make parseSql return `{kind: "error"}` for a JOIN'd query (hiding the
+  // "执行查询" button entirely, since only select-simple/select-complex render it — see below),
+  // even though handleRun's own resolveSqlSubqueries + fresh parseSql call would have handled it
+  // fine. Only affects this live preview; handleRun always works off the real resolved SQL.
+  const result = useMemo(() => parseSql(previewSql(sql)), [sql]);
 
   // Every non-error/non-empty/non-batch statement kind carries entityLogicalName/entitySetGuess —
   // narrow once here instead of repeating the `"entityLogicalName" in result` check at every use
@@ -208,7 +214,7 @@ export default function Sql4Cds() {
         method: "GET",
         path: buildSelectPath(resolvedResult, entitySetName),
       });
-      setRows(res.value);
+      setRows(res.value.map(unwrapODataRow));
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -216,7 +222,8 @@ export default function Sql4Cds() {
     }
   }
 
-  const columns = rows && rows.length > 0 ? Object.keys(rows[0]).filter((k) => !k.startsWith("@")) : [];
+  // rows is already unwrapODataRow'd (see handleRun) — no `_..._value`/`@...` keys left to filter.
+  const columns = rows && rows.length > 0 ? Object.keys(rows[0]) : [];
 
   // --- write (INSERT/UPDATE/DELETE) execution state ---
   const [writeRunning, setWriteRunning] = useState(false);
