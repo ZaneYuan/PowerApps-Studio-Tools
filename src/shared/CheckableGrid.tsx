@@ -82,7 +82,9 @@ const inputCls =
  *  so the live-control count is bounded by 1, not by rows × checked columns. */
 const GridRowView = memo(function GridRowView({
   row,
-  checkedColumns,
+  visibleColumns,
+  leftSpacerWidth,
+  rightSpacerWidth,
   activeColumnKey,
   onEditCell,
   onToggleRow,
@@ -93,7 +95,18 @@ const GridRowView = memo(function GridRowView({
   entityLogicalName,
 }: {
   row: GridRow;
-  checkedColumns: GridColumn[];
+  /** Only the columns currently in (or near) the horizontal viewport — see the column virtualizer
+   *  in CheckableGrid below. Windowed the same way displayRows windows which *rows* mount, for the
+   *  same reason: a product-class entity's 150-280 columns all mounting as real `<td>`s regardless
+   *  of horizontal scroll position was the dominant remaining cost after click-to-edit bounded the
+   *  live-form-control count — DOM node count for a fixed-layout wide table scales with *mounted*
+   *  cells, not with what's visually inside the scroll port. */
+  visibleColumns: GridColumn[];
+  /** Width (px) of the off-screen columns to the left/right of `visibleColumns`, rendered as a
+   *  single filler `<td>` each — the same "spacer before/after the visible slice" technique the
+   *  vertical row virtualizer already uses, just turned 90 degrees. */
+  leftSpacerWidth: number;
+  rightSpacerWidth: number;
   /** The key of this row's own cell currently in edit mode, or null — computed by the caller as
    *  a plain string (not the raw `{rowId, columnKey}` selection object) specifically so a click
    *  that activates/deactivates a cell in some *other* row doesn't change this prop's value at
@@ -123,7 +136,8 @@ const GridRowView = memo(function GridRowView({
       <td className="px-3 py-1.5" style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
         <input type="checkbox" checked={row.checked} onChange={() => onToggleRow(row.id)} />
       </td>
-      {checkedColumns.map((c) => {
+      {leftSpacerWidth > 0 && <td aria-hidden="true" style={{ width: leftSpacerWidth }} />}
+      {visibleColumns.map((c) => {
         const rawValue = row.values[c.key];
         // A Picklist's stored value is its numeric option code, not the human label — the old
         // always-on `<select>` resolved this for free (the browser matches `value` to the
@@ -206,6 +220,7 @@ const GridRowView = memo(function GridRowView({
           </td>
         );
       })}
+      {rightSpacerWidth > 0 && <td aria-hidden="true" style={{ width: rightSpacerWidth }} />}
     </tr>
   );
 });
@@ -216,7 +231,9 @@ const GridRowView = memo(function GridRowView({
  *  with its own resize-handle closure) on every one of the re-renders vertical scrolling causes,
  *  same as the rows did before they were split out — see bugs & requirements/8.19.md #6. */
 const GridHeader = memo(function GridHeader({
-  checkedColumns,
+  visibleColumns,
+  leftSpacerWidth,
+  rightSpacerWidth,
   allRowsChecked,
   onToggleAllRows,
   onResizeColumn,
@@ -228,7 +245,14 @@ const GridHeader = memo(function GridHeader({
   connectionId,
   entityLogicalName,
 }: {
-  checkedColumns: GridColumn[];
+  /** Same horizontally-windowed slice GridRowView renders — see its own doc comment. The header
+   *  and every row share one column virtualizer instance (CheckableGrid below), so they always
+   *  agree on exactly which columns are "in view" within a given render/scroll frame; that's what
+   *  keeps header and body cells aligned under `table-layout: fixed` despite neither side ever
+   *  rendering the full column list. */
+  visibleColumns: GridColumn[];
+  leftSpacerWidth: number;
+  rightSpacerWidth: number;
   allRowsChecked: boolean;
   onToggleAllRows: () => void;
   onResizeColumn: (key: string, width: number) => void;
@@ -291,7 +315,8 @@ const GridHeader = memo(function GridHeader({
         <th className="px-3 py-2" style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
           <input type="checkbox" checked={allRowsChecked} onChange={onToggleAllRows} />
         </th>
-        {checkedColumns.map((c) => {
+        {leftSpacerWidth > 0 && <th aria-hidden="true" style={{ width: leftSpacerWidth }} />}
+        {visibleColumns.map((c) => {
           const width = c.width ?? DEFAULT_COLUMN_WIDTH_PX;
           const kind = classifyColumnKind(c.attributeType);
           const labels = sortLabels(kind);
@@ -413,6 +438,7 @@ const GridHeader = memo(function GridHeader({
             </th>
           );
         })}
+        {rightSpacerWidth > 0 && <th aria-hidden="true" style={{ width: rightSpacerWidth }} />}
       </tr>
     </thead>
   );
@@ -529,6 +555,25 @@ export default function CheckableGrid({
   const topSpacerHeight = virtualRows.length > 0 ? virtualRows[0].start : 0;
   const bottomSpacerHeight = virtualRows.length > 0 ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end : 0;
 
+  // Row virtualization alone bounds *mounted rows*, but every mounted row still rendered all of
+  // `checkedColumns` regardless of horizontal scroll position — on a product-class entity (150-280
+  // columns) that's still thousands of real <td>s laid out and painted at once, scaling with column
+  // count independent of how many are actually inside the horizontal scroll port. Same spacer-cell
+  // technique as the row virtualizer above, turned 90 degrees: only mount the columns in/near the
+  // horizontal viewport, with one filler <td>/<th> on each side standing in for the rest.
+  const columnVirtualizer = useVirtualizer({
+    horizontal: true,
+    count: checkedColumns.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) => checkedColumns[index]?.width ?? DEFAULT_COLUMN_WIDTH_PX,
+    overscan: 4,
+  });
+  const virtualColumns = columnVirtualizer.getVirtualItems();
+  const leftColumnSpacerWidth = virtualColumns.length > 0 ? virtualColumns[0].start : 0;
+  const rightColumnSpacerWidth =
+    virtualColumns.length > 0 ? columnVirtualizer.getTotalSize() - virtualColumns[virtualColumns.length - 1].end : 0;
+  const visibleColumns = useMemo(() => virtualColumns.map((vc) => checkedColumns[vc.index]), [virtualColumns, checkedColumns]);
+
   // useCallback (not a plain function declaration) so these stay referentially stable across a
   // scroll-driven re-render too — otherwise AttributePicker still can't bail out via React.memo
   // even after the arrays/Set above are stabilized, since onToggle/onToggleAll would still look
@@ -605,7 +650,9 @@ export default function CheckableGrid({
           </div>
           <table className="w-full table-fixed text-left text-sm">
             <GridHeader
-              checkedColumns={checkedColumns}
+              visibleColumns={visibleColumns}
+              leftSpacerWidth={leftColumnSpacerWidth}
+              rightSpacerWidth={rightColumnSpacerWidth}
               allRowsChecked={allRowsChecked}
               onToggleAllRows={toggleAllRows}
               onResizeColumn={resizeColumn}
@@ -620,7 +667,12 @@ export default function CheckableGrid({
             <tbody>
               {topSpacerHeight > 0 && (
                 <tr style={{ height: topSpacerHeight }} aria-hidden="true">
-                  <td colSpan={checkedColumns.length + 1} />
+                  {/* Deliberately oversized: with column virtualization a normal row now has up to
+                   *  checkedColumns.length + 3 cells (checkbox + 2 spacers + visible columns), and
+                   *  a colSpan longer than the table's actual column tracks is simply clamped by
+                   *  the browser — safer than trying to keep this in exact lockstep with whatever
+                   *  the column window happens to be on a given render. */}
+                  <td colSpan={checkedColumns.length + 3} />
                 </tr>
               )}
               {virtualRows.map((virtualRow) => {
@@ -634,7 +686,9 @@ export default function CheckableGrid({
                   <GridRowView
                     key={row.id}
                     row={row}
-                    checkedColumns={checkedColumns}
+                    visibleColumns={visibleColumns}
+                    leftSpacerWidth={leftColumnSpacerWidth}
+                    rightSpacerWidth={rightColumnSpacerWidth}
                     activeColumnKey={activeColumnKey}
                     onEditCell={onEditCell}
                     onToggleRow={toggleRow}
@@ -648,7 +702,7 @@ export default function CheckableGrid({
               })}
               {bottomSpacerHeight > 0 && (
                 <tr style={{ height: bottomSpacerHeight }} aria-hidden="true">
-                  <td colSpan={checkedColumns.length + 1} />
+                  <td colSpan={checkedColumns.length + 3} />
                 </tr>
               )}
             </tbody>
