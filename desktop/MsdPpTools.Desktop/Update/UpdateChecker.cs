@@ -17,6 +17,22 @@ namespace MsdPpTools.Desktop.Update;
 /// </summary>
 public static class UpdateChecker
 {
+    /// <summary>True when the exe is sitting next to a source checkout it can rebuild from
+    /// (dev machine). App.xaml.cs uses this to gate GitHubReleaseUpdateChecker: that checker's
+    /// plain string comparison against the latest GitHub Release tag assumes version.txt only
+    /// ever came from a past release build, which isn't true here — a dev checkout's
+    /// `git describe`-based version.txt (see publish-desktop.ps1) can be *ahead* of the last
+    /// release by some number of untagged commits, and a naive "different string = new version"
+    /// check would offer to "update" by downloading and installing that older release over the
+    /// dev's newer local build.</summary>
+    public static bool IsDevCheckout()
+    {
+        var exeDir = AppContext.BaseDirectory;
+        var repoRoot = Path.GetFullPath(Path.Combine(exeDir, "..", ".."));
+        var publishScript = Path.Combine(repoRoot, "scripts", "publish-desktop.ps1");
+        return Directory.Exists(Path.Combine(repoRoot, ".git")) && File.Exists(publishScript);
+    }
+
     public static bool TryLaunchUpdateIfNeeded()
     {
         try
@@ -25,7 +41,7 @@ public static class UpdateChecker
             var repoRoot = Path.GetFullPath(Path.Combine(exeDir, "..", ".."));
             var publishScript = Path.Combine(repoRoot, "scripts", "publish-desktop.ps1");
 
-            if (!Directory.Exists(Path.Combine(repoRoot, ".git")) || !File.Exists(publishScript))
+            if (!IsDevCheckout())
                 return false; // not running next to a source checkout; nothing to compare against
 
             var currentHead = RunGit(repoRoot, "rev-parse HEAD");

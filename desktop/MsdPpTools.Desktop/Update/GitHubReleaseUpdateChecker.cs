@@ -14,13 +14,16 @@ namespace MsdPpTools.Desktop.Update;
 /// publish time (see scripts/publish-desktop.ps1), and only after the user confirms in a
 /// dialog, downloads the release zip and swaps it into place before relaunching.
 ///
-/// This is deliberately separate from UpdateChecker.cs, which App.xaml.cs runs first: that
-/// one only fires when the exe is sitting next to a local git checkout + publish.bat (a
-/// developer's own machine) and rebuilds from source. A real user's download has neither —
-/// no .git, no publish.bat, no Node/dotnet SDK — so UpdateChecker.TryLaunchUpdateIfNeeded()
-/// returns false there and this one runs instead. Comparison is a plain string match against
-/// the GitHub Release's tag_name, so a release's tag has to exactly match what
-/// publish-desktop.ps1 stamped (i.e. publish it from a checkout that's actually at that tag).
+/// This is deliberately separate from UpdateChecker.cs, which App.xaml.cs runs first and gates
+/// this one on: UpdateChecker.IsDevCheckout() is only true when the exe sits next to a local
+/// git checkout + publish.bat (a developer's own machine), which is where this checker must NOT
+/// run — comparison here is a plain string match against the GitHub Release's tag_name, and a
+/// dev checkout's version.txt (a `git describe` string, see publish-desktop.ps1) can be ahead of
+/// the latest release by untagged commits, which this plain comparison can't distinguish from
+/// "behind" — offering to "update" would actually downgrade to the last tagged release. A real
+/// user's download has no .git/publish.bat, so IsDevCheckout() is false and this runs for them
+/// instead. A release's tag has to exactly match what publish-desktop.ps1 stamped (i.e. publish
+/// it from a checkout that's actually at that tag) for the "already latest" comparison to work.
 /// </summary>
 public static class GitHubReleaseUpdateChecker
 {

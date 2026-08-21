@@ -31,11 +31,14 @@ public partial class App : Application
 #if !DEBUG
         Task.Run(() =>
         {
-            // Dev-machine path first (rebuilds from a local git checkout via publish.bat) — it
-            // no-ops (returns false) when there's no .git/publish.bat next to the exe, which is
-            // always true for a real user's self-contained download, so the GitHub-Releases
-            // path below is what actually runs for them.
-            var launchedUpdate = UpdateChecker.TryLaunchUpdateIfNeeded() || GitHubReleaseUpdateChecker.TryLaunchUpdateIfNeeded();
+            // Dev-machine path first (rebuilds from a local git checkout via publish.bat). The
+            // GitHub-Releases path only runs when there's no .git/publish.bat next to the exe
+            // (a real user's self-contained download) — not merely when the dev-machine check
+            // found nothing to rebuild, since a dev checkout's version.txt can legitimately be
+            // ahead of the latest tagged release and GitHubReleaseUpdateChecker has no way to
+            // tell "ahead" from "behind" (see UpdateChecker.IsDevCheckout).
+            var launchedUpdate = UpdateChecker.TryLaunchUpdateIfNeeded()
+                || (!UpdateChecker.IsDevCheckout() && GitHubReleaseUpdateChecker.TryLaunchUpdateIfNeeded());
             if (launchedUpdate)
             {
                 // Shutdown() touches WPF's application lifecycle and has to run on the UI
