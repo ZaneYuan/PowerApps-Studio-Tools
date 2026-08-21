@@ -1,9 +1,18 @@
 import { callNative } from "../../native/bridge";
-import { fetchEntityMeta, type ManyToManyInfo } from "../../native/metadataService";
+import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, type ManyToManyInfo } from "../../native/metadataService";
 import { getBindNavigationProperty } from "../../native/navProperty";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { deleteIntersectRow, insertIntersectRow, withRetryOn429, type IntersectRowValues } from "../sql4cds/writeOps";
-import { COUNT_CAP, type FailedRelationship, type ManyToManyRefTable, type MigrationLogEntry, type OneToManyRefTable, type RefTable } from "./types";
+import {
+  COUNT_CAP,
+  type FailedRelationship,
+  type ManyToManyRefTable,
+  type MigrationLogEntry,
+  type OneToManyRefTable,
+  type RefTable,
+  type RefTableRecord,
+  type RefTableRecordsResult,
+} from "./types";
 
 export interface ScanResult {
   tables: RefTable[];
@@ -18,9 +27,13 @@ const API_VERSION_SEGMENT = "/api/data/v9.2/";
 /** Dataverse's default Web API page size — also the threshold `@odata.count` stops being
  *  trustworthy at (see countMatchingCapped's doc comment). */
 const PAGE_SIZE = 5000;
+/** Cap on rows fetched for the "click a table, see its data" preview (fetchRefTableRecords) —
+ *  a quick look at the data, not a real pagination UI, same convention Record Explorer used for
+ *  its own child-table rows. */
+const REF_RECORD_ROW_LIMIT = 50;
 
-async function fetchDataverse<T>(connectionId: string, path: string): Promise<T> {
-  return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
+async function fetchDataverse<T>(connectionId: string, path: string, includeFormattedValues = false): Promise<T> {
+  return callNative<T>("dataverse.request", { connectionId, method: "GET", path, includeFormattedValues });
 }
 
 /** An ordinary Lookup attribute's `$filter`/`$select` property name — Dataverse's OData model
@@ -238,6 +251,98 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
     () => false,
   );
   return { tables: results.filter((r): r is RefTable => r !== null), failedRelationships };
+}
+
+/** Splits a raw Dataverse JSON record into plain field values plus the FormattedValue annotation
+ *  labels `includeFormattedValues` requests — same unwrapping Record Explorer used to do, minus
+ *  the (unused here) lookuplogicalname/polymorphic-target tracking. */
+function unwrapAnnotatedRecord(raw: Record<string, unknown>): { fields: Record<string, unknown>; formattedFields: Record<string, string> } {
+  const fields: Record<string, unknown> = {};
+  const formattedFields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (key.includes("@")) {
+      const [rawBaseKey, annotation] = key.split("@");
+      const baseKey = rawBaseKey.startsWith("_") && rawBaseKey.endsWith("_value") ? rawBaseKey.slice(1, -"_value".length) : rawBaseKey;
+      if (annotation === "OData.Community.Display.V1.FormattedValue" && typeof value === "string") formattedFields[baseKey] = value;
+      continue;
+    }
+    const unwrapped = key.startsWith("_") && key.endsWith("_value") ? key.slice(1, -"_value".length) : key;
+    fields[unwrapped] = value;
+  }
+  return { fields, formattedFields };
+}
+
+/** "Label (raw)" for a field with a FormattedValue annotation (Lookup/OptionSet/Money/dates);
+ *  falls back to the raw value alone otherwise — same "label (raw)" convention Record Explorer
+ *  used for its own field display. */
+function displayValue(field: string, fields: Record<string, unknown>, formattedFields: Record<string, string>): string {
+  const value = fields[field];
+  if (value === null || value === undefined) return "";
+  const raw = typeof value === "object" ? JSON.stringify(value) : String(value);
+  const formatted = formattedFields[field];
+  return formatted && formatted !== raw ? `${formatted} (${raw})` : raw;
+}
+
+function toRefTableRecord(raw: Record<string, unknown>, columns: string[], primaryIdAttribute: string, primaryNameAttribute: string): RefTableRecord {
+  const { fields, formattedFields } = unwrapAnnotatedRecord(raw);
+  const id = String(fields[primaryIdAttribute] ?? "");
+  const primaryName = (fields[primaryNameAttribute] as string | undefined)?.trim() || id;
+  const values: Record<string, string> = {};
+  for (const col of columns) values[col] = displayValue(col, fields, formattedFields);
+  return { id, primaryName, values };
+}
+
+/** Fetches (a capped page of) the actual records behind one `RefTable` row from `scanReferences`
+ *  — the "click a table, see its data" expansion in RecordMerge.tsx. Columns shown are the target
+ *  entity's own default view fields (falling back to just id/name if it has no default view
+ *  layout to read), reusing `fetchDefaultViewColumnOrder` the same way data-migration/data-copy
+ *  already do for column *ordering* — this is the first place in the app that uses it to pick
+ *  *which* fields to show at all, not just what order to show them in. */
+export async function fetchRefTableRecords(connectionId: string, table: RefTable, scannedId: string): Promise<RefTableRecordsResult> {
+  const targetEntity = table.kind === "onetomany" ? table.entityLogicalName : table.otherEntityLogicalName;
+  const [meta, attrs, viewOrder] = await Promise.all([
+    fetchEntityMeta(connectionId, targetEntity),
+    fetchAttributes(connectionId, targetEntity),
+    fetchDefaultViewColumnOrder(connectionId, targetEntity),
+  ]);
+  const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
+  const columns = viewOrder.length > 0 ? viewOrder : [meta.primaryIdAttribute, meta.primaryNameAttribute];
+  const select = [...new Set([...columns, meta.primaryIdAttribute, meta.primaryNameAttribute])]
+    .map((c) => (typeByName.get(c.toLowerCase()) === "Lookup" ? lookupValueKey(c) : c))
+    .join(",");
+
+  if (table.kind === "onetomany") {
+    const filter = `${lookupValueKey(table.referencingAttribute)} eq ${scannedId}`;
+    const res = await fetchDataverse<{ value: Record<string, unknown>[] }>(
+      connectionId,
+      `${meta.entitySetName}?$select=${select}&$filter=${filter}&$top=${REF_RECORD_ROW_LIMIT + 1}`,
+      true,
+    );
+    const truncated = res.value.length > REF_RECORD_ROW_LIMIT;
+    const rows = res.value.slice(0, REF_RECORD_ROW_LIMIT).map((r) => toRefTableRecord(r, columns, meta.primaryIdAttribute, meta.primaryNameAttribute));
+    return { columns, rows, truncated };
+  }
+
+  // N:N: the target entity's records aren't directly filterable by the scanned id — first read
+  // which target ids are actually associated (via the intersect entity, same as
+  // migrateManyToManyTable below does), then fetch those specific records for display.
+  const intersectMeta = await fetchEntityMeta(connectionId, table.intersectEntityName);
+  const thisAttr = table.side === "entity1" ? table.info.entity1IntersectAttribute : table.info.entity2IntersectAttribute;
+  const otherAttr = table.side === "entity1" ? table.info.entity2IntersectAttribute : table.info.entity1IntersectAttribute;
+  // Bare attribute name, not lookupValueKey() — intersect entities are the one case that's wrong
+  // for (see lookupValueKey's doc comment).
+  const intersectRes = await fetchDataverse<{ value: Record<string, unknown>[] }>(
+    connectionId,
+    `${intersectMeta.entitySetName}?$select=${otherAttr}&$filter=${thisAttr} eq ${scannedId}&$top=${REF_RECORD_ROW_LIMIT + 1}`,
+  );
+  const truncated = intersectRes.value.length > REF_RECORD_ROW_LIMIT;
+  const otherIds = intersectRes.value.slice(0, REF_RECORD_ROW_LIMIT).map((r) => String(r[otherAttr]));
+  if (otherIds.length === 0) return { columns, rows: [], truncated: false };
+
+  const idFilter = otherIds.map((oid) => `${meta.primaryIdAttribute} eq ${oid}`).join(" or ");
+  const res = await fetchDataverse<{ value: Record<string, unknown>[] }>(connectionId, `${meta.entitySetName}?$select=${select}&$filter=${idFilter}`, true);
+  const rows = res.value.map((r) => toRefTableRecord(r, columns, meta.primaryIdAttribute, meta.primaryNameAttribute));
+  return { columns, rows, truncated };
 }
 
 /** Follows `@odata.nextLink` to collect every matching row past Dataverse's default page size —

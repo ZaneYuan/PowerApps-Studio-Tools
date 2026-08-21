@@ -1,12 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { fetchEntityMeta } from "../../native/metadataService";
 import { downloadTextFile } from "../../native/download";
-import { extractGuid, parseRecordUrl } from "../record-explorer/types";
-import { lookupRecord, migrateReferences, scanReferences } from "./dataverseOps";
+import { fetchRefTableRecords, lookupRecord, migrateReferences, scanReferences } from "./dataverseOps";
 import { buildRecordMergeLogText, recordMergeLogFilename } from "./mergeLog";
-import { COUNT_CAP, totalReferenceCount, type MigrationLogEntry, type ReferenceScanResult } from "./types";
+import {
+  COUNT_CAP,
+  extractGuid,
+  parseRecordUrl,
+  totalReferenceCount,
+  type MigrationLogEntry,
+  type ReferenceScanResult,
+  type RefTable,
+  type RefTableRecordsResult,
+} from "./types";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -80,6 +88,71 @@ function MigrationResultTable({ results, stopped, log }: { results: MigrationLog
   );
 }
 
+/** The "click a table row, see its actual data" panel — fetches lazily on mount (i.e. the first
+ *  time a row is expanded) and stays fetched while expanded; collapsing and re-expanding the same
+ *  row re-fetches rather than caching, since this is meant as a quick current-state look, not a
+ *  snapshot worth keeping stale data around for. */
+function RefTableRecordsPanel({ connectionId, scannedId, table }: { connectionId: string; scannedId: string; table: RefTable }) {
+  const [state, setState] = useState<{ loading: boolean; error: string | null; data: RefTableRecordsResult | null }>({
+    loading: true,
+    error: null,
+    data: null,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ loading: true, error: null, data: null });
+    fetchRefTableRecords(connectionId, table, scannedId)
+      .then((data) => {
+        if (!cancelled) setState({ loading: false, error: null, data });
+      })
+      .catch((err) => {
+        if (!cancelled) setState({ loading: false, error: err instanceof Error ? err.message : String(err), data: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, scannedId, table]);
+
+  if (state.loading) return <p className="p-3 text-xs text-gray-400">加载中…</p>;
+  if (state.error) return <p className="p-3 text-xs text-red-600 dark:text-red-400">{state.error}</p>;
+  if (!state.data || state.data.rows.length === 0) return <p className="p-3 text-xs text-gray-400">没有查到数据。</p>;
+
+  const { columns, rows, truncated } = state.data;
+  return (
+    <div className="max-h-80 overflow-auto rounded-md border border-gray-200 dark:border-gray-800">
+      {truncated && (
+        <p className="border-b border-amber-200 bg-amber-50 px-3 py-1 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-400">
+          ⚠ 已截断，仅显示前 {rows.length} 条
+        </p>
+      )}
+      <table className="w-full text-left text-sm">
+        <thead className="bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+          <tr>
+            {columns.map((c) => (
+              <th key={c} className="whitespace-nowrap px-3 py-1.5 font-mono font-medium">
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id} className="border-t border-gray-100 dark:border-gray-800">
+              {columns.map((c) => (
+                <td key={c} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
+                  {r.values[c]}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function RecordMerge() {
   const { activeConnectionId, connections } = useActiveConnection();
   const [entityName, setEntityName] = useState("");
@@ -87,6 +160,7 @@ export default function RecordMerge() {
   const [scanResult, setScanResult] = useState<ReferenceScanResult | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [expandedTables, setExpandedTables] = useState<Set<number>>(new Set());
 
   const [newIdInput, setNewIdInput] = useState("");
   const [newIdCheck, setNewIdCheck] = useState<{ loading: boolean; exists: boolean | null; primaryName: string | null }>({
@@ -121,6 +195,7 @@ export default function RecordMerge() {
     setScanning(true);
     setScanError(null);
     setScanResult(null);
+    setExpandedTables(new Set());
     setNewIdInput("");
     setWriteResults(null);
     setWriteLog(null);
@@ -301,14 +376,37 @@ export default function RecordMerge() {
                 </thead>
                 <tbody>
                   {scanResult.tables.map((t, i) => (
-                    <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-                      <td className="px-3 py-1.5">{t.kind === "onetomany" ? t.entityLogicalName : t.otherEntityLogicalName}</td>
-                      <td className="px-3 py-1.5 text-xs text-gray-400">{t.kind === "onetomany" ? "1:N" : "N:N"}</td>
-                      <td className="px-3 py-1.5 font-mono text-xs text-gray-500 dark:text-gray-400">
-                        {t.kind === "onetomany" ? t.referencingAttribute : t.intersectEntityName}
-                      </td>
-                      <td className="px-3 py-1.5">{formatCount(t)}</td>
-                    </tr>
+                    <Fragment key={i}>
+                      <tr
+                        onClick={() =>
+                          setExpandedTables((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(i)) next.delete(i);
+                            else next.add(i);
+                            return next;
+                          })
+                        }
+                        className="cursor-pointer border-t border-gray-100 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800/50"
+                        title="点击查看引用这条记录的实际数据"
+                      >
+                        <td className="px-3 py-1.5">
+                          <span className="mr-1 inline-block w-3 text-gray-400">{expandedTables.has(i) ? "▾" : "▸"}</span>
+                          {t.kind === "onetomany" ? t.entityLogicalName : t.otherEntityLogicalName}
+                        </td>
+                        <td className="px-3 py-1.5 text-xs text-gray-400">{t.kind === "onetomany" ? "1:N" : "N:N"}</td>
+                        <td className="px-3 py-1.5 font-mono text-xs text-gray-500 dark:text-gray-400">
+                          {t.kind === "onetomany" ? t.referencingAttribute : t.intersectEntityName}
+                        </td>
+                        <td className="px-3 py-1.5">{formatCount(t)}</td>
+                      </tr>
+                      {expandedTables.has(i) && activeConnectionId && (
+                        <tr className="border-t border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-gray-900/30">
+                          <td colSpan={4} className="p-2">
+                            <RefTableRecordsPanel connectionId={activeConnectionId} scannedId={scanResult.id} table={t} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </tbody>
                 <tfoot>
