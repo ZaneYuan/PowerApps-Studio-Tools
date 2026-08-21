@@ -1,7 +1,9 @@
-import { memo, useCallback, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { memo, useCallback, useMemo, useRef, useState, type FocusEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import AttributePicker from "./AttributePicker";
 import LookupPickerModal from "./LookupPickerModal";
+import ColumnFilterPopover from "./ColumnFilterPopover";
+import { classifyColumnKind, compareForSort, matchesFilter, sortLabels, sortValueFor, type GridColumnFilter } from "./gridFilter";
 
 // Matches this grid's actual rendered row height closely enough for @tanstack/react-virtual's
 // scroll-position math — every cell uses the same py-1.5 padding and whitespace-nowrap (no
@@ -40,6 +42,13 @@ export interface GridColumn {
   /** Drag-resized column width in px — unset until the user drags this column's resize handle,
    *  at which point it renders at its natural (whitespace-nowrap) width same as before. */
   width?: number;
+  /** The real Dataverse `AttributeType` (fetchAttributes' `AttributeMeta.attributeType` — e.g.
+   *  "String", "Picklist", "DateTime", "Lookup"), when the caller has it. Drives the header's
+   *  sort labels and the "Filter by" popover's condition list / value widget (see gridFilter.ts's
+   *  `classifyColumnKind`) — optional and purely additive, so columns that predate this field
+   *  still render exactly as before, just without type-specific sort/filter behavior (falls back
+   *  to plain string comparison). */
+  attributeType?: string;
 }
 
 export interface GridRow {
@@ -155,11 +164,25 @@ const GridHeader = memo(function GridHeader({
   allRowsChecked,
   onToggleAllRows,
   onResizeColumn,
+  sortState,
+  filters,
+  onSortChange,
+  onApplyFilter,
+  onClearFilter,
+  connectionId,
+  entityLogicalName,
 }: {
   checkedColumns: GridColumn[];
   allRowsChecked: boolean;
   onToggleAllRows: () => void;
   onResizeColumn: (key: string, width: number) => void;
+  sortState: { key: string; direction: "asc" | "desc" } | null;
+  filters: Record<string, GridColumnFilter>;
+  onSortChange: (key: string, direction: "asc" | "desc") => void;
+  onApplyFilter: (key: string, filter: GridColumnFilter) => void;
+  onClearFilter: (key: string) => void;
+  connectionId?: string;
+  entityLogicalName?: string;
 }) {
   // TEMP diagnostic — see the matching comment on GridRowView's own counter above; same idea, so
   // a header that's *also* re-executing every scroll tick (vs. only GridRowView) narrows down
@@ -182,6 +205,30 @@ const GridHeader = memo(function GridHeader({
     window.addEventListener("mouseup", onMouseUp);
   }
 
+  // Which column's dropdown menu / filter popover is open, plus the trigger button's own rect
+  // (captured on open, same "read getBoundingClientRect once, render at fixed position" technique
+  // metadata-browser/ColumnFilterPopover.tsx already uses) — at most one of each open at a time is
+  // plenty for a header menu, so this stays two plain useState instead of a per-column map.
+  const [openMenuKey, setOpenMenuKey] = useState<string | null>(null);
+  const [openFilterKey, setOpenFilterKey] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState({ top: 0, left: 0 });
+  const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  // The wider of the two fixed-position panels this anchors (the filter popover is `w-64` =
+  // 256px; the sort/filter menu itself is narrower) — clamped against it so a caret near the
+  // right edge (very likely on a wide entity's 150-280-column grid, scrolled horizontally) never
+  // anchors a popover partway or fully off-screen.
+  const MAX_POPOVER_WIDTH_PX = 264;
+  function computeAnchor(key: string) {
+    const rect = triggerRefs.current[key]?.getBoundingClientRect();
+    if (!rect) return;
+    const left = Math.min(rect.left, window.innerWidth - MAX_POPOVER_WIDTH_PX - 8);
+    setAnchor({ top: rect.bottom + 4, left: Math.max(8, left) });
+  }
+  function handleMenuBlur(e: FocusEvent<HTMLDivElement>) {
+    if (!e.currentTarget.contains(e.relatedTarget)) setOpenMenuKey(null);
+  }
+
   return (
     <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
       <tr>
@@ -190,19 +237,123 @@ const GridHeader = memo(function GridHeader({
         </th>
         {checkedColumns.map((c) => {
           const width = c.width ?? DEFAULT_COLUMN_WIDTH_PX;
+          const kind = classifyColumnKind(c.attributeType);
+          const labels = sortLabels(kind);
+          const sortDirection = sortState?.key === c.key ? sortState.direction : null;
+          const activeFilter = filters[c.key] ?? null;
           return (
             <th
               key={c.key}
               className="relative whitespace-nowrap px-3 py-2 pr-4 font-mono"
               style={{ width, minWidth: width, maxWidth: width }}
             >
-              <span className="block overflow-hidden text-ellipsis" title={c.key}>
-                {c.key}
-              </span>
+              <div className="flex items-center gap-1">
+                <span className="block flex-1 overflow-hidden text-ellipsis" title={c.key}>
+                  {c.key}
+                </span>
+                {sortDirection && <span className="shrink-0 text-blue-500 dark:text-blue-400">{sortDirection === "asc" ? "↑" : "↓"}</span>}
+                {activeFilter && (
+                  <span className="shrink-0 text-blue-500 dark:text-blue-400" title="已应用筛选">
+                    ⏷
+                  </span>
+                )}
+                <button
+                  ref={(el) => {
+                    triggerRefs.current[c.key] = el;
+                  }}
+                  type="button"
+                  onClick={() => {
+                    if (openMenuKey === c.key) {
+                      setOpenMenuKey(null);
+                    } else {
+                      computeAnchor(c.key);
+                      setOpenMenuKey(c.key);
+                      setOpenFilterKey(null);
+                    }
+                  }}
+                  className="shrink-0 rounded px-0.5 text-gray-400 hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300"
+                >
+                  ▾
+                </button>
+              </div>
               <div
                 onMouseDown={(e) => startResize(e, c.key)}
                 className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none hover:bg-blue-400 dark:hover:bg-blue-500"
               />
+
+              {openMenuKey === c.key && (
+                <div
+                  tabIndex={-1}
+                  onBlur={handleMenuBlur}
+                  style={{ position: "fixed", top: anchor.top, left: anchor.left }}
+                  className="z-50 w-44 rounded-md border border-gray-200 bg-white py-1 text-left text-xs font-normal normal-case text-gray-700 shadow-xl dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSortChange(c.key, "asc");
+                      setOpenMenuKey(null);
+                    }}
+                    className="block w-full px-3 py-1.5 text-left hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    ↑ {labels.asc}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSortChange(c.key, "desc");
+                      setOpenMenuKey(null);
+                    }}
+                    className="block w-full px-3 py-1.5 text-left hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    ↓ {labels.desc}
+                  </button>
+                  <div className="my-1 border-t border-gray-100 dark:border-gray-800" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      computeAnchor(c.key);
+                      setOpenMenuKey(null);
+                      setOpenFilterKey(c.key);
+                    }}
+                    className="block w-full px-3 py-1.5 text-left hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    ▾ Filter by
+                  </button>
+                  {activeFilter && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClearFilter(c.key);
+                        setOpenMenuKey(null);
+                      }}
+                      className="block w-full px-3 py-1.5 text-left text-red-600 hover:bg-gray-100 dark:text-red-400 dark:hover:bg-gray-800"
+                    >
+                      Clear filter
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {openFilterKey === c.key && (
+                <ColumnFilterPopover
+                  column={c}
+                  kind={kind}
+                  filter={activeFilter}
+                  anchor={anchor}
+                  onApply={(filter) => {
+                    onApplyFilter(c.key, filter);
+                    setOpenFilterKey(null);
+                  }}
+                  onClear={() => {
+                    onClearFilter(c.key);
+                    setOpenFilterKey(null);
+                  }}
+                  onClose={() => setOpenFilterKey(null)}
+                  connectionId={connectionId}
+                  entityLogicalName={entityLogicalName}
+                />
+              )}
             </th>
           );
         })}
@@ -258,9 +409,43 @@ export default function CheckableGrid({
   const checkedColumns = useMemo(() => columns.filter((c) => c.checked), [columns]);
   const columnKeys = useMemo(() => columns.map((c) => c.key), [columns]);
   const checkedColumnKeys = useMemo(() => new Set(checkedColumns.map((c) => c.key)), [checkedColumns]);
-  const allRowsChecked = rows.length > 0 && rows.every((r) => r.checked);
   const checkedRowCount = rows.filter((r) => r.checked).length;
   const [lookupEditorCell, setLookupEditorCell] = useState<{ rowId: string; columnKey: string } | null>(null);
+
+  // Sort/filter are view-only concerns local to this component — they reorder/narrow what's
+  // *displayed*, never `rows` itself (see displayRows below), so switching tables/tabs doesn't
+  // need any coordination with the caller's own state. Keyed by column `key`, same as GridColumn
+  // itself, so a stale filter/sort referencing a column that's since disappeared (a different
+  // entity's columns, say) just silently matches nothing rather than erroring — see displayRows'
+  // own column-lookup guards below.
+  const [sortState, setSortState] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
+  const [filters, setFilters] = useState<Record<string, GridColumnFilter>>({});
+  const hasActiveFilter = Object.keys(filters).length > 0;
+
+  const displayRows = useMemo(() => {
+    let result = rows;
+    const filterEntries = Object.entries(filters);
+    if (filterEntries.length > 0) {
+      result = result.filter((row) =>
+        filterEntries.every(([key, filter]) => {
+          const column = columns.find((c) => c.key === key);
+          return matchesFilter(row.values[key], classifyColumnKind(column?.attributeType), filter);
+        }),
+      );
+    }
+    if (sortState) {
+      const column = columns.find((c) => c.key === sortState.key);
+      if (column) {
+        const kind = classifyColumnKind(column.attributeType);
+        const { key, direction } = sortState;
+        result = [...result].sort((a, b) =>
+          compareForSort(sortValueFor(a.values[key], column, kind), sortValueFor(b.values[key], column, kind), kind, direction),
+        );
+      }
+    }
+    return result;
+  }, [rows, filters, sortState, columns]);
+  const allRowsChecked = displayRows.length > 0 && displayRows.every((r) => r.checked);
 
   // A plain `rows.map(...)` over everything used to be fine when cells were read-only text, but
   // once item 6/8.18 gave every editable cell a real <input>/<select> (plus the resize/lookup
@@ -273,7 +458,7 @@ export default function CheckableGrid({
   // near the viewport.
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
+    count: displayRows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_HEIGHT_PX,
     overscan: 15,
@@ -296,14 +481,30 @@ export default function CheckableGrid({
     [columns, renderColumnBadge],
   );
   const toggleRow = useCallback((id: string) => onRowsChange(rows.map((r) => (r.id === id ? { ...r, checked: !r.checked } : r))), [rows, onRowsChange]);
+  // Only (de)selects the currently displayed (filtered) rows — a row hidden by an active filter
+  // keeps whatever checked state it already had, same as Dataverse's own grid: "select all" only
+  // ever means "all of what I can currently see".
   const toggleAllRows = useCallback(() => {
     const next = !allRowsChecked;
-    onRowsChange(rows.map((r) => ({ ...r, checked: next })));
-  }, [allRowsChecked, rows, onRowsChange]);
+    const displayIds = new Set(displayRows.map((r) => r.id));
+    onRowsChange(rows.map((r) => (displayIds.has(r.id) ? { ...r, checked: next } : r)));
+  }, [allRowsChecked, displayRows, rows, onRowsChange]);
   const openLookupEditor = useCallback((rowId: string, columnKey: string) => setLookupEditorCell({ rowId, columnKey }), []);
   const resizeColumn = useCallback(
     (key: string, width: number) => onColumnsChange(columns.map((c) => (c.key === key ? { ...c, width } : c))),
     [columns, onColumnsChange],
+  );
+  const handleSortChange = useCallback((key: string, direction: "asc" | "desc") => setSortState({ key, direction }), []);
+  const handleApplyFilter = useCallback((key: string, filter: GridColumnFilter) => setFilters((prev) => ({ ...prev, [key]: filter })), []);
+  const handleClearFilter = useCallback(
+    (key: string) =>
+      setFilters((prev) => {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }),
+    [],
   );
 
   return (
@@ -320,7 +521,15 @@ export default function CheckableGrid({
       <div ref={scrollRef} className="max-h-[45vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
         <div className="inline-block min-w-full align-top">
           <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-            共 {rows.length} 行，已选 {checkedRowCount} 行
+            {hasActiveFilter ? (
+              <>
+                共 {rows.length} 行（筛选后 {displayRows.length} 行），已选 {checkedRowCount} 行
+              </>
+            ) : (
+              <>
+                共 {rows.length} 行，已选 {checkedRowCount} 行
+              </>
+            )}
           </div>
           <table className="w-full table-fixed text-left text-sm">
             <GridHeader
@@ -328,6 +537,13 @@ export default function CheckableGrid({
               allRowsChecked={allRowsChecked}
               onToggleAllRows={toggleAllRows}
               onResizeColumn={resizeColumn}
+              sortState={sortState}
+              filters={filters}
+              onSortChange={handleSortChange}
+              onApplyFilter={handleApplyFilter}
+              onClearFilter={handleClearFilter}
+              connectionId={connectionId}
+              entityLogicalName={entityLogicalName}
             />
             <tbody>
               {topSpacerHeight > 0 && (
@@ -336,7 +552,7 @@ export default function CheckableGrid({
                 </tr>
               )}
               {virtualRows.map((virtualRow) => {
-                const row = rows[virtualRow.index];
+                const row = displayRows[virtualRow.index];
                 return (
                   <GridRowView
                     key={row.id}

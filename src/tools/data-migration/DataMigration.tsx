@@ -671,6 +671,9 @@ export default function DataMigration() {
 
           {activeTable && (
             <CheckableGrid
+              // Remounts on tab switch so a sort/filter set on one table's grid doesn't carry
+              // over onto a different table's (possibly same-named) columns.
+              key={activeTable.tabId}
               columns={activeTable.columns}
               rows={activeTable.rows}
               columnsLabel="要迁移的列（勾选，文本/选项集/查找字段可直接编辑，列宽可拖拽）"

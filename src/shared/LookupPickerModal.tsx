@@ -29,7 +29,11 @@ export default function LookupPickerModal({
   entityLogicalName: string;
   attributeLogicalName: string;
   multiValue: boolean;
-  onPick: (value: string) => void;
+  /** `label` is the picked record's resolved primary-name text (empty string if the target
+   *  entity has no primary name attribute) - purely for callers that want to display something
+   *  more readable than a raw GUID; existing callers that only take `(value)` still work
+   *  unchanged since this is an additional argument, not a replaced one. */
+  onPick: (value: string, label: string) => void;
   onClose: () => void;
 }) {
   const [candidates, setCandidates] = useState<RelationshipMeta[] | null>(null);
@@ -191,7 +195,7 @@ export default function LookupPickerModal({
                           <td className="px-3 py-1.5 text-right">
                             <button
                               onClick={() => {
-                                onPick(id);
+                                onPick(id, name);
                                 if (!multiValue) onClose();
                               }}
                               className="rounded border border-blue-300 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"

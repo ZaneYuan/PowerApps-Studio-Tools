@@ -147,11 +147,12 @@ export default function DataEdit() {
         const attrType = typeByName.get(name.toLowerCase());
         const checked = !isSystemAuditField(name);
         if (attrType === "String" || attrType === "Memo") {
-          newColumns.push({ key: name, checked, editable: true, editKind: "text" });
+          newColumns.push({ key: name, attributeType: attrType, checked, editable: true, editKind: "text" });
         } else if (attrType === "Picklist") {
           const options = await fetchOptionSetValues(activeConnectionId, parsed.entityLogicalName, name);
           newColumns.push({
             key: name,
+            attributeType: attrType,
             checked,
             editable: true,
             editKind: "select",
@@ -161,9 +162,9 @@ export default function DataEdit() {
           // The row's value here is already the unwrapped plain GUID (unwrapRow strips the
           // `_..._value` suffix), which is exactly what the picker edits and writes back — no
           // extra conversion needed, unlike the Picklist branch's string<->number juggling.
-          newColumns.push({ key: name, checked, editable: true, editKind: "lookup" });
+          newColumns.push({ key: name, attributeType: attrType, checked, editable: true, editKind: "lookup" });
         } else {
-          newColumns.push({ key: name, checked });
+          newColumns.push({ key: name, attributeType: attrType, checked });
         }
       }
       const newRows: GridRow[] = unwrapped.map((r) => ({ id: String(r[meta.primaryIdAttribute]), checked: true, values: r }));
@@ -368,6 +369,9 @@ export default function DataEdit() {
       {entityLogicalName && rows.length > 0 && (
         <>
           <CheckableGrid
+            // Remounts on a new query so a sort/filter from a previous entity's grid doesn't
+            // carry over onto a different entity's (possibly same-named) columns.
+            key={entityLogicalName}
             columns={columns}
             rows={rows}
             columnsLabel="要处理的列（勾选，文本/选项集/查找字段可直接编辑，列宽可拖拽；勾选主键 ID 列 = 更新，取消勾选 = 创建新记录）"
