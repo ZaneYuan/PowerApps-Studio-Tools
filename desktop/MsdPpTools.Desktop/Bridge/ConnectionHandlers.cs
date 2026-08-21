@@ -19,7 +19,8 @@ public static class ConnectionHandlers
         string? ClientId,
         bool HasSecret,
         string? CertificateFilePath,
-        bool HasCertificatePassword);
+        bool HasCertificatePassword,
+        bool AllowWrite);
 
     private class AddConnectionParams
     {
@@ -31,6 +32,7 @@ public static class ConnectionHandlers
         public string? ClientSecret { get; set; }
         public string? CertificateFilePath { get; set; }
         public string? CertificatePassword { get; set; }
+        public bool AllowWrite { get; set; } = true;
     }
 
     private sealed class UpdateConnectionParams : AddConnectionParams
@@ -75,6 +77,7 @@ public static class ConnectionHandlers
                 EncryptedCertificatePassword = string.IsNullOrEmpty(input.CertificatePassword)
                     ? null
                     : SecretProtector.Protect(input.CertificatePassword),
+                AllowWrite = input.AllowWrite,
             };
 
             store.Add(connection);
@@ -100,6 +103,7 @@ public static class ConnectionHandlers
             existing.TenantId = input.TenantId;
             existing.ClientId = input.ClientId;
             existing.CertificateFilePath = input.CertificateFilePath;
+            existing.AllowWrite = input.AllowWrite;
             if (!string.IsNullOrEmpty(input.ClientSecret))
             {
                 existing.EncryptedClientSecret = SecretProtector.Protect(input.ClientSecret);
@@ -132,5 +136,6 @@ public static class ConnectionHandlers
         c.ClientId,
         !string.IsNullOrEmpty(c.EncryptedClientSecret),
         c.CertificateFilePath,
-        !string.IsNullOrEmpty(c.EncryptedCertificatePassword));
+        !string.IsNullOrEmpty(c.EncryptedCertificatePassword),
+        c.AllowWrite);
 }

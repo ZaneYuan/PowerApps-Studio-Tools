@@ -40,6 +40,17 @@ public sealed class DataverseApiClient
     {
         var connection = _store.FindById(connectionId)
             ?? throw new InvalidOperationException("找不到该连接，可能已被删除。");
+
+        // System-level write gate (Connection.AllowWrite). GET is the only verb the Web API ever
+        // uses for reads here — every write call site in the app (create/update/delete/associate/
+        // executeaction/publish/etc.) uses POST, PATCH or DELETE, so blocking non-GET is a
+        // complete, tool-agnostic enforcement point.
+        if (!connection.AllowWrite && !string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"连接 \"{connection.Name}\" 已关闭\"允许写入\"，当前为只读模式，无法执行 {method} 操作。");
+        }
+
         var token = await _authService.GetTokenAsync(connectionId);
 
         var url = $"{connection.EnvironmentUrl}/api/data/v9.2/{path.TrimStart('/')}";

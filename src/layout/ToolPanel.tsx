@@ -32,6 +32,7 @@ export default function ToolPanel({
   const { Component } = tool;
   const { connections } = useActiveConnection();
   const { setTabConnection } = useTabManager();
+  const activeConnection = connections.find((c) => c.id === connectionId);
 
   return (
     <TabConnectionContext.Provider value={connectionId}>
@@ -60,6 +61,12 @@ export default function ToolPanel({
           )}
         </div>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{tool.description}</p>
+
+        {tool.connectionScoped !== false && activeConnection && !activeConnection.allowWrite && (
+          <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+            连接"{activeConnection.name}"已关闭"允许写入"，当前为只读模式：任何新建/修改/删除/发布等操作都会被拒绝。可在"我的连接"里重新打开该开关。
+          </div>
+        )}
 
         <div className="mt-6">
           <ToolErrorBoundary toolName={tool.name}>

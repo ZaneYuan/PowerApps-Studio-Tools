@@ -15,6 +15,7 @@ interface FormState {
   clientSecret: string;
   certificateFilePath: string;
   certificatePassword: string;
+  allowWrite: boolean;
 }
 
 const emptyForm: FormState = {
@@ -26,6 +27,7 @@ const emptyForm: FormState = {
   clientSecret: "",
   certificateFilePath: "",
   certificatePassword: "",
+  allowWrite: true,
 };
 
 const AUTH_TYPE_LABELS: Record<string, string> = {
@@ -96,6 +98,20 @@ function ConnectionFormFields({
         <option value="clientSecret">Client Secret（应用身份）</option>
         <option value="certificate">证书认证（应用身份，.pfx 文件）</option>
       </select>
+
+      <label className="flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-300">
+        <input
+          type="checkbox"
+          checked={values.allowWrite}
+          onChange={(e) => onChange({ allowWrite: e.target.checked })}
+        />
+        允许写入
+      </label>
+      {!values.allowWrite && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          关闭后，此连接对所有工具都只有查询权限——任何新建/修改/删除/发布等写操作都会被拒绝，直到重新打开此开关。
+        </p>
+      )}
 
       {values.authType === "interactive" && (
         <>
@@ -216,6 +232,7 @@ export default function ConnectionsPage() {
         clientSecret: form.clientSecret || undefined,
         certificateFilePath: form.certificateFilePath || undefined,
         certificatePassword: form.certificatePassword || undefined,
+        allowWrite: form.allowWrite,
       });
       setForm(emptyForm);
       setConnectionString("");
@@ -272,6 +289,7 @@ export default function ConnectionsPage() {
       clientSecret: "",
       certificateFilePath: c.certificateFilePath ?? "",
       certificatePassword: "",
+      allowWrite: c.allowWrite,
     });
     setEditError(null);
     setEditingId(c.id);
@@ -292,6 +310,7 @@ export default function ConnectionsPage() {
         clientSecret: editForm.clientSecret || undefined,
         certificateFilePath: editForm.certificateFilePath || undefined,
         certificatePassword: editForm.certificatePassword || undefined,
+        allowWrite: editForm.allowWrite,
       });
       await refreshConnections();
       setEditingId(null);
@@ -356,7 +375,14 @@ export default function ConnectionsPage() {
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="font-medium text-gray-900 dark:text-gray-100">{c.name}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium text-gray-900 dark:text-gray-100">{c.name}</span>
+                      {!c.allowWrite && (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                          只读
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400">
                       {c.environmentUrl} · {AUTH_TYPE_LABELS[c.authType] ?? c.authType}
                     </div>

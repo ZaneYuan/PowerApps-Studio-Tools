@@ -12,6 +12,7 @@ export interface ConnectionDto {
   hasSecret: boolean;
   certificateFilePath?: string;
   hasCertificatePassword: boolean;
+  allowWrite: boolean;
 }
 
 interface ActiveConnectionContextValue {

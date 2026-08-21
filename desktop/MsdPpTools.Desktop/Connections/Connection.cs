@@ -14,6 +14,12 @@ public sealed class Connection
     public string EnvironmentUrl { get; set; } = "";
     public ConnectionAuthType AuthType { get; set; }
 
+    /// <summary>System-level gate: when false, DataverseApiClient.RequestAsync refuses every
+    /// non-GET call on this connection, regardless of which tool issued it. Defaults to true so
+    /// existing connections.json files without this field (deserialized pre-upgrade) stay
+    /// writable rather than silently going read-only.</summary>
+    public bool AllowWrite { get; set; } = true;
+
     // ClientSecret and Certificate auth.
     public string? TenantId { get; set; }
     public string? ClientId { get; set; }
