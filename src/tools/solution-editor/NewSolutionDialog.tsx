@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createSolution, fetchPublishers, suggestSchemaName } from "./dataverseOps";
+import NewPublisherDialog from "./NewPublisherDialog";
 import type { Publisher } from "./types";
 
 const inputCls =
@@ -27,14 +28,20 @@ export default function NewSolutionDialog({
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [showNewPublisher, setShowNewPublisher] = useState(false);
 
-  useEffect(() => {
+  function loadPublishers() {
     fetchPublishers(connectionId)
       .then((list) => {
         setPublishers(list);
-        if (list.length > 0) setPublisherId(list[0].publisherid);
+        if (list.length > 0) setPublisherId((prev) => prev || list[0].publisherid);
       })
       .catch((err) => setLoadError(err instanceof Error ? err.message : String(err)));
+  }
+
+  useEffect(() => {
+    loadPublishers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId]);
 
   const selectedPublisher = publishers?.find((p) => p.publisherid === publisherId);
@@ -85,11 +92,16 @@ export default function NewSolutionDialog({
             />
           </div>
           <div>
-            <label className={labelCls}>Publisher</label>
+            <div className="mb-1 flex items-center justify-between">
+              <label className={labelCls}>Publisher</label>
+              <button type="button" onClick={() => setShowNewPublisher(true)} className="text-xs text-blue-600 hover:underline dark:text-blue-400">
+                + 新建 Publisher
+              </button>
+            </div>
             {publishers === null ? (
               <p className="text-xs text-gray-400">加载中…</p>
             ) : publishers.length === 0 ? (
-              <p className="text-xs text-amber-600 dark:text-amber-400">这个环境没有任何 publisher，请先在 Power Apps 里创建一个。</p>
+              <p className="text-xs text-amber-600 dark:text-amber-400">这个环境没有任何 publisher，先创建一个。</p>
             ) : (
               <select value={publisherId} onChange={(e) => setPublisherId(e.target.value)} className={inputCls}>
                 {publishers.map((p) => (
@@ -129,6 +141,17 @@ export default function NewSolutionDialog({
           </button>
         </div>
       </div>
+
+      {showNewPublisher && (
+        <NewPublisherDialog
+          connectionId={connectionId}
+          onClose={() => setShowNewPublisher(false)}
+          onCreated={() => {
+            setShowNewPublisher(false);
+            loadPublishers();
+          }}
+        />
+      )}
     </div>
   );
 }

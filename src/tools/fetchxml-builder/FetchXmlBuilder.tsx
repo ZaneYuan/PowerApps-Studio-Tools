@@ -2,12 +2,14 @@ import { useMemo, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
+import { unwrapODataRow } from "../../native/odata";
 import EntityNameInput from "./EntityNameInput";
 import FieldNameInput from "./FieldNameInput";
 import FilterGroupEditor from "./FilterGroupEditor";
 import LinkEntityEditor from "./LinkEntityEditor";
 import { serializeFetchXml } from "./serialize";
 import { newLinkEntity, newOrderClause, newQuery, type FetchXmlQuery, type LinkEntity } from "./types";
+import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -57,7 +59,12 @@ export default function FetchXmlBuilder() {
         method: "GET",
         path,
       });
-      setRows(res.value);
+      // Real field names, not OData JSON property names — a Lookup column comes back from the
+      // Web API as `_field_value`; unwrap it the same way SQL4CDS/Data Copy/Data Edit/Data
+      // Migration already do (see native/odata.ts), which this tool had never picked up.
+      const unwrapped = res.value.map(unwrapODataRow);
+      setRows(unwrapped);
+      setResultColumns(unwrapped.length > 0 ? Object.keys(unwrapped[0]).map((key) => ({ key, checked: true })) : []);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -65,7 +72,11 @@ export default function FetchXmlBuilder() {
     }
   }
 
-  const columns = rows && rows.length > 0 ? Object.keys(rows[0]).filter((k) => !k.startsWith("@")) : [];
+  const [resultColumns, setResultColumns] = useState<GridColumn[]>([]);
+  const resultGridRows: GridRow[] = useMemo(
+    () => (rows ?? []).map((row, i) => ({ id: String(i), checked: true, values: row })),
+    [rows],
+  );
 
   if (!isNativeBridgeAvailable()) {
     return (
@@ -250,38 +261,18 @@ export default function FetchXmlBuilder() {
         </pre>
       )}
 
-      {rows && (
-        <div className="overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-          <div className="inline-block min-w-full align-top">
-            <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-              {rows.length} 行
-            </div>
-            {rows.length > 0 && (
-              <table className="w-full text-left text-sm">
-                <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
-                  <tr>
-                    {columns.map((c) => (
-                      <th key={c} className="whitespace-nowrap px-3 py-2 font-mono">
-                        {c}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row, i) => (
-                    <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-                      {columns.map((c) => (
-                        <td key={c} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
-                          {typeof row[c] === "object" ? JSON.stringify(row[c]) : String(row[c] ?? "")}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+      {rows && rows.length === 0 && (
+        <div className="rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">0 行</div>
+      )}
+      {rows && rows.length > 0 && (
+        <CheckableGrid
+          columns={resultColumns}
+          rows={resultGridRows}
+          onColumnsChange={setResultColumns}
+          onRowsChange={() => {}}
+          columnsLabel="列（显示）"
+          showRowCheckbox={false}
+        />
       )}
     </div>
   );

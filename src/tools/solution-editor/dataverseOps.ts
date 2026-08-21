@@ -56,6 +56,48 @@ export async function fetchPublishers(connectionId: string): Promise<Publisher[]
   return res.value;
 }
 
+export interface NewPublisherParams {
+  uniqueName: string;
+  friendlyName: string;
+  customizationPrefix: string;
+  /** Dataverse's own documented range for `customizationoptionvalueprefix` (10000–99999) —
+   *  validated client-side before submitting so an obviously-invalid value fails fast instead of
+   *  round-tripping to the server first. */
+  customizationOptionValuePrefix: number;
+  description: string;
+}
+
+export async function createPublisher(connectionId: string, params: NewPublisherParams): Promise<void> {
+  if (params.customizationOptionValuePrefix < 10000 || params.customizationOptionValuePrefix > 99999) {
+    throw new Error("Option Value Prefix 必须在 10000–99999 之间（Dataverse 的固定要求）。");
+  }
+  await callNative("dataverse.request", {
+    connectionId,
+    method: "POST",
+    path: "publishers",
+    body: {
+      uniquename: params.uniqueName,
+      friendlyname: params.friendlyName,
+      customizationprefix: params.customizationPrefix,
+      customizationoptionvalueprefix: params.customizationOptionValuePrefix,
+      description: params.description || null,
+    },
+  });
+}
+
+/** `customizationprefix`/`customizationoptionvalueprefix` aren't included — Dataverse treats both
+ *  as foundational to the publisher's identity and locks them after creation (matches
+ *  make.powerapps' own publisher editor, which also only lets you change name/description on an
+ *  existing publisher). */
+export async function updatePublisher(connectionId: string, publisherId: string, params: { friendlyName: string; description: string }): Promise<void> {
+  await callNative("dataverse.request", {
+    connectionId,
+    method: "PATCH",
+    path: `publishers(${publisherId})`,
+    body: { friendlyname: params.friendlyName, description: params.description || null },
+  });
+}
+
 export async function createSolution(
   connectionId: string,
   params: { uniqueName: string; friendlyName: string; version: string; publisherId: string; description: string },
@@ -289,7 +331,221 @@ export function buildAttributeBody(type: BasicColumnType, isPrimaryName: boolean
           Options: (params.options ?? []).map((text) => ({ Label: label(text) })),
         },
       };
+    case "MultiSelectPicklist":
+      return {
+        ...common,
+        "@odata.type": "Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata",
+        AttributeType: "MultiSelectPicklist",
+        AttributeTypeName: { Value: "MultiSelectPicklistType" },
+        OptionSet: {
+          "@odata.type": "Microsoft.Dynamics.CRM.OptionSetMetadata",
+          IsGlobal: false,
+          OptionSetType: "MultiSelectPicklist",
+          Options: (params.options ?? []).map((text) => ({ Label: label(text) })),
+        },
+      };
+    case "BigInt":
+      return {
+        ...common,
+        "@odata.type": "Microsoft.Dynamics.CRM.BigIntAttributeMetadata",
+        AttributeType: "BigInt",
+        AttributeTypeName: { Value: "BigIntType" },
+      };
   }
+}
+
+/** Builds a Picklist column body that reuses an existing *global* choice instead of defining its
+ *  own local options — `GlobalOptionSet@odata.bind` per Microsoft's own worked example ("Create a
+ *  choice column by using a global option set"). No `Options` array here at all: the column
+ *  inherits whatever options the global choice already has. */
+export function buildGlobalChoiceAttributeBody(globalOptionSetId: string, params: NewColumnParams): Record<string, unknown> {
+  return {
+    SchemaName: params.schemaName,
+    DisplayName: label(params.displayName),
+    Description: label(params.description || params.displayName),
+    RequiredLevel: requiredLevel(params.required),
+    "@odata.type": "Microsoft.Dynamics.CRM.PicklistAttributeMetadata",
+    AttributeType: "Picklist",
+    AttributeTypeName: { Value: "PicklistType" },
+    "GlobalOptionSet@odata.bind": `/GlobalOptionSetDefinitions(${globalOptionSetId})`,
+  };
+}
+
+export async function createColumnWithGlobalChoice(
+  connectionId: string,
+  solutionUniqueName: string,
+  entityLogicalName: string,
+  globalOptionSetId: string,
+  params: NewColumnParams,
+): Promise<void> {
+  await callNative(
+    "dataverse.request",
+    {
+      connectionId,
+      solutionUniqueName,
+      method: "POST",
+      path: `EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes`,
+      body: buildGlobalChoiceAttributeBody(globalOptionSetId, params),
+    },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
+}
+
+export interface NewGlobalOptionSetParams {
+  name: string;
+  displayName: string;
+  description: string;
+  options: string[];
+}
+
+/** `Value: null` on every option per Microsoft's own strong recommendation ("we recommend that you
+ *  let the system assign a value") — same reasoning as the local Picklist's label-only Options
+ *  above, just restated for the global case where it matters even more (a global choice's values
+ *  get merged across every solution layer that touches it; a hand-picked value is far more likely
+ *  to collide). */
+export function buildGlobalOptionSetBody(params: NewGlobalOptionSetParams): Record<string, unknown> {
+  return {
+    "@odata.type": "Microsoft.Dynamics.CRM.OptionSetMetadata",
+    Name: params.name,
+    DisplayName: label(params.displayName),
+    Description: label(params.description || params.displayName),
+    OptionSetType: "Picklist",
+    IsGlobal: true,
+    Options: params.options.map((text) => ({ Value: null, Label: label(text) })),
+  };
+}
+
+export async function createGlobalOptionSet(connectionId: string, solutionUniqueName: string, params: NewGlobalOptionSetParams): Promise<void> {
+  await callNative(
+    "dataverse.request",
+    { connectionId, solutionUniqueName, method: "POST", path: "GlobalOptionSetDefinitions", body: buildGlobalOptionSetBody(params) },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
+}
+
+export interface GlobalOptionSetSummary {
+  metadataId: string;
+  name: string;
+  displayName: string;
+}
+
+/** Tight `$select` per this codebase's own established rule for metadata endpoints (see
+ *  mcp-dataverse's own learned pitfall: an unscoped metadata query risks timing out) — a tenant
+ *  can have hundreds of *system* global choices alone, well before counting custom ones. */
+export async function fetchGlobalOptionSets(connectionId: string): Promise<GlobalOptionSetSummary[]> {
+  const res = await fetchDataverse<{
+    value: { MetadataId: string; Name: string; DisplayName?: { UserLocalizedLabel?: { Label: string } | null } | null }[];
+  }>(connectionId, "GlobalOptionSetDefinitions?$select=MetadataId,Name,DisplayName");
+  return res.value
+    .map((o) => ({ metadataId: o.MetadataId, name: o.Name, displayName: o.DisplayName?.UserLocalizedLabel?.Label ?? o.Name }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+export interface NewLookupColumnParams {
+  schemaName: string;
+  displayName: string;
+  description: string;
+  required: boolean;
+  /** The table this lookup column points *to* (the "one" side / parent). */
+  referencedEntity: string;
+  /** The table the lookup column is added *to* (the "many" side / child) — i.e. the table
+   *  currently open in the editor. */
+  referencingEntity: string;
+  referencedAttribute: string;
+  relationshipSchemaName: string;
+}
+
+/** Builds the deep-insert `OneToManyRelationshipMetadata` + nested `Lookup` body that creates a
+ *  relationship and its lookup column in one POST — shape confirmed field-for-field against
+ *  Microsoft's own worked Web API example ("Create and update table relationships using the Web
+ *  API" → "Create a one-to-many relationship"), not guessed.
+ *
+ *  CascadeConfiguration is fixed at the safe default every one of Microsoft's own SDK samples
+ *  uses for a plain new lookup (`Delete: RemoveLink`, everything else `NoCascade`) — deleting the
+ *  referenced ("one") record only clears this lookup on child records, it never cascades a delete
+ *  onto them. This app's v2 doesn't expose cascade configuration as a UI choice at all: the other
+ *  five cascade settings a relationship supports (Assign/Merge/Reparent/Share/Unshare, plus
+ *  Delete's other option `Cascade`) each have real, non-obvious data-loss implications if picked
+ *  wrong, and getting `Delete: Cascade` on a new lookup by way of an unfamiliar dropdown is exactly
+ *  the kind of mistake a guided tool should make hard to reach by accident, not easy. */
+export function buildOneToManyRelationshipBody(params: NewLookupColumnParams): Record<string, unknown> {
+  return {
+    "@odata.type": "Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata",
+    SchemaName: params.relationshipSchemaName,
+    ReferencedEntity: params.referencedEntity,
+    ReferencingEntity: params.referencingEntity,
+    ReferencedAttribute: params.referencedAttribute,
+    AssociatedMenuConfiguration: {
+      Behavior: "UseCollectionName",
+      Group: "Details",
+      Order: 10000,
+    },
+    CascadeConfiguration: {
+      Assign: "NoCascade",
+      Delete: "RemoveLink",
+      Merge: "NoCascade",
+      Reparent: "NoCascade",
+      Share: "NoCascade",
+      Unshare: "NoCascade",
+    },
+    Lookup: {
+      "@odata.type": "Microsoft.Dynamics.CRM.LookupAttributeMetadata",
+      AttributeType: "Lookup",
+      AttributeTypeName: { Value: "LookupType" },
+      SchemaName: params.schemaName,
+      DisplayName: label(params.displayName),
+      Description: label(params.description || params.displayName),
+      RequiredLevel: requiredLevel(params.required),
+    },
+  };
+}
+
+/** The referenced (parent) table's real primary id attribute — required as `ReferencedAttribute`
+ *  on the relationship body above. Fetched, not assumed to be `{logicalname}id`: that convention
+ *  is overwhelmingly consistent in practice but this is exactly the kind of value this codebase's
+ *  own established rule says to read from metadata rather than guess (see navProperty.ts and
+ *  metadataService.ts's own doc comments on the same point). */
+export async function fetchEntityPrimaryIdAttribute(connectionId: string, entityLogicalName: string): Promise<string> {
+  const meta = await fetchDataverse<{ PrimaryIdAttribute: string }>(
+    connectionId,
+    `EntityDefinitions(LogicalName='${entityLogicalName}')?$select=PrimaryIdAttribute`,
+  );
+  return meta.PrimaryIdAttribute;
+}
+
+export async function createLookupColumn(connectionId: string, solutionUniqueName: string, params: Omit<NewLookupColumnParams, "referencedAttribute">): Promise<void> {
+  const referencedAttribute = await fetchEntityPrimaryIdAttribute(connectionId, params.referencedEntity);
+  await callNative(
+    "dataverse.request",
+    {
+      connectionId,
+      solutionUniqueName,
+      method: "POST",
+      path: "RelationshipDefinitions",
+      body: buildOneToManyRelationshipBody({ ...params, referencedAttribute }),
+    },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
+}
+
+/** Publishes exactly the tables that belong to one solution, instead of `publishAll`'s org-wide
+ *  republish — Dataverse's Web API has no "publish this one solution" primitive (`PublishXml` only
+ *  takes an explicit component list, never a solution id), so this builds that list from the
+ *  Entity-type rows the caller already has (SolutionEditor.tsx's own `entityRows`, straight from
+ *  fetchSolutionComponents — no extra round-trip needed). Pure text-building split out from the
+ *  network call for the same testability reason every other builder in this file is. */
+export function buildPublishXmlForEntities(entityLogicalNames: string[]): string {
+  const entities = entityLogicalNames.map((n) => `<entity>${n}</entity>`).join("");
+  return `<importexportxml><entities>${entities}</entities></importexportxml>`;
+}
+
+export async function publishSolutionEntities(connectionId: string, entityLogicalNames: string[]): Promise<void> {
+  if (entityLogicalNames.length === 0) return; // nothing to publish — same as PublishXml's own no-op for an empty list
+  await callNative(
+    "dataverse.request",
+    { connectionId, method: "POST", path: "PublishXml", body: { ParameterXml: buildPublishXmlForEntities(entityLogicalNames) } },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
 }
 
 export interface NewTableParams {

@@ -28,6 +28,7 @@ import {
   type WriteAction,
 } from "./executionLog";
 import SqlEditor from "../../shared/SqlEditor";
+import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 
 const SAMPLE = `SELECT TOP 50 name, revenue, statecode
 FROM account
@@ -214,7 +215,9 @@ export default function Sql4Cds() {
         method: "GET",
         path: buildSelectPath(resolvedResult, entitySetName),
       });
-      setRows(res.value.map(unwrapODataRow));
+      const unwrapped = res.value.map(unwrapODataRow);
+      setRows(unwrapped);
+      setResultColumns(unwrapped.length > 0 ? Object.keys(unwrapped[0]).map((key) => ({ key, checked: true })) : []);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -222,8 +225,16 @@ export default function Sql4Cds() {
     }
   }
 
-  // rows is already unwrapODataRow'd (see handleRun) — no `_..._value`/`@...` keys left to filter.
-  const columns = rows && rows.length > 0 ? Object.keys(rows[0]) : [];
+  // Column show/hide + sort/filter state for the results CheckableGrid — rebuilt fresh by
+  // handleRun on every query run (a new query's column set has no relationship to the previous
+  // one's user-toggled visibility, so there's nothing worth preserving across runs).
+  const [resultColumns, setResultColumns] = useState<GridColumn[]>([]);
+  // Row checkboxes are hidden here (showRowCheckbox={false} — a SELECT result has no "select rows
+  // for a bulk action" concept), so `checked`/`id` are unused placeholders; only `values` matters.
+  const resultGridRows: GridRow[] = useMemo(
+    () => (rows ?? []).map((row, i) => ({ id: String(i), checked: true, values: row })),
+    [rows],
+  );
 
   // --- write (INSERT/UPDATE/DELETE) execution state ---
   const [writeRunning, setWriteRunning] = useState(false);
@@ -758,38 +769,18 @@ export default function Sql4Cds() {
             </pre>
           )}
 
-          {rows && (
-            <div className="max-h-[70vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-              <div className="inline-block min-w-full align-top">
-                <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-                  {rows.length} 行
-                </div>
-                {rows.length > 0 && (
-                  <table className="w-full text-left text-sm">
-                    <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
-                      <tr>
-                        {columns.map((c) => (
-                          <th key={c} className="whitespace-nowrap px-3 py-2 font-mono">
-                            {c}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((row, i) => (
-                        <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-                          {columns.map((c) => (
-                            <td key={c} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
-                              {typeof row[c] === "object" ? JSON.stringify(row[c]) : String(row[c] ?? "")}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
+          {rows && rows.length === 0 && (
+            <div className="rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">0 行</div>
+          )}
+          {rows && rows.length > 0 && (
+            <CheckableGrid
+              columns={resultColumns}
+              rows={resultGridRows}
+              onColumnsChange={setResultColumns}
+              onRowsChange={() => {}}
+              columnsLabel="列（显示）"
+              showRowCheckbox={false}
+            />
           )}
         </>
       )}

@@ -138,6 +138,24 @@ export async function waitForImportJobCompletion(
   throw new Error("等待导入完成超时（5 分钟），请去 Solutions 的导入历史里手动确认结果。");
 }
 
+/** Retrieves the *effective* (merged system + all customizations) ribbon for a table — distinct
+ *  from exportSolutionZip+readRibbonDiffXml, which only ever sees this table's own diff layer.
+ *  `RibbonLocationFilters'All'` (value 7) per Microsoft's Web API enum reference — pulls Form,
+ *  HomepageGrid, and SubGrid ribbons all in one call rather than three. Returns the raw base64
+ *  `CompressedEntityXml`; callers decompress via effectiveRibbon.ts's decompressRibbonXml. */
+export async function fetchEffectiveRibbonCompressed(connectionId: string, entityLogicalName: string): Promise<string> {
+  const res = await callNative<{ CompressedEntityXml: string }>(
+    "dataverse.request",
+    {
+      connectionId,
+      method: "GET",
+      path: `RetrieveEntityRibbon(EntityName='${entityLogicalName}',RibbonLocationFilter=Microsoft.Dynamics.CRM.RibbonLocationFilters'All')`,
+    },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
+  return res.CompressedEntityXml;
+}
+
 export async function publishEntity(connectionId: string, logicalName: string): Promise<void> {
   const parameterXml = `<importexportxml><entities><entity>${logicalName}</entity></entities></importexportxml>`;
   await callNative(

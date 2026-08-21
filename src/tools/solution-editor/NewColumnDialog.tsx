@@ -1,11 +1,24 @@
-import { useState } from "react";
-import { createColumn, suggestSchemaName, type NewColumnParams } from "./dataverseOps";
+import { useEffect, useState } from "react";
+import {
+  createColumn,
+  createColumnWithGlobalChoice,
+  createLookupColumn,
+  fetchAllEntitiesForPicker,
+  fetchGlobalOptionSets,
+  suggestSchemaName,
+  type GlobalOptionSetSummary,
+  type NewColumnParams,
+  type PickableEntity,
+} from "./dataverseOps";
 import { COLUMN_TYPE_LABELS, type BasicColumnType } from "./types";
 
 const inputCls =
   "w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 const labelCls = "mb-1 block text-xs text-gray-500 dark:text-gray-400";
 const COLUMN_TYPES = Object.keys(COLUMN_TYPE_LABELS) as BasicColumnType[];
+/** "Lookup" isn't a BasicColumnType (see types.ts's own doc comment on why) — it's a UI-only
+ *  addition to this dialog's type dropdown, routed to createLookupColumn instead of createColumn. */
+type DialogColumnType = BasicColumnType | "Lookup";
 
 export default function NewColumnDialog({
   connectionId,
@@ -22,7 +35,7 @@ export default function NewColumnDialog({
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [type, setType] = useState<BasicColumnType>("String");
+  const [type, setType] = useState<DialogColumnType>("String");
   const [displayName, setDisplayName] = useState("");
   const [schemaName, setSchemaName] = useState("");
   const [schemaNameTouched, setSchemaNameTouched] = useState(false);
@@ -38,34 +51,94 @@ export default function NewColumnDialog({
   const [falseLabel, setFalseLabel] = useState("否");
   const [options, setOptions] = useState<string[]>([""]);
 
+  // Picklist only: use an existing global choice instead of defining local options.
+  const [useGlobalChoice, setUseGlobalChoice] = useState(false);
+  const [globalOptionSets, setGlobalOptionSets] = useState<GlobalOptionSetSummary[] | null>(null);
+  const [globalOptionSetId, setGlobalOptionSetId] = useState("");
+
+  // Lookup only: the target ("one" side) table.
+  const [allEntities, setAllEntities] = useState<PickableEntity[] | null>(null);
+  const [referencedEntity, setReferencedEntity] = useState("");
+  const [relationshipSchemaName, setRelationshipSchemaName] = useState("");
+  const [relationshipSchemaNameTouched, setRelationshipSchemaNameTouched] = useState(false);
+
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (type === "Lookup" && !allEntities) {
+      fetchAllEntitiesForPicker(connectionId)
+        .then(setAllEntities)
+        .catch((err) => setSubmitError(err instanceof Error ? err.message : String(err)));
+    }
+    if (type === "Picklist" && useGlobalChoice && !globalOptionSets) {
+      fetchGlobalOptionSets(connectionId)
+        .then(setGlobalOptionSets)
+        .catch((err) => setSubmitError(err instanceof Error ? err.message : String(err)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type, useGlobalChoice]);
 
   function handleDisplayNameChange(value: string) {
     setDisplayName(value);
     if (!schemaNameTouched) setSchemaName(suggestSchemaName(publisherPrefix, value));
+    if (!relationshipSchemaNameTouched && referencedEntity) {
+      setRelationshipSchemaName(suggestSchemaName(publisherPrefix, `${referencedEntity}_${value}`));
+    }
+  }
+
+  function handleReferencedEntityChange(value: string) {
+    setReferencedEntity(value);
+    if (!relationshipSchemaNameTouched && displayName) {
+      setRelationshipSchemaName(suggestSchemaName(publisherPrefix, `${value}_${displayName}`));
+    }
   }
 
   async function handleSubmit() {
     if (!displayName.trim() || !schemaName.trim()) return;
     setSubmitting(true);
     setSubmitError(null);
-    const params: NewColumnParams = {
-      schemaName: schemaName.trim(),
-      displayName: displayName.trim(),
-      description,
-      required,
-      maxLength: type === "String" || type === "Memo" ? maxLength : undefined,
-      minValue: type === "Integer" || type === "Decimal" ? minValue : undefined,
-      maxValue: type === "Integer" || type === "Decimal" ? maxValue : undefined,
-      precision: type === "Decimal" ? precision : undefined,
-      dateFormat: type === "DateTime" ? dateFormat : undefined,
-      trueLabel: type === "Boolean" ? trueLabel : undefined,
-      falseLabel: type === "Boolean" ? falseLabel : undefined,
-      options: type === "Picklist" ? options.map((o) => o.trim()).filter(Boolean) : undefined,
-    };
     try {
-      await createColumn(connectionId, solutionUniqueName, entityLogicalName, type, params);
+      if (type === "Lookup") {
+        if (!referencedEntity || !relationshipSchemaName.trim()) {
+          setSubmitError("请选择目标表，并填写关系的 SchemaName。");
+          setSubmitting(false);
+          return;
+        }
+        await createLookupColumn(connectionId, solutionUniqueName, {
+          schemaName: schemaName.trim(),
+          displayName: displayName.trim(),
+          description,
+          required,
+          referencedEntity,
+          referencingEntity: entityLogicalName,
+          relationshipSchemaName: relationshipSchemaName.trim(),
+        });
+      } else if (type === "Picklist" && useGlobalChoice) {
+        if (!globalOptionSetId) {
+          setSubmitError("请选择一个已有的全局选项集。");
+          setSubmitting(false);
+          return;
+        }
+        const params: NewColumnParams = { schemaName: schemaName.trim(), displayName: displayName.trim(), description, required };
+        await createColumnWithGlobalChoice(connectionId, solutionUniqueName, entityLogicalName, globalOptionSetId, params);
+      } else {
+        const params: NewColumnParams = {
+          schemaName: schemaName.trim(),
+          displayName: displayName.trim(),
+          description,
+          required,
+          maxLength: type === "String" || type === "Memo" ? maxLength : undefined,
+          minValue: type === "Integer" || type === "Decimal" ? minValue : undefined,
+          maxValue: type === "Integer" || type === "Decimal" ? maxValue : undefined,
+          precision: type === "Decimal" ? precision : undefined,
+          dateFormat: type === "DateTime" ? dateFormat : undefined,
+          trueLabel: type === "Boolean" ? trueLabel : undefined,
+          falseLabel: type === "Boolean" ? falseLabel : undefined,
+          options: type === "Picklist" || type === "MultiSelectPicklist" ? options.map((o) => o.trim()).filter(Boolean) : undefined,
+        };
+        await createColumn(connectionId, solutionUniqueName, entityLogicalName, type, params);
+      }
       onCreated();
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
@@ -74,7 +147,12 @@ export default function NewColumnDialog({
     }
   }
 
-  const canSubmit = displayName.trim() && schemaName.trim() && (type !== "Picklist" || options.some((o) => o.trim()));
+  const canSubmit =
+    displayName.trim() &&
+    schemaName.trim() &&
+    ((type !== "Picklist" && type !== "MultiSelectPicklist") || useGlobalChoice || options.some((o) => o.trim())) &&
+    (type !== "Picklist" || !useGlobalChoice || !!globalOptionSetId) &&
+    (type !== "Lookup" || (!!referencedEntity && !!relationshipSchemaName.trim()));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -84,7 +162,8 @@ export default function NewColumnDialog({
         <div className="space-y-3">
           <div>
             <label className={labelCls}>类型</label>
-            <select value={type} onChange={(e) => setType(e.target.value as BasicColumnType)} className={inputCls}>
+            <select value={type} onChange={(e) => setType(e.target.value as DialogColumnType)} className={inputCls}>
+              <option value="Lookup">查找（Lookup）</option>
               {COLUMN_TYPES.map((t) => (
                 <option key={t} value={t}>
                   {COLUMN_TYPE_LABELS[t]}
@@ -107,6 +186,40 @@ export default function NewColumnDialog({
               className={`${inputCls} font-mono`}
             />
           </div>
+
+          {type === "Lookup" && (
+            <>
+              <div>
+                <label className={labelCls}>目标表（这个查找字段指向哪张表）</label>
+                {!allEntities ? (
+                  <p className="text-xs text-gray-400">加载表列表中…</p>
+                ) : (
+                  <select value={referencedEntity} onChange={(e) => handleReferencedEntityChange(e.target.value)} className={inputCls}>
+                    <option value="">-- 选择目标表 --</option>
+                    {allEntities.map((en) => (
+                      <option key={en.logicalName} value={en.logicalName}>
+                        {en.displayName} ({en.logicalName})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <div>
+                <label className={labelCls}>关系 SchemaName（1:N 关系自己的名字，创建后不可改）</label>
+                <input
+                  value={relationshipSchemaName}
+                  onChange={(e) => {
+                    setRelationshipSchemaName(e.target.value);
+                    setRelationshipSchemaNameTouched(true);
+                  }}
+                  className={`${inputCls} font-mono`}
+                />
+              </div>
+              <p className="rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
+                级联行为固定为安全默认值：删除目标表的记录只会清空这个查找字段（不会级联删除这张表上的记录）。
+              </p>
+            </>
+          )}
 
           {(type === "String" || type === "Memo") && (
             <div>
@@ -155,6 +268,31 @@ export default function NewColumnDialog({
             </div>
           )}
           {type === "Picklist" && (
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300">
+              <input type="checkbox" checked={useGlobalChoice} onChange={(e) => setUseGlobalChoice(e.target.checked)} />
+              使用已有的全局选项集（而不是新建本地选项）
+            </label>
+          )}
+          {type === "Picklist" && useGlobalChoice && (
+            <div>
+              <label className={labelCls}>全局选项集</label>
+              {!globalOptionSets ? (
+                <p className="text-xs text-gray-400">加载中…</p>
+              ) : globalOptionSets.length === 0 ? (
+                <p className="text-xs text-amber-600 dark:text-amber-400">这个环境还没有任何全局选项集。</p>
+              ) : (
+                <select value={globalOptionSetId} onChange={(e) => setGlobalOptionSetId(e.target.value)} className={inputCls}>
+                  <option value="">-- 选择 --</option>
+                  {globalOptionSets.map((o) => (
+                    <option key={o.metadataId} value={o.metadataId}>
+                      {o.displayName} ({o.name})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+          {(type === "MultiSelectPicklist" || (type === "Picklist" && !useGlobalChoice)) && (
             <div>
               <label className={labelCls}>选项（只需填标签，编号由 Dataverse 自动分配）</label>
               <div className="space-y-1.5">

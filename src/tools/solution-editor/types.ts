@@ -159,10 +159,15 @@ export interface SolutionComponentRow {
   logicalName?: string;
 }
 
-/** The 8 "basic" column types this v1 supports — no Lookup/Customer (needs relationship
- *  metadata via CreateCustomerRelationships/CreateOneToMany, out of scope for this pass) and no
- *  global/multi-select choice (same reasoning, see the Solution 编辑器 plan's 范围 section). */
-export type BasicColumnType = "String" | "Memo" | "Integer" | "Decimal" | "Money" | "Boolean" | "DateTime" | "Picklist";
+/** The basic column types this tool builds a plain AttributeMetadata body for via
+ *  buildAttributeBody — v1's original 8, plus MultiSelectPicklist/BigInt added in v2. Lookup
+ *  fields are NOT part of this union: they need a relationship (RelationshipDefinitions deep
+ *  insert), not a plain Attributes POST, so they're a separate NewColumnDialog code path built on
+ *  createLookupColumn/buildOneToManyRelationshipBody instead. Global-choice-backed Picklist
+ *  columns also stay outside this union for the same reason (buildGlobalChoiceAttributeBody takes
+ *  a GlobalOptionSet id, not an inline Options list) — "Picklist" here always means a *local*
+ *  choice. */
+export type BasicColumnType = "String" | "Memo" | "Integer" | "Decimal" | "Money" | "Boolean" | "DateTime" | "Picklist" | "MultiSelectPicklist" | "BigInt";
 
 export const COLUMN_TYPE_LABELS: Record<BasicColumnType, string> = {
   String: "单行文本",
@@ -173,6 +178,8 @@ export const COLUMN_TYPE_LABELS: Record<BasicColumnType, string> = {
   Boolean: "是/否",
   DateTime: "日期时间",
   Picklist: "选项（本地）",
+  MultiSelectPicklist: "选项（本地，多选）",
+  BigInt: "长整数（BigInt）",
 };
 
 export interface ColumnFieldMeta {

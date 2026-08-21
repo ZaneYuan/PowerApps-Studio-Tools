@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
-import { fetchEntityBasicInfo, fetchEntityFields, fetchSolutionComponents, fetchSolutions, publishAll } from "./dataverseOps";
+import { fetchEntityBasicInfo, fetchEntityFields, fetchSolutionComponents, fetchSolutions, publishAll, publishSolutionEntities } from "./dataverseOps";
 import AddExistingTableDialog from "./AddExistingTableDialog";
 import NewColumnDialog from "./NewColumnDialog";
 import NewSolutionDialog from "./NewSolutionDialog";
@@ -142,6 +142,26 @@ export default function SolutionEditor() {
     }
   }
 
+  /** Publishes just this solution's own tables — builds the explicit component list PublishXml
+   *  requires from the Entity-type rows already loaded (`components`), no extra fetch needed. */
+  async function handlePublishThisSolution() {
+    if (!activeConnectionId || !components) return;
+    const logicalNames = components
+      .filter((c) => c.componenttype === ENTITY_COMPONENT_TYPE && c.logicalName)
+      .map((c) => c.logicalName!);
+    setPublishing(true);
+    setPublishError(null);
+    setPublishDone(false);
+    try {
+      await publishSolutionEntities(activeConnectionId, logicalNames);
+      setPublishDone(true);
+    } catch (err) {
+      setPublishError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   function toggleEntity(id: string) {
     setExpandedEntities((s) => {
       const next = new Set(s);
@@ -176,9 +196,9 @@ export default function SolutionEditor() {
     return (
       <div className="max-w-5xl space-y-4">
         <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-          雏形版本：查看/新建 solution，进入一个 unmanaged solution 后可以浏览组件、添加已有表、新建表、新建 8
-          种基础类型的字段、发布。不支持查找字段、全局选项集、拖拽式画布——参考 UI 取的是 make.powerapps
-          的"列表 → 详情 → 组件树"结构，不是像素级复刻。Managed solution 只能查看，不能编辑。
+          查看/新建 solution，进入一个 unmanaged solution 后可以浏览组件、添加已有表、新建表、新建字段（单行/多行文本、整数、小数、货币、是否、日期时间、本地/全局选项集、多选选项集、长整数、查找）、新建/编辑
+          Publisher、发布。查找字段的级联行为固定为安全默认值（删除目标记录只清空查找，不级联删除）。不支持拖拽式画布——参考 UI 取的是
+          make.powerapps 的"列表 → 详情 → 组件树"结构，不是像素级复刻。Managed solution 只能查看，不能编辑。
         </div>
 
         <div className="flex items-center gap-2">
@@ -270,8 +290,17 @@ export default function SolutionEditor() {
         </button>
         <div className="flex items-center gap-2">
           <button
+            onClick={handlePublishThisSolution}
+            disabled={publishing || entityRows.length === 0}
+            title="只发布这个 solution 里的表（PublishXml 显式列出组件），不影响其它 solution"
+            className="rounded-md border border-purple-300 px-3 py-1.5 text-sm font-medium text-purple-700 hover:bg-purple-50 disabled:opacity-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-900/20"
+          >
+            {publishing ? "发布中…" : "只发布这个 Solution"}
+          </button>
+          <button
             onClick={handlePublish}
             disabled={publishing}
+            title="Dataverse 没有'只发布一个 solution'的原语，这个按钮走 PublishAllXml，会republish 整个环境的自定义"
             className="rounded-md bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
           >
             {publishing ? "发布中…" : "发布全部自定义"}

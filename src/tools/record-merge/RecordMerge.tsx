@@ -15,6 +15,7 @@ import {
   type RefTable,
   type RefTableRecordsResult,
 } from "./types";
+import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -119,7 +120,8 @@ function RefTableRecordsPanel({ connectionId, scannedId, table }: { connectionId
   if (state.error) return <p className="p-3 text-xs text-red-600 dark:text-red-400">{state.error}</p>;
   if (!state.data || state.data.rows.length === 0) return <p className="p-3 text-xs text-gray-400">没有查到数据。</p>;
 
-  const { columns, rows, truncated } = state.data;
+  const { rows, truncated } = state.data;
+  const gridRows: GridRow[] = rows.map((r) => ({ id: r.id, checked: true, values: r.values }));
   return (
     <div className="max-h-80 overflow-auto rounded-md border border-gray-200 dark:border-gray-800">
       {truncated && (
@@ -127,29 +129,26 @@ function RefTableRecordsPanel({ connectionId, scannedId, table }: { connectionId
           ⚠ 已截断，仅显示前 {rows.length} 条
         </p>
       )}
-      <table className="w-full text-left text-sm">
-        <thead className="bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
-          <tr>
-            {columns.map((c) => (
-              <th key={c} className="whitespace-nowrap px-3 py-1.5 font-mono font-medium">
-                {c}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id} className="border-t border-gray-100 dark:border-gray-800">
-              {columns.map((c) => (
-                <td key={c} className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
-                  {r.values[c]}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <RefTableGrid columns={state.data.columns} rows={gridRows} />
     </div>
+  );
+}
+
+/** Owns the column show/hide state CheckableGrid needs — split out from RefTableRecordsPanel so
+ *  that state resets cleanly (a fresh `key`-less remount isn't available here since the panel
+ *  itself doesn't unmount between fetches) whenever the underlying column set changes, e.g.
+ *  expanding a different referencing table. */
+function RefTableGrid({ columns, rows }: { columns: string[]; rows: GridRow[] }) {
+  const [gridColumns, setGridColumns] = useState<GridColumn[]>(() => columns.map((key) => ({ key, checked: true })));
+  return (
+    <CheckableGrid
+      columns={gridColumns}
+      rows={rows}
+      onColumnsChange={setGridColumns}
+      onRowsChange={() => {}}
+      columnsLabel="列（显示）"
+      showRowCheckbox={false}
+    />
   );
 }
 

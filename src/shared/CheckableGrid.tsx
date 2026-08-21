@@ -100,6 +100,7 @@ const GridRowView = memo(function GridRowView({
   onOpenLookupEditor,
   connectionId,
   entityLogicalName,
+  showRowCheckbox,
 }: {
   row: GridRow;
   /** Only the columns currently in (or near) the horizontal viewport — see the column virtualizer
@@ -126,6 +127,7 @@ const GridRowView = memo(function GridRowView({
   onOpenLookupEditor: (rowId: string, columnKey: string) => void;
   connectionId?: string;
   entityLogicalName?: string;
+  showRowCheckbox: boolean;
 }) {
   // TEMP diagnostic (bugs & requirements/8.19.md #6) — remove once the wide-table scroll stutter
   // is confirmed fixed. Deliberately NOT gated behind import.meta.env.DEV: the report this is
@@ -140,9 +142,11 @@ const GridRowView = memo(function GridRowView({
   console.count("GridRowView render");
   return (
     <tr className="border-t border-gray-100 dark:border-gray-800">
-      <td className="px-3 py-1.5" style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
-        <input type="checkbox" checked={row.checked} onChange={() => onToggleRow(row.id)} />
-      </td>
+      {showRowCheckbox && (
+        <td className="px-3 py-1.5" style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
+          <input type="checkbox" checked={row.checked} onChange={() => onToggleRow(row.id)} />
+        </td>
+      )}
       {leftSpacerWidth > 0 && <td aria-hidden="true" style={{ width: leftSpacerWidth }} />}
       {visibleColumns.map((c) => {
         const rawValue = row.values[c.key];
@@ -322,6 +326,7 @@ const GridHeader = memo(function GridHeader({
   onClearFilter,
   connectionId,
   entityLogicalName,
+  showRowCheckbox,
 }: {
   /** Same horizontally-windowed slice GridRowView renders — see its own doc comment. The header
    *  and every row share one column virtualizer instance (CheckableGrid below), so they always
@@ -341,6 +346,7 @@ const GridHeader = memo(function GridHeader({
   onClearFilter: (key: string) => void;
   connectionId?: string;
   entityLogicalName?: string;
+  showRowCheckbox: boolean;
 }) {
   // TEMP diagnostic — see the matching comment on GridRowView's own counter above; same idea, so
   // a header that's *also* re-executing every scroll tick (vs. only GridRowView) narrows down
@@ -390,9 +396,11 @@ const GridHeader = memo(function GridHeader({
   return (
     <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
       <tr>
-        <th className="px-3 py-2" style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
-          <input type="checkbox" checked={allRowsChecked} onChange={onToggleAllRows} />
-        </th>
+        {showRowCheckbox && (
+          <th className="px-3 py-2" style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
+            <input type="checkbox" checked={allRowsChecked} onChange={onToggleAllRows} />
+          </th>
+        )}
         {leftSpacerWidth > 0 && <th aria-hidden="true" style={{ width: leftSpacerWidth }} />}
         {visibleColumns.map((c) => {
           const width = c.width ?? DEFAULT_COLUMN_WIDTH_PX;
@@ -537,6 +545,7 @@ export default function CheckableGrid({
   renderColumnBadge,
   connectionId,
   entityLogicalName,
+  showRowCheckbox = true,
 }: {
   columns: GridColumn[];
   rows: GridRow[];
@@ -550,6 +559,12 @@ export default function CheckableGrid({
    *  connection to search it against, passed straight through to `LookupPickerModal`. */
   connectionId?: string;
   entityLogicalName?: string;
+  /** Set to false for a plain query-result display with no "select rows for a bulk action"
+   *  concept (e.g. SQL4CDS/FetchXML Builder's SELECT results) — hides the row/select-all checkbox
+   *  column but keeps every other CheckableGrid feature (sort, Filter by, column show/hide,
+   *  per-type cell editors when `editable` is set). Every existing caller that imports/copies/
+   *  migrates rows keeps the checkbox (default true) — this is purely additive. */
+  showRowCheckbox?: boolean;
 }) {
   // TEMP diagnostic — the parent's own render count is *expected* to climb fast during a scroll
   // drag (the virtualizer's internal scroll-offset state lives here, so that's just it doing its
@@ -718,11 +733,13 @@ export default function CheckableGrid({
           <div className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
             {hasActiveFilter ? (
               <>
-                共 {rows.length} 行（筛选后 {displayRows.length} 行），已选 {checkedRowCount} 行
+                共 {rows.length} 行（筛选后 {displayRows.length} 行）
+                {showRowCheckbox && <>，已选 {checkedRowCount} 行</>}
               </>
             ) : (
               <>
-                共 {rows.length} 行，已选 {checkedRowCount} 行
+                共 {rows.length} 行
+                {showRowCheckbox && <>，已选 {checkedRowCount} 行</>}
               </>
             )}
           </div>
@@ -741,6 +758,7 @@ export default function CheckableGrid({
               onClearFilter={handleClearFilter}
               connectionId={connectionId}
               entityLogicalName={entityLogicalName}
+              showRowCheckbox={showRowCheckbox}
             />
             <tbody>
               {topSpacerHeight > 0 && (
@@ -750,7 +768,7 @@ export default function CheckableGrid({
                    *  a colSpan longer than the table's actual column tracks is simply clamped by
                    *  the browser — safer than trying to keep this in exact lockstep with whatever
                    *  the column window happens to be on a given render. */}
-                  <td colSpan={checkedColumns.length + 3} />
+                  <td colSpan={checkedColumns.length + (showRowCheckbox ? 3 : 2)} />
                 </tr>
               )}
               {virtualRows.map((virtualRow) => {
@@ -775,12 +793,13 @@ export default function CheckableGrid({
                     onOpenLookupEditor={openLookupEditor}
                     connectionId={connectionId}
                     entityLogicalName={entityLogicalName}
+                    showRowCheckbox={showRowCheckbox}
                   />
                 );
               })}
               {bottomSpacerHeight > 0 && (
                 <tr style={{ height: bottomSpacerHeight }} aria-hidden="true">
-                  <td colSpan={checkedColumns.length + 3} />
+                  <td colSpan={checkedColumns.length + (showRowCheckbox ? 3 : 2)} />
                 </tr>
               )}
             </tbody>
