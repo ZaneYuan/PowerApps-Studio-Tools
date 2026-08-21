@@ -2,6 +2,8 @@
 using System.Data;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
+using MsdPpTools.Desktop.Diagnostics;
 using MsdPpTools.Desktop.Update;
 
 namespace MsdPpTools.Desktop;
@@ -14,6 +16,42 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // No handler existed before this — any unhandled exception anywhere (including one a
+        // buggy third-party IME's injected TSF hooks trigger by calling back into our code at a
+        // moment it doesn't expect, a real crash seen in practice: Exception Code 0xe0434352 —
+        // the CLR's own "unhandled managed exception" marker, not a native access violation, so
+        // catchable in principle — with Baidu's IME DLLs loaded in-process at the time) took the
+        // entire process down with it. We can't fix a third-party binary's own bug, but we don't
+        // have to let it kill an app that has unsaved SQL/data-copy state in open tabs either.
+        // DispatcherUnhandledException covers the UI thread (where IME/input callbacks land) and
+        // is the one case actually recoverable — Handled = true keeps the app running instead of
+        // dying. AppDomain.UnhandledException and TaskScheduler.UnobservedTaskException can't
+        // stop what's already happening by the time they fire, but still get logged so a future
+        // crash leaves a trace in our own log instead of only in a vendor crash-reporter's temp
+        // file that vanishes the moment its dialog is dismissed.
+        DispatcherUnhandledException += (_, args) =>
+        {
+            CrashLog.Write("DispatcherUnhandledException", args.Exception);
+            MessageBox.Show(
+                $"程序遇到了一个未预期的错误，已记录到日志（%AppData%\\MsdPpTools\\crash.log），将尝试继续运行：\n\n{args.Exception.Message}",
+                "发生错误",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            args.Handled = true;
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception ex)
+            {
+                CrashLog.Write("AppDomain.UnhandledException", ex);
+            }
+        };
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            CrashLog.Write("TaskScheduler.UnobservedTaskException", args.Exception);
+            args.SetObserved();
+        };
 
         // The main window shows immediately, unconditionally — the update check runs after,
         // on a background thread. It used to run *before* MainWindow.Show(), gating every
