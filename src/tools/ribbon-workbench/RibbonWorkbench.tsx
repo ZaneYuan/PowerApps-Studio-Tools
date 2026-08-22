@@ -14,14 +14,7 @@ import {
 } from "./dataverseOps";
 import { readRibbonDiffXml, writeRibbonDiffXml } from "./ribbonXml";
 import { decompressRibbonXml, parseRibbonTree, type RibbonTabNode } from "./effectiveRibbon";
-import {
-  appendIntoContainer,
-  buildAddButtonCustomAction,
-  buildHideCustomAction,
-  commandDefinitionExists,
-  existingCustomActionIds,
-  parseCustomActions,
-} from "./customActions";
+import { applyAddButtonAction as applyAddButtonActionPure, applyHideAction as applyHideActionPure, parseCustomActions } from "./customActions";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -174,54 +167,36 @@ export default function RibbonWorkbench() {
 
   function applyHideAction() {
     setGuidedError(null);
-    const targetId = hideTargetId.trim();
-    if (!targetId) {
-      setGuidedError("请先填写（或从上面的树里点选）要隐藏的按钮/控件的 Id。");
+    const result = applyHideActionPure(ribbonXml, hideTargetId);
+    if ("error" in result) {
+      setGuidedError(result.error);
       return;
     }
-    const hideActionId = `${targetId}.Hide`;
-    if (existingCustomActionIds(ribbonXml).has(hideActionId)) {
-      setGuidedError(`已经存在一个 Id 为 "${hideActionId}" 的 CustomAction/HideCustomAction，换一个目标或先去掉已有的。`);
-      return;
-    }
-    const fragment = buildHideCustomAction({ hideActionId, location: targetId });
-    setRibbonXml((prev) => appendIntoContainer(prev, "CustomActions", [fragment]));
+    setRibbonXml(result.xml);
     setHideTargetId("");
   }
 
   function applyAddButtonAction() {
     setGuidedError(null);
     if (!entityName.trim()) return;
-    if (!addLocation.trim() || !addLabelText.trim() || !addWebResource.trim() || !addFunctionName.trim()) {
-      setGuidedError("请填写完整：目标位置、按钮文字、Web Resource 名称、函数名。");
+    const result = applyAddButtonActionPure(
+      ribbonXml,
+      {
+        entityName: entityName.trim(),
+        solutionUniqueName,
+        location: addLocation,
+        labelText: addLabelText,
+        toolTipTitle: addToolTip,
+        webResourceName: addWebResource,
+        functionName: addFunctionName,
+      },
+      Date.now().toString(36), // only actually used if a collision is detected — see customActions.ts's doc comment
+    );
+    if ("error" in result) {
+      setGuidedError(result.error);
       return;
     }
-    const slug = addLabelText.trim().replace(/[^A-Za-z0-9]/g, "") || "Button";
-    const base = `${solutionUniqueName || "custom"}.${entityName.trim()}.${slug}`;
-    let customActionId = `${base}.CustomAction`;
-    let commandId = `${base}.Command`;
-    let buttonId = `${base}.Button`;
-    const existingIds = existingCustomActionIds(ribbonXml);
-    if (existingIds.has(customActionId) || commandDefinitionExists(ribbonXml, commandId)) {
-      // Same label used twice — disambiguate instead of silently colliding with the earlier one.
-      const suffix = Date.now().toString(36);
-      customActionId = `${base}.${suffix}.CustomAction`;
-      commandId = `${base}.${suffix}.Command`;
-      buttonId = `${base}.${suffix}.Button`;
-    }
-    const { customAction, commandDefinition } = buildAddButtonCustomAction({
-      customActionId,
-      location: addLocation.trim(),
-      commandId,
-      buttonId,
-      labelText: addLabelText.trim(),
-      toolTipTitle: addToolTip.trim() || undefined,
-      webResourceName: addWebResource.trim(),
-      functionName: addFunctionName.trim(),
-    });
-    let next = appendIntoContainer(ribbonXml, "CustomActions", [customAction]);
-    next = appendIntoContainer(next, "CommandDefinitions", [commandDefinition]);
-    setRibbonXml(next);
+    setRibbonXml(result.xml);
     setAddLabelText("");
     setAddToolTip("");
     setAddWebResource("");

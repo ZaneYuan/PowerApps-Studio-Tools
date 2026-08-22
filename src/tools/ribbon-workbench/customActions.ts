@@ -162,3 +162,72 @@ export function commandDefinitionExists(ribbonDiffXmlText: string, commandId: st
   if (!container) return false;
   return findChildren(container, "commanddefinition").some((el) => el.getAttribute("Id") === commandId);
 }
+
+export type GuidedActionResult = { xml: string } | { error: string };
+
+/** Pure core of RibbonWorkbench.tsx's "hide an existing button" guided form: names the
+ *  HideCustomAction `${targetId}.Hide` (this app's own convention, not a Dataverse requirement)
+ *  and refuses to apply if that Id is already in use — Dataverse itself doesn't reject a
+ *  duplicate Id at save time in any obviously diagnosable way, so this is the only guard against
+ *  it. Extracted out of the component purely so this collision path (never covered before) is
+ *  directly unit-testable without React. */
+export function applyHideAction(ribbonDiffXmlText: string, targetId: string): GuidedActionResult {
+  const trimmed = targetId.trim();
+  if (!trimmed) return { error: "请先填写（或从上面的树里点选）要隐藏的按钮/控件的 Id。" };
+  const hideActionId = `${trimmed}.Hide`;
+  if (existingCustomActionIds(ribbonDiffXmlText).has(hideActionId)) {
+    return { error: `已经存在一个 Id 为 "${hideActionId}" 的 CustomAction/HideCustomAction，换一个目标或先去掉已有的。` };
+  }
+  const fragment = buildHideCustomAction({ hideActionId, location: trimmed });
+  return { xml: appendIntoContainer(ribbonDiffXmlText, "CustomActions", [fragment]) };
+}
+
+export interface ApplyAddButtonActionParams {
+  entityName: string;
+  solutionUniqueName: string;
+  location: string;
+  labelText: string;
+  toolTipTitle: string;
+  webResourceName: string;
+  functionName: string;
+}
+
+/** Pure core of RibbonWorkbench.tsx's "add a JS-function button" guided form: builds the
+ *  Id/Command/Button triad from `<solution>.<entity>.<slug-of-label>`, and — since two buttons
+ *  with the same label would otherwise collide on that exact triad — falls back to appending
+ *  `disambiguationSuffix` (the component passes `Date.now().toString(36)`; a test passes a fixed
+ *  string) the moment a collision is actually detected, never as a matter of course. Extracted out
+ *  of the component so this disambiguation path (never covered before) is directly unit-testable. */
+export function applyAddButtonAction(
+  ribbonDiffXmlText: string,
+  params: ApplyAddButtonActionParams,
+  disambiguationSuffix: string,
+): GuidedActionResult {
+  if (!params.location.trim() || !params.labelText.trim() || !params.webResourceName.trim() || !params.functionName.trim()) {
+    return { error: "请填写完整：目标位置、按钮文字、Web Resource 名称、函数名。" };
+  }
+  const slug = params.labelText.trim().replace(/[^A-Za-z0-9]/g, "") || "Button";
+  const base = `${params.solutionUniqueName || "custom"}.${params.entityName.trim()}.${slug}`;
+  let customActionId = `${base}.CustomAction`;
+  let commandId = `${base}.Command`;
+  let buttonId = `${base}.Button`;
+  const existingIds = existingCustomActionIds(ribbonDiffXmlText);
+  if (existingIds.has(customActionId) || commandDefinitionExists(ribbonDiffXmlText, commandId)) {
+    customActionId = `${base}.${disambiguationSuffix}.CustomAction`;
+    commandId = `${base}.${disambiguationSuffix}.Command`;
+    buttonId = `${base}.${disambiguationSuffix}.Button`;
+  }
+  const { customAction, commandDefinition } = buildAddButtonCustomAction({
+    customActionId,
+    location: params.location.trim(),
+    commandId,
+    buttonId,
+    labelText: params.labelText.trim(),
+    toolTipTitle: params.toolTipTitle.trim() || undefined,
+    webResourceName: params.webResourceName.trim(),
+    functionName: params.functionName.trim(),
+  });
+  let next = appendIntoContainer(ribbonDiffXmlText, "CustomActions", [customAction]);
+  next = appendIntoContainer(next, "CommandDefinitions", [commandDefinition]);
+  return { xml: next };
+}

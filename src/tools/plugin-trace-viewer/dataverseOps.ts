@@ -6,7 +6,7 @@ async function fetchDataverse<T>(connectionId: string, path: string): Promise<T>
   return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
 }
 
-function buildFilterClauses(filters: TraceFilters): string[] {
+export function buildFilterClauses(filters: TraceFilters): string[] {
   const clauses: string[] = [];
   if (filters.typeName.trim()) {
     clauses.push(`contains(typename,'${escapeODataString(filters.typeName.trim())}')`);
