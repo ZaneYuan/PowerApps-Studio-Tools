@@ -18,11 +18,17 @@ describe("parseSql — simple SELECT", () => {
     expect(r.select).toBeNull();
   });
 
-  it("strips the _..._value OData wrapper from $select/$orderby (real field names, not JSON property names)", () => {
+  it("preserves the _..._value OData wrapper in $select/$orderby as written, does not strip it", () => {
+    // Confirmed against a live org (2026-08-22 integration test run): Dataverse's Web API
+    // rejects a Lookup column's *bare* name in both $select and $orderby outright ("Could not
+    // find a property named ...") — only the `_x_value` shadow-property form works there. An
+    // earlier version of this code stripped the wrapper unconditionally on the (wrong) theory
+    // that the wrapped form was never valid in $select, which broke every SELECT/ORDER BY —
+    // including inside an IN (SELECT ...) subquery — that named a Lookup column correctly.
     const r = parseSql("SELECT _bupa_language_value FROM bupa_translation ORDER BY _bupa_language_value");
     if (r.kind !== "select-simple") throw new Error(`expected select-simple, got ${r.kind}`);
-    expect(r.select).toBe("bupa_language");
-    expect(r.orderby).toBe("bupa_language");
+    expect(r.select).toBe("_bupa_language_value");
+    expect(r.orderby).toBe("_bupa_language_value");
   });
 
   it("adds the _..._value wrapper to a $filter comparison only when the literal looks like a GUID", () => {

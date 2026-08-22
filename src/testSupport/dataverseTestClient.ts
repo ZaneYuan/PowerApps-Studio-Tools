@@ -1,13 +1,19 @@
 // Real-Dataverse HTTP client for the integration test suite (`npm run test:integration`) — talks
 // directly to ZaneTest over the network, bypassing this app's own native bridge entirely (that
 // bridge only exists inside the WebView2-hosted desktop shell; these tests run as a plain Node
-// process under Vitest). Auth is a cached MSAL token redeemed silently — see
-// scripts/dataverse-test-login.mjs for the one-time interactive login that creates the cache this
-// reads. Deliberately NOT wired into the app's own dataverseOps.ts functions (which all go through
-// callNative/native/bridge.ts) — this only ever talks to Dataverse directly, on purpose, so a bug
-// in the native bridge itself can't mask a real API mismatch these tests exist to catch.
-import { PublicClientApplication, type AccountInfo } from "@azure/msal-node";
-import { existsSync } from "node:fs";
+// process under Vitest). Deliberately NOT wired into the app's own dataverseOps.ts functions
+// (which all go through callNative/native/bridge.ts) — this only ever talks to Dataverse
+// directly, on purpose, so a bug in the native bridge itself can't mask a real API mismatch these
+// tests exist to catch.
+//
+// Two auth paths, tried in this order:
+// 1. Client credentials (app-only, non-interactive) — the client secret lives in a gitignored
+//    Obsidian note (CREDENTIALS_MD_PATH below), never in this repo. Preferred when present: no
+//    login step, no token-expiry-driven re-auth needed for a long test marathon.
+// 2. The older interactive public-client flow (scripts/dataverse-test-login.mjs) — falls back to
+//    this on a machine without that Obsidian note (e.g. a teammate's, or CI).
+import { ConfidentialClientApplication, PublicClientApplication, type AccountInfo } from "@azure/msal-node";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -22,8 +28,35 @@ const CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d";
 export const TEST_ORG_URL = "https://org0475e5da.crm5.dynamics.com";
 const API_BASE = `${TEST_ORG_URL}/api/data/v9.2/`;
 
+// Absolute path on this machine only — not a secret itself (the file it points to is gitignored
+// in the Obsidian vault repo, see that repo's .gitignore). `existsSync` below makes this entirely
+// optional: a machine without this exact path just falls through to the interactive-cache flow.
+const CREDENTIALS_MD_PATH =
+  "D:/Material/Documents/obsidian3/ObsidianLocal/01-Projects/MSD365-PP-Tools/Tests/ZaneYuan.md";
+
+interface ClientCredentialsConfig {
+  clientId: string;
+  clientSecret: string;
+  tenantId: string;
+}
+
+let clientCredsConfig: ClientCredentialsConfig | null | undefined;
+function loadClientCredentials(): ClientCredentialsConfig | null {
+  if (clientCredsConfig !== undefined) return clientCredsConfig;
+  if (!existsSync(CREDENTIALS_MD_PATH)) {
+    clientCredsConfig = null;
+    return null;
+  }
+  const text = readFileSync(CREDENTIALS_MD_PATH, "utf-8");
+  const clientId = text.match(/"clientId":\s*"([^"]+)"/)?.[1];
+  const clientSecret = text.match(/"clientSecret":\s*"([^"]+)"/)?.[1];
+  const tenantId = text.match(/"tenantId":\s*"([^"]+)"/)?.[1];
+  clientCredsConfig = clientId && clientSecret && tenantId ? { clientId, clientSecret, tenantId } : null;
+  return clientCredsConfig;
+}
+
 export function hasTestCredentials(): boolean {
-  return existsSync(CACHE_PATH);
+  return loadClientCredentials() !== null || existsSync(CACHE_PATH);
 }
 
 const cachePlugin = {
@@ -46,12 +79,31 @@ function pca(): PublicClientApplication {
   return pcaInstance;
 }
 
+let ccaInstance: ConfidentialClientApplication | null = null;
+function cca(creds: ClientCredentialsConfig): ConfidentialClientApplication {
+  if (!ccaInstance) {
+    ccaInstance = new ConfidentialClientApplication({
+      auth: { clientId: creds.clientId, authority: `https://login.microsoftonline.com/${creds.tenantId}`, clientSecret: creds.clientSecret },
+    });
+  }
+  return ccaInstance;
+}
+
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
 async function getAccessToken(): Promise<string> {
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
-  if (!hasTestCredentials()) {
-    throw new Error("没有找到 .dataverse-test-cache.json —— 先跑一次 `node scripts/dataverse-test-login.mjs` 完成一次性交互式登录。");
+
+  const creds = loadClientCredentials();
+  if (creds) {
+    const result = await cca(creds).acquireTokenByClientCredential({ scopes: [`${TEST_ORG_URL}/.default`] });
+    if (!result) throw new Error("acquireTokenByClientCredential 没有返回 token（意料之外）。");
+    cachedToken = { value: result.accessToken, expiresAt: result.expiresOn?.getTime() ?? Date.now() + 55 * 60_000 };
+    return cachedToken.value;
+  }
+
+  if (!existsSync(CACHE_PATH)) {
+    throw new Error("没有找到测试凭据 —— 要么在 ZaneYuan.md 放一份 client credentials，要么先跑一次 `node scripts/dataverse-test-login.mjs` 完成一次性交互式登录。");
   }
   const app = pca();
   const accounts = await app.getTokenCache().getAllAccounts();

@@ -315,26 +315,35 @@ function stripValueWrapper(field: string): string {
  *  same problem (fetchxml-to-odata/convert.ts's resolveFieldName) — without real attribute-type
  *  metadata to consult synchronously (parseSql runs on every keystroke for the live preview),
  *  "the compared literal looks like a GUID and the field isn't already wrapped" is the same
- *  good-enough signal used there. Leaves the field alone (a) if it's already wrapped — an
- *  explicit `_x_value` the user typed keeps working exactly as before — or (b) if the literal
- *  doesn't look like a GUID, since wrapping a non-Lookup column would just break the request. */
-function addValueWrapperForGuidFilter(field: string, literalNode: SqlNode): string {
+ *  good-enough signal used there. Leaves the field alone when: (a) it's already wrapped — an
+ *  explicit `_x_value` the user typed keeps working exactly as before; (b) the literal doesn't
+ *  look like a GUID, since wrapping a non-Lookup column would just break the request; or (c) the
+ *  field is (a guess at) the entity's own primary id attribute — confirmed against a live org
+ *  that Dataverse rejects a wrapped primary key outright ("entity doesn't contain attribute with
+ *  Name = '_xid_value'"), unlike an ordinary Lookup column, which is only ever addressed through
+ *  the wrapped form. This matters most for `WHERE <table>.<primarykey> IN (SELECT ...)` — the
+ *  single most natural subquery shape — which resolveSqlSubqueries always splices in as a list of
+ *  real GUIDs, so without this exclusion every such subquery 400'd. Same guessing convention as
+ *  guessPrimaryIdAttribute elsewhere in this file: no metadata round-trip, editable/inspectable
+ *  rather than silently trusted. */
+function addValueWrapperForGuidFilter(field: string, literalNode: SqlNode, entityLogicalName: string): string {
   if (/^_.*_value$/.test(field)) return field;
+  if (field.toLowerCase() === guessPrimaryIdAttribute(entityLogicalName).toLowerCase()) return field;
   if (!isStringLiteral(literalNode) || !GUID_LOOSE_RE.test(stringLiteralValue(literalNode))) return field;
   return `_${field}_value`;
 }
 
-function translateWhere(node: SqlNode, warnings: string[]): string {
+function translateWhere(node: SqlNode, warnings: string[], entityLogicalName: string): string {
   const op = node.operator;
 
   if (op === "AND" || op === "OR") {
-    const left = translateWhere(node.left!, warnings);
-    const right = translateWhere(node.right!, warnings);
+    const left = translateWhere(node.left!, warnings, entityLogicalName);
+    const right = translateWhere(node.right!, warnings, entityLogicalName);
     return `(${left} ${op.toLowerCase()} ${right})`;
   }
 
   if (op && op in COMPARISON_OPERATORS) {
-    const field = addValueWrapperForGuidFilter(columnName(node.left!), node.right!);
+    const field = addValueWrapperForGuidFilter(columnName(node.left!), node.right!, entityLogicalName);
     const lit = formatLiteral(node.right!);
     return `${field} ${COMPARISON_OPERATORS[op]} ${lit}`;
   }
@@ -377,7 +386,7 @@ function translateWhere(node: SqlNode, warnings: string[]): string {
     // the target field's real type — confirmed against a live org (int/picklist values sent
     // unquoted come back "Cannot convert the literal '0' to the expected type 'Edm.String'").
     const allGuidLike = right.value.every((v) => isStringLiteral(v) && GUID_LOOSE_RE.test(stringLiteralValue(v)));
-    const resolvedField = allGuidLike ? addValueWrapperForGuidFilter(field, right.value[0]) : field;
+    const resolvedField = allGuidLike ? addValueWrapperForGuidFilter(field, right.value[0], entityLogicalName) : field;
     const values = right.value.map((v) => quoteString(String(v.value))).join(",");
     const fn = op === "IN" ? "In" : "NotIn";
     return `Microsoft.Dynamics.CRM.${fn}(PropertyName='${resolvedField}',PropertyValues=[${values}])`;
@@ -386,6 +395,19 @@ function translateWhere(node: SqlNode, warnings: string[]): string {
   throw new Error(`不支持的操作符 "${op ?? node.type}"`);
 }
 
+// translateSelectColumns/translateOrderBy deliberately do NOT call stripValueWrapper (unlike
+// parseColumnRefNormalized, used only by the FetchXML/JOIN path where bare names are correct) —
+// confirmed against a live org that OData's Web API rejects a Lookup's *bare* attribute name in
+// both $select and $orderby outright ("Could not find a property named 'x' on type '...'"); only
+// the `_x_value` shadow-property form works there. The earlier version of this code stripped the
+// wrapper unconditionally on the theory that the wrapped form was "never" needed in $select — that
+// was backwards and broke every SELECT/ORDER BY (including inside an IN (SELECT ...) subquery)
+// that named a Lookup column. Preserving whatever the user wrote (wrapped or bare) is the correct
+// behavior here: a Lookup column requires the wrapped form and there's no synchronous metadata
+// available to add it automatically (same fundamental constraint addValueWrapperForGuidFilter's
+// own doc comment describes for $filter), so this SQL layer's contract for $select/$orderby stays
+// "you must write the real Web API property name" — this fix stops actively breaking the one case
+// (writing it correctly) it used to sabotage.
 function translateSelectColumns(columns: ColumnItem[] | string): string | null {
   if (typeof columns === "string") return null; // some dialects use the literal string "*"
   if (columns.length === 1 && isStar(columns[0].expr)) return null;
@@ -395,7 +417,7 @@ function translateSelectColumns(columns: ColumnItem[] | string): string | null {
       if (c.expr.type !== "column_ref") {
         throw new Error("SELECT 列表暂不支持函数/聚合（如 COUNT），只支持列名");
       }
-      return stripValueWrapper(columnName(c.expr));
+      return columnName(c.expr);
     })
     .join(",");
 }
@@ -410,7 +432,7 @@ function translateOrderBy(orderby: OrderByItem[] | null): string | null {
   if (!orderby) return null;
   return orderby
     .map((o) => {
-      const col = stripValueWrapper(columnName(o.expr));
+      const col = columnName(o.expr);
       return o.type === "DESC" ? `${col} desc` : col;
     })
     .join(",");
@@ -627,15 +649,20 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
       throw new Error("SELECT 列表暂不支持除聚合函数外的表达式，只支持字段名。");
     }
     const ref = parseColumnRefNormalized(expr);
-    const alias = ref.table ?? rootAlias;
-    const target = attrTargets.get(alias);
+    const tableAlias = ref.table ?? rootAlias;
+    const target = attrTargets.get(tableAlias);
     if (!target) throw new Error(`SELECT 列表引用了未知的表别名 "${ref.table}"。`);
-    const key = `${alias}.${ref.column}`;
+    const key = `${tableAlias}.${ref.column}`;
     const isGrouped = groupBySet.has(key);
     if (needsGrouping && !isGrouped) {
       throw new Error(`字段 "${ref.table ? ref.table + "." : ""}${ref.column}" 既不是聚合函数，也没有出现在 GROUP BY 里。`);
     }
-    target.push({ name: ref.column, groupby: isGrouped || undefined });
+    // FetchXML requires an `alias` on EVERY attribute in an aggregate query, not just the
+    // aggregate ones — confirmed against a live org: a groupby attribute with no alias 400s with
+    // "An alias must be specified for every attribute in an aggregate query." (FxAttribute's own
+    // doc comment already said alias is "Required ... when aggregate or groupby is set", but this
+    // branch never actually supplied one before this fix.)
+    target.push({ name: ref.column, groupby: isGrouped || undefined, alias: isGrouped ? (c.as ?? ref.column) : undefined });
     selectedKeys.add(key);
   }
 
@@ -709,7 +736,7 @@ function parseSelect(ast: SelectAst): ParsedStatement {
   const warnings: string[] = [];
   try {
     const select = translateSelectColumns(ast.columns);
-    const filter = ast.where ? translateWhere(ast.where, warnings) : null;
+    const filter = ast.where ? translateWhere(ast.where, warnings, entityLogicalName) : null;
     const orderby = translateOrderBy(ast.orderby);
     const top = ast.top ? String(ast.top.value) : null;
 
@@ -778,7 +805,7 @@ function parseUpdate(ast: UpdateAst): ParsedStatement {
 
   const warnings: string[] = [];
   try {
-    const filter = translateWhere(ast.where, warnings);
+    const filter = translateWhere(ast.where, warnings, table);
     return {
       kind: "mutate",
       action: "update",
@@ -807,7 +834,7 @@ function parseDelete(ast: DeleteAst): ParsedStatement {
 
   const warnings: string[] = [];
   try {
-    const filter = translateWhere(ast.where, warnings);
+    const filter = translateWhere(ast.where, warnings, table);
     return {
       kind: "mutate",
       action: "delete",
@@ -989,7 +1016,27 @@ export function parseSql(sql: string): ParsedStatement {
   try {
     astResult = parser.astify(sql, { database: "transactsql" });
   } catch (err) {
-    return { kind: "error", error: err instanceof Error ? err.message : String(err) };
+    const message = err instanceof Error ? err.message : String(err);
+    // A genuine syntax error anywhere in a `;`-separated batch makes astify() throw for the
+    // *whole* string at once — there's no per-statement AST to number in that case, only a raw
+    // parser error pointing at a byte offset in the concatenated text (confirmed live: this made
+    // the "第 N 条语句解析失败" message below completely unreachable for actual syntax errors,
+    // only ever firing for a semantically-rejected but syntactically-valid statement, e.g. an
+    // UPDATE with no WHERE). Best-effort recovery: naive-split on `;` (doesn't account for one
+    // inside a string/comment, unlike data-migration's own splitStatements — an acceptable
+    // trade-off here since this only ever affects error *wording*, never which statement
+    // actually executes) and re-parse each piece alone to find which one is broken.
+    const pieces = sql.split(";").map((s) => s.trim()).filter(Boolean);
+    if (pieces.length > 1) {
+      for (let i = 0; i < pieces.length; i++) {
+        try {
+          parser.astify(pieces[i], { database: "transactsql" });
+        } catch (pieceErr) {
+          return { kind: "error", error: `第 ${i + 1} 条语句解析失败：${pieceErr instanceof Error ? pieceErr.message : String(pieceErr)}` };
+        }
+      }
+    }
+    return { kind: "error", error: message };
   }
 
   // Multiple `;`-separated statements astify to an array instead of a single statement object —
