@@ -142,7 +142,10 @@ export interface ImageDetail {
   entityalias: string;
   imagetype: number;
   messagepropertyname: string;
-  attributes1: string | null;
+  // Real Web API logical name is "attributes" — confirmed against a live org (an earlier
+  // "attributes1" guess 400'd with "Invalid property 'attributes1' was found in entity
+  // 'Microsoft.Dynamics.CRM.sdkmessageprocessingstepimage'").
+  attributes: string | null;
   _sdkmessageprocessingstepid_value?: string | null;
 }
 
@@ -151,7 +154,7 @@ const IMAGE_DETAIL_FIELDS = [
   "entityalias",
   "imagetype",
   "messagepropertyname",
-  "attributes1",
+  "attributes",
   // Lookup to the parent step — same `_..._value` requirement as StepDetail's eventhandler.
   "_sdkmessageprocessingstepid_value",
 ];
@@ -216,6 +219,9 @@ export interface RegisterStepInput {
   rank: number;
   filteringAttributes: string;
   unsecureConfig: string;
+  /** Written to sdkmessageprocessingstepsecureconfigs' own "secureconfig" attribute — confirmed
+   *  against a live org (an earlier "value" guess 400'd with "Invalid property 'value' was found
+   *  in entity 'Microsoft.Dynamics.CRM.sdkmessageprocessingstepsecureconfig'"). */
   secureConfig: string;
   deployment: number;
 }
@@ -233,7 +239,7 @@ export async function registerStep(connectionId: string, input: RegisterStepInpu
     const secureConfigRecord = await postDataverse<{ sdkmessageprocessingstepsecureconfigid: string }>(
       connectionId,
       "sdkmessageprocessingstepsecureconfigs",
-      { value: input.secureConfig },
+      { secureconfig: input.secureConfig },
     );
     secureConfigId = secureConfigRecord.sdkmessageprocessingstepsecureconfigid;
   }
@@ -278,7 +284,7 @@ export async function registerImage(connectionId: string, input: RegisterImageIn
     entityalias: input.alias,
     imagetype: input.imageType,
     messagepropertyname: input.messagePropertyName,
-    attributes1: input.attributes,
+    attributes: input.attributes,
     [`${stepNav}@odata.bind`]: `/sdkmessageprocessingsteps(${input.stepId})`,
   });
 }
@@ -320,7 +326,7 @@ export async function updateStep(connectionId: string, stepId: string, input: Up
   const existingId = existing._sdkmessageprocessingstepsecureconfigid_value;
   if (existingId) {
     await patchDataverse(connectionId, `sdkmessageprocessingstepsecureconfigs(${existingId})`, {
-      value: input.secureConfig,
+      secureconfig: input.secureConfig,
     });
   } else {
     const secureConfigNav = await getBindNavigationProperty(
@@ -331,7 +337,7 @@ export async function updateStep(connectionId: string, stepId: string, input: Up
     const created = await postDataverse<{ sdkmessageprocessingstepsecureconfigid: string }>(
       connectionId,
       "sdkmessageprocessingstepsecureconfigs",
-      { value: input.secureConfig },
+      { secureconfig: input.secureConfig },
     );
     await patchDataverse(connectionId, `sdkmessageprocessingsteps(${stepId})`, {
       [`${secureConfigNav}@odata.bind`]: `/sdkmessageprocessingstepsecureconfigs(${created.sdkmessageprocessingstepsecureconfigid})`,
@@ -346,13 +352,21 @@ export interface UpdateImageInput {
   attributes: string;
 }
 
-export async function updateImage(connectionId: string, imageId: string, input: UpdateImageInput): Promise<void> {
-  await patchDataverse(connectionId, `sdkmessageprocessingstepimages(${imageId})`, {
-    name: input.alias,
-    entityalias: input.alias,
-    imagetype: input.imageType,
-    messagepropertyname: input.messagePropertyName,
-    attributes1: input.attributes,
+/** sdkmessageprocessingstepimages rejects PATCH outright — confirmed against a live org: even a
+ *  single-field, content-unrelated PATCH (just `entityalias` to its own unchanged value) 400s
+ *  with a vague "An unexpected error occurred" (0x80040216). Dataverse doesn't support updating
+ *  an existing image in place; the real Plugin Registration Tool works around the same platform
+ *  limitation by deleting and re-registering. Delete-then-create (not create-then-delete): a step
+ *  can't hold two images of the same imagetype at once, so creating the replacement first would
+ *  itself 400 while the old one still exists. */
+export async function updateImage(connectionId: string, imageId: string, stepId: string, input: UpdateImageInput): Promise<PluginStepImage> {
+  await deleteImage(connectionId, imageId);
+  return registerImage(connectionId, {
+    stepId,
+    alias: input.alias,
+    imageType: input.imageType,
+    messagePropertyName: input.messagePropertyName,
+    attributes: input.attributes,
   });
 }
 

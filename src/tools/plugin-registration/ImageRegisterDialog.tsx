@@ -23,7 +23,10 @@ interface ImageRegisterDialogProps {
   primaryEntity: string | null;
   editImageId?: string;
   onClose: () => void;
-  onSaved: () => void;
+  /** `newImageId` is only set for an edit — updateImage deletes and re-registers the record (see
+   *  its own doc comment for why), so a caller tracking the edited image by its old id needs the
+   *  new one to keep pointing at a record that still exists. */
+  onSaved: (newImageId?: string) => void;
 }
 
 export default function ImageRegisterDialog({
@@ -67,9 +70,9 @@ export default function ImageRegisterDialog({
         setAlias(d.entityalias);
         setImageType(d.imagetype);
         setMessagePropertyName(d.messagepropertyname);
-        const attrs = (d.attributes1 ?? "").split(",").map((a) => a.trim()).filter(Boolean);
+        const attrs = (d.attributes ?? "").split(",").map((a) => a.trim()).filter(Boolean);
         setSelectedAttributes(new Set(attrs));
-        setAttributesText(d.attributes1 ?? "");
+        setAttributesText(d.attributes ?? "");
 
         // The image record itself doesn't carry its parent step's entity — only needed here
         // (edit mode) since create mode already gets it as a prop from the tree's step row.
@@ -107,12 +110,13 @@ export default function ImageRegisterDialog({
     const attributes = attributeOptions ? Array.from(selectedAttributes).join(",") : attributesText;
     try {
       if (isEdit && editImageId) {
-        await updateImage(connectionId, editImageId, {
+        const updated = await updateImage(connectionId, editImageId, stepId, {
           alias: alias.trim(),
           imageType,
           messagePropertyName,
           attributes,
         });
+        onSaved(updated.sdkmessageprocessingstepimageid);
       } else {
         await registerImage(connectionId, {
           stepId,
@@ -121,8 +125,8 @@ export default function ImageRegisterDialog({
           messagePropertyName,
           attributes,
         });
+        onSaved();
       }
-      onSaved();
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
     } finally {

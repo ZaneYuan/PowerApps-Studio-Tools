@@ -391,10 +391,10 @@ export default function PluginRegistration() {
           primaryEntity={dialog.primaryEntity}
           editImageId={dialog.editImageId}
           onClose={() => setDialog(null)}
-          onSaved={() => {
+          onSaved={(newImageId) => {
             treeRef.current?.invalidateChildrenOf("step", dialog.stepId);
-            if (dialog.editImageId && selected?.kind === "image" && selected.id === dialog.editImageId) {
-              void loadDetail("image", selected.id);
+            if (dialog.editImageId && selected?.kind === "image" && selected.id === dialog.editImageId && newImageId) {
+              void loadDetail("image", newImageId);
             }
             setDialog(null);
           }}
