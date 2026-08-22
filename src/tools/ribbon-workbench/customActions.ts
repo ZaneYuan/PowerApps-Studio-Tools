@@ -67,10 +67,18 @@ export function buildHideCustomAction(params: { hideActionId: string; location: 
 export interface AddButtonParams {
   /** Unique Id for the new CustomAction wrapper (convention: `<prefix>.<entity>.<name>.CustomAction`). */
   customActionId: string;
-  /** Where to insert the button — an existing container's Id + `._children` to add as a new
-   *  sibling (e.g. a Tab/Group Id picked from the read-only tree), or an existing button's own Id
-   *  to replace it outright. Not validated here — Dataverse itself is the source of truth for
-   *  whether a given Location resolves to something real. */
+  /** Where to insert the button — an existing button's own Id to replace it outright, or a
+   *  container's *Controls collection* Id + `._children` to add as a new sibling. For a Group,
+   *  that's `<GroupId>.Controls._children`, NOT `<GroupId>._children` — a `<Group>` element's own
+   *  direct children are `<Controls>`/`<Layout>`/`<Sizes>`, not raw buttons, so the real
+   *  insertion point is the nested `<Controls>` element. Confirmed two ways: Microsoft's own real
+   *  worked example (Dynamics 365 Customer Service docs, "Configure Link to conversation button" —
+   *  `Location="Mscrm.Form.account.MainTab.Save.Controls._children"`), and a real integration test
+   *  against ZaneTest (2026-08-21) that caught the missing `.Controls` segment the hard way — the
+   *  button silently never rendered without it, no error either at save time or on publish.
+   *  RibbonWorkbench.tsx's `pickGroupForAdd` appends this suffix automatically when you click a
+   *  Group in the read-only tree; not validated here beyond that — Dataverse itself is the source
+   *  of truth for whether a given Location ultimately resolves to something real. */
   location: string;
   /** Unique Id for the new CommandDefinition (referenced by the Button's `Command` attribute). */
   commandId: string;

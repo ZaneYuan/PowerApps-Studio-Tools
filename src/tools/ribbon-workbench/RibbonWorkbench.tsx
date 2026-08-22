@@ -161,7 +161,15 @@ export default function RibbonWorkbench() {
     if (id) setHideTargetId(id);
   }
   function pickGroupForAdd(id: string | null) {
-    if (id) setAddLocation(`${id}._children`);
+    // A <Group>'s own direct children are things like <Controls>/<Layout>/<Sizes>, not raw
+    // buttons — the real insertion point for "add a button to this group" is the group's nested
+    // <Controls> element, not the group itself. Confirmed against Microsoft's own real worked
+    // example (Dynamics 365 Customer Service docs, "Configure Link to conversation button":
+    // Location="Mscrm.Form.account.MainTab.Save.Controls._children") — a real integration test
+    // run against ZaneTest (2026-08-21) also caught this the hard way: a button added at
+    // "<GroupId>._children" silently never rendered, while the same button at
+    // "<GroupId>.Controls._children" showed up immediately.
+    if (id) setAddLocation(`${id}.Controls._children`);
   }
 
   function applyHideAction() {
@@ -384,7 +392,7 @@ export default function RibbonWorkbench() {
                       <div key={group.id ?? group.labelText} className="py-0.5">
                         <button
                           onClick={() => pickGroupForAdd(group.id)}
-                          title={group.id ? `点击填入"新增按钮"的目标位置：${group.id}._children` : undefined}
+                          title={group.id ? `点击填入"新增按钮"的目标位置：${group.id}.Controls._children` : undefined}
                           className="rounded px-1 text-left text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
                         >
                           Group: {group.labelText || group.id || "(未命名)"}
