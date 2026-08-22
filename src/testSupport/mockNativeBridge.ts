@@ -33,10 +33,15 @@ async function handleCall(method: string, params: Record<string, unknown>): Prom
   const p = params as unknown as DataverseRequestParams;
   const headers: Record<string, string> = {};
   if (p.solutionUniqueName) headers["MSCRM.SolutionUniqueName"] = p.solutionUniqueName;
-  if (p.includeFormattedValues) {
-    headers.Prefer =
-      'return=representation,odata.include-annotations="OData.Community.Display.V1.FormattedValue,Microsoft.Dynamics.CRM.lookuplogicalname"';
-  }
+  // Mirrors DataverseApiClient.cs exactly: the real C# layer sends `Prefer: return=representation`
+  // on every request unconditionally (not just writes — harmless on GET/DELETE), with the
+  // annotations clause appended only when includeFormattedValues is set. This mock previously only
+  // sent Prefer when includeFormattedValues was true, which silently diverged from production and
+  // made a plain POST come back 204 (empty body) here while the real app always gets the created
+  // record inline — masking exactly the class of bug this test suite exists to catch.
+  headers.Prefer = p.includeFormattedValues
+    ? 'return=representation,odata.include-annotations="OData.Community.Display.V1.FormattedValue,Microsoft.Dynamics.CRM.lookuplogicalname"'
+    : "return=representation";
   const res = await dataverseTestRequest(p.method, p.path, p.body, headers);
   return res.body;
 }

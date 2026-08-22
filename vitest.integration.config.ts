@@ -18,5 +18,12 @@ export default defineConfig({
     // is where table creation/teardown lives for most of these suites.
     testTimeout: 60_000,
     hookTimeout: 180_000,
+    // Vitest's default runs test files in parallel workers — fine for pure logic, but every suite
+    // here that calls createTable/createColumn hits Dataverse's own org-wide
+    // CustomizationLockException the moment two files do it at the same moment ("Cannot start
+    // another [EntityCustomization] because there is a previous [EntityCustomization] running at
+    // this moment"), a real environment constraint, not a bug in this app or these tests. Force
+    // sequential file execution so table/column/relationship-creating suites never race each other.
+    fileParallelism: false,
   },
 });
