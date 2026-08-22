@@ -45,6 +45,27 @@ export async function fetchSteps(connectionId: string, pluginTypeId: string): Pr
   return res.value;
 }
 
+/** Web API's default page size (5000) — the same cap this codebase's own record-merge
+ *  countMatchingCapped doc comment documents Dataverse silently applying to $count once the real
+ *  total reaches it. Confirmed live: this org alone already has ≥5000 sdkmessageprocessingsteps
+ *  rows (mostly Microsoft's own built-in ones), so a single unpaginated GET here was silently
+ *  truncating fetchAllSteps to just the first page — a freshly registered step could be
+ *  completely invisible to the tree's own search dropdown depending on where its name happened
+ *  to sort. Follows @odata.nextLink until the real result set is exhausted. */
+async function fetchAllPages<T>(connectionId: string, path: string): Promise<T[]> {
+  const out: T[] = [];
+  const apiVersionSegment = "/api/data/v9.2/";
+  let nextPath: string | null = path;
+  while (nextPath) {
+    const res: { value: T[]; "@odata.nextLink"?: string } = await fetchDataverse(connectionId, nextPath);
+    out.push(...res.value);
+    const next = res["@odata.nextLink"];
+    const idx = next ? next.indexOf(apiVersionSegment) : -1;
+    nextPath = idx >= 0 ? next!.slice(idx + apiVersionSegment.length) : null;
+  }
+  return out;
+}
+
 export interface PluginTypeFlat extends PluginType {
   _pluginassemblyid_value: string;
 }
@@ -53,11 +74,10 @@ export interface PluginTypeFlat extends PluginType {
  *  the tree's search dropdown, which needs to match names across the whole org — fetching this
  *  once beats cascading a per-assembly fetchPluginTypes call for every assembly on screen. */
 export async function fetchAllPluginTypes(connectionId: string): Promise<PluginTypeFlat[]> {
-  const res = await fetchDataverse<{ value: PluginTypeFlat[] }>(
+  return fetchAllPages<PluginTypeFlat>(
     connectionId,
     "plugintypes?$select=plugintypeid,typename,friendlyname,name,_pluginassemblyid_value&$orderby=typename",
   );
-  return res.value;
 }
 
 export interface PluginStepFlat extends PluginStep {
@@ -67,12 +87,11 @@ export interface PluginStepFlat extends PluginStep {
 /** Every step org-wide in a single query, carrying its parent plugin type id — same rationale
  *  as fetchAllPluginTypes, for the search dropdown. */
 export async function fetchAllSteps(connectionId: string): Promise<PluginStepFlat[]> {
-  const res = await fetchDataverse<{ value: PluginStepFlat[] }>(
+  return fetchAllPages<PluginStepFlat>(
     connectionId,
     "sdkmessageprocessingsteps?$select=sdkmessageprocessingstepid,name,stage,mode,rank,statecode,statuscode,_eventhandler_value" +
       "&$orderby=name&$expand=sdkmessageid($select=name),sdkmessagefilterid($select=primaryobjecttypecode)",
   );
-  return res.value;
 }
 
 export async function fetchImages(connectionId: string, stepId: string): Promise<PluginStepImage[]> {
