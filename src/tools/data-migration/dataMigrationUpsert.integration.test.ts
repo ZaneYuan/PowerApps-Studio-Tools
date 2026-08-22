@@ -14,6 +14,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dataverseTestRequest, hasTestCredentials, testRunSuffix } from "../../testSupport/dataverseTestClient";
 import { installMockNativeBridge, uninstallMockNativeBridge } from "../../testSupport/mockNativeBridge";
+import { fetchEntityMeta } from "../../native/metadataService";
 import { createTable } from "../solution-editor/dataverseOps";
 import { updateRow } from "../sql4cds/writeOps";
 
@@ -29,7 +30,10 @@ describe.skipIf(!hasTestCredentials())("Data Migration — upsert-via-PATCH real
   const suffix = testRunSuffix();
   const tableSchema = `${PUBLISHER_PREFIX}_MigrationUpsertTest${suffix}`;
   const tableLogical = tableSchema.toLowerCase();
-  const entitySetName = `${tableLogical}s`;
+  // Never assumed via naive pluralization — a random suffix ending in "s" makes Dataverse's real
+  // pluralizer append "es", not "s" (confirmed live via writeOps.integration.test.ts hitting this
+  // exact case). Read from real metadata in beforeAll instead.
+  let entitySetName = "";
 
   beforeAll(async () => {
     installMockNativeBridge();
@@ -49,9 +53,11 @@ describe.skipIf(!hasTestCredentials())("Data Migration — upsert-via-PATCH real
     // deleted in the preceding ~8 minutes), never in isolation. Real, if narrow, production
     // implication: a user who creates a table and immediately migrates data into it within the
     // same minute could hit this too. Poll until the entity set actually answers before this
-    // file's own tests start, rather than let that environmental timing gap fail them.
+    // file's own tests start (this also doubles as reading the real EntitySetName — see above).
     for (let attempt = 0; ; attempt++) {
       try {
+        const meta = await fetchEntityMeta(FAKE_CONNECTION_ID, tableLogical);
+        entitySetName = meta.entitySetName;
         await dataverseTestRequest("GET", `${entitySetName}?$top=1`);
         break;
       } catch (err) {

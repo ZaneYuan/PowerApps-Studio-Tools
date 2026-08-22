@@ -16,7 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dataverseTestRequest, hasTestCredentials, TEST_ORG_URL, testRunSuffix } from "../../testSupport/dataverseTestClient";
 import { installMockNativeBridge, uninstallMockNativeBridge } from "../../testSupport/mockNativeBridge";
 import { createTable } from "../solution-editor/dataverseOps";
-import { fetchManyToManyInfo, type ManyToManyInfo } from "../../native/metadataService";
+import { fetchEntityMeta, fetchManyToManyInfo, type ManyToManyInfo } from "../../native/metadataService";
 import { deleteIntersectRow, insertIntersectRow, insertRow, resolveIntersectRowValues } from "./writeOps";
 
 const FAKE_CONNECTION_ID = "integration-test";
@@ -27,13 +27,16 @@ describe.skipIf(!hasTestCredentials())("SQL4CDS writeOps — N:N intersect real 
   const suffix = testRunSuffix();
   const table1Schema = `${PUBLISHER_PREFIX}_NnEntity1${suffix}`;
   const table1Logical = table1Schema.toLowerCase();
-  const table1EntitySet = `${table1Logical}s`;
   const table2Schema = `${PUBLISHER_PREFIX}_NnEntity2${suffix}`;
   const table2Logical = table2Schema.toLowerCase();
-  const table2EntitySet = `${table2Logical}s`;
   const relationshipSchemaName = `${PUBLISHER_PREFIX}_nnrel${suffix}`;
   const intersectEntityName = relationshipSchemaName.toLowerCase();
 
+  // Never assumed via naive pluralization — a random suffix ending in "s" makes Dataverse's real
+  // pluralizer append "es", not "s" (confirmed live via writeOps.integration.test.ts hitting this
+  // exact case). Read from real metadata in beforeAll instead.
+  let table1EntitySet = "";
+  let table2EntitySet = "";
   let rel: ManyToManyInfo;
   let e1Id: string;
   let e2Id: string;
@@ -85,6 +88,10 @@ describe.skipIf(!hasTestCredentials())("SQL4CDS writeOps — N:N intersect real 
     const info = await fetchManyToManyInfo(FAKE_CONNECTION_ID, intersectEntityName);
     expect(info, "fetchManyToManyInfo should recognize the freshly created intersect entity").not.toBeNull();
     rel = info!;
+
+    const [meta1, meta2] = await Promise.all([fetchEntityMeta(FAKE_CONNECTION_ID, table1Logical), fetchEntityMeta(FAKE_CONNECTION_ID, table2Logical)]);
+    table1EntitySet = meta1.entitySetName;
+    table2EntitySet = meta2.entitySetName;
 
     const [r1, r2] = await Promise.all([
       insertRow(FAKE_CONNECTION_ID, table1Logical, table1EntitySet, { [`${PUBLISHER_PREFIX}_name`]: `E1 ${suffix}` }),

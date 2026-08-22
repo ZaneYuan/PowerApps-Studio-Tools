@@ -24,7 +24,11 @@ describe.skipIf(!hasTestCredentials())("SQL4CDS writeOps — real Dataverse inte
   const suffix = testRunSuffix();
   const tableSchemaName = `${PUBLISHER_PREFIX}_Sql4CdsWriteTest${suffix}`;
   const tableLogicalName = tableSchemaName.toLowerCase();
-  const entitySetName = `${tableLogicalName}s`; // naive-pluralized default Dataverse assigns a new custom table
+  // Never assumed via naive pluralization (`${tableLogicalName}s`) — read from real metadata in
+  // beforeAll instead. A real, reproducible counterexample: a random suffix ending in "s" makes
+  // Dataverse's actual pluralizer append "es", not "s" (confirmed live — this app's own
+  // metadataService.ts avoids the same guess for exactly this kind of reason elsewhere).
+  let entitySetName = "";
   const boolFieldLogicalName = `${PUBLISHER_PREFIX}_activeflag${suffix}`.toLowerCase();
   const lookupFieldLogicalName = `${PUBLISHER_PREFIX}_accountlookup${suffix}`.toLowerCase();
 
@@ -54,16 +58,11 @@ describe.skipIf(!hasTestCredentials())("SQL4CDS writeOps — real Dataverse inte
       referencingEntity: tableLogicalName,
       relationshipSchemaName: `${PUBLISHER_PREFIX}_account_${tableLogicalName}`,
     });
-    // Confirm Dataverse actually assigned the EntitySetName we assumed (naive pluralization is a
-    // guess this app's own metadataService.ts explicitly avoids relying on elsewhere) — fail
-    // fast with a clear message here rather than a confusing 404 from insertRow later.
     const meta = await dataverseTestRequest<{ EntitySetName: string }>(
       "GET",
       `EntityDefinitions(LogicalName='${tableLogicalName}')?$select=EntitySetName`,
     );
-    if (meta.body.EntitySetName.toLowerCase() !== entitySetName) {
-      throw new Error(`EntitySetName 假设错了：期望 "${entitySetName}"，实际是 "${meta.body.EntitySetName}"——测试里的 entitySetName 常量要跟着改。`);
-    }
+    entitySetName = meta.body.EntitySetName.toLowerCase();
   }, 180_000);
 
   afterAll(async () => {
