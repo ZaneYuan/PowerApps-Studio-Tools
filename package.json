@@ -9,6 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:login": "node scripts/dataverse-test-login.mjs",
     "publish:desktop": "powershell -ExecutionPolicy Bypass -File scripts/publish-desktop.ps1"
   },
   "dependencies": {
@@ -28,6 +30,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@azure/msal-node": "^5.6.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.17",

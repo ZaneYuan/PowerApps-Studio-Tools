@@ -41,11 +41,18 @@ describe("suggestSchemaName", () => {
 });
 
 describe("buildAttributeBody — every one of the 8 basic column types", () => {
-  it.each(ALL_TYPES)("%s produces a body with the matching @odata.type and AttributeType", (type) => {
+  it.each(ALL_TYPES)("%s produces a body with the matching @odata.type", (type) => {
     const body = buildAttributeBody(type, false, BASE_PARAMS);
     expect(body["@odata.type"]).toBe(`Microsoft.Dynamics.CRM.${type}AttributeMetadata`);
-    expect(body.AttributeType).toBe(type);
     expect(body.SchemaName).toBe("ad_testfield");
+  });
+
+  it.each(ALL_TYPES.filter((t) => t !== "MultiSelectPicklist"))("%s's wire AttributeType matches its own type name", (type) => {
+    // MultiSelectPicklist is excluded on purpose — its real wire AttributeType is "Virtual", not
+    // "MultiSelectPicklist" (confirmed against a real Dataverse 500, then against Microsoft's own
+    // docs example — see the dedicated MultiSelectPicklist test below for why).
+    const body = buildAttributeBody(type, false, BASE_PARAMS);
+    expect(body.AttributeType).toBe(type);
   });
 
   it("every type body is JSON-serializable (no undefined/circular values leaking into the POST payload)", () => {
@@ -97,6 +104,10 @@ describe("buildAttributeBody — every one of the 8 basic column types", () => {
 
   it("Boolean wires up a Boolean-type OptionSet with True/False labels, defaulting to 是/否", () => {
     const body = buildAttributeBody("Boolean", false, BASE_PARAMS) as Record<string, any>;
+    // Regression guard for a real 400 confirmed against ZaneTest (2026-08-21 integration test):
+    // the nested OptionSet must be the derived BooleanOptionSetMetadata type, not the generic
+    // OptionSetMetadata every other OptionSet-bearing type here correctly uses.
+    expect(body.OptionSet["@odata.type"]).toBe("Microsoft.Dynamics.CRM.BooleanOptionSetMetadata");
     expect(body.OptionSet.OptionSetType).toBe("Boolean");
     expect(body.OptionSet.TrueOption.Value).toBe(1);
     expect(body.OptionSet.FalseOption.Value).toBe(0);
@@ -155,9 +166,16 @@ describe("buildAttributeBody — every one of the 8 basic column types", () => {
     expect(optional.RequiredLevel.Value).toBe("None");
   });
 
-  it("MultiSelectPicklist builds a local, non-global OptionSetType of its own kind, distinct from Picklist", () => {
+  it("MultiSelectPicklist's wire shape is the well-documented Dataverse quirk: AttributeType=Virtual, OptionSetType=Picklist — NOT their own type names", () => {
+    // Regression guard for a real 500 confirmed against ZaneTest (2026-08-21 integration test:
+    // "Requested value 'MultiSelectPicklist' was not found"), then confirmed correct against
+    // Microsoft's own worked Web API example ("Create a multi-select choice column"). The only
+    // place "MultiSelectPicklistType" actually appears on the wire is AttributeTypeName.Value —
+    // that's the real discriminator, not AttributeType or OptionSetType.
     const body = buildAttributeBody("MultiSelectPicklist", false, { ...BASE_PARAMS, options: ["A", "B"] }) as Record<string, any>;
-    expect(body.OptionSet.OptionSetType).toBe("MultiSelectPicklist");
+    expect(body.AttributeType).toBe("Virtual");
+    expect(body.AttributeTypeName.Value).toBe("MultiSelectPicklistType");
+    expect(body.OptionSet.OptionSetType).toBe("Picklist");
     expect(body.OptionSet.IsGlobal).toBe(false);
     expect(body.OptionSet.Options).toHaveLength(2);
     expect(body.OptionSet.Options[0]).not.toHaveProperty("Value");

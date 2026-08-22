@@ -304,7 +304,12 @@ export function buildAttributeBody(type: BasicColumnType, isPrimaryName: boolean
         AttributeTypeName: { Value: "BooleanType" },
         DefaultValue: false,
         OptionSet: {
-          "@odata.type": "Microsoft.Dynamics.CRM.OptionSetMetadata",
+          // Confirmed against a real Dataverse 400 (2026-08-21 integration test run): a Boolean
+          // attribute's OptionSet must be the derived Microsoft.Dynamics.CRM.BooleanOptionSetMetadata
+          // type, not the generic OptionSetMetadata every other OptionSet-bearing type here uses —
+          // Dataverse rejects the generic type with "not assignable to the expected type
+          // 'Microsoft.Dynamics.CRM.BooleanOptionSetMetadata'".
+          "@odata.type": "Microsoft.Dynamics.CRM.BooleanOptionSetMetadata",
           OptionSetType: "Boolean",
           TrueOption: { Value: 1, Label: label(params.trueLabel || "是") },
           FalseOption: { Value: 0, Label: label(params.falseLabel || "否") },
@@ -335,12 +340,19 @@ export function buildAttributeBody(type: BasicColumnType, isPrimaryName: boolean
       return {
         ...common,
         "@odata.type": "Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata",
-        AttributeType: "MultiSelectPicklist",
+        // Confirmed against a real Dataverse 500 (2026-08-21 integration test run — the previous
+        // AttributeType: "MultiSelectPicklist" isn't a real enum value and Dataverse rejected it
+        // with "Requested value 'MultiSelectPicklist' was not found") and then against Microsoft's
+        // own documented worked example: a multi-select choice column's *wire* AttributeType is
+        // "Virtual" and its OptionSet.OptionSetType is "Picklist" — MultiSelectPicklistType only
+        // shows up in AttributeTypeName, which is the actual discriminator client tools read to
+        // recognize this as multi-select rather than a real Virtual/calculated column.
+        AttributeType: "Virtual",
         AttributeTypeName: { Value: "MultiSelectPicklistType" },
         OptionSet: {
           "@odata.type": "Microsoft.Dynamics.CRM.OptionSetMetadata",
           IsGlobal: false,
-          OptionSetType: "MultiSelectPicklist",
+          OptionSetType: "Picklist",
           Options: (params.options ?? []).map((text) => ({ Label: label(text) })),
         },
       };
@@ -622,6 +634,7 @@ export async function fetchEntityFields(connectionId: string, entityLogicalName:
     value: {
       LogicalName: string;
       AttributeType: string;
+      AttributeTypeName?: { Value: string } | null;
       IsPrimaryName: boolean;
       IsCustomAttribute: boolean;
       DisplayName?: { UserLocalizedLabel?: { Label: string } | null } | null;
@@ -630,14 +643,18 @@ export async function fetchEntityFields(connectionId: string, entityLogicalName:
   }>(
     connectionId,
     `EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes` +
-      "?$select=LogicalName,AttributeType,IsPrimaryName,IsCustomAttribute,DisplayName,RequiredLevel",
+      "?$select=LogicalName,AttributeType,AttributeTypeName,IsPrimaryName,IsCustomAttribute,DisplayName,RequiredLevel",
   );
   return res.value
-    .filter((a) => a.AttributeType !== "Virtual")
+    .filter((a) => a.AttributeType !== "Virtual" || a.AttributeTypeName?.Value === "MultiSelectPicklistType")
     .map((a) => ({
       logicalName: a.LogicalName,
       displayName: a.DisplayName?.UserLocalizedLabel?.Label ?? a.LogicalName,
-      attributeType: a.AttributeType,
+      // A multi-select choice column's real wire AttributeType is "Virtual" (see
+      // buildAttributeBody's own doc comment on why) — that's meaningless to show a user in a
+      // field list, so it's normalized back to the type name this app's own create flow actually
+      // calls it (matching what buildAttributeBody accepts for BasicColumnType).
+      attributeType: a.AttributeTypeName?.Value === "MultiSelectPicklistType" ? "MultiSelectPicklist" : a.AttributeType,
       isPrimaryName: a.IsPrimaryName,
       isCustomAttribute: a.IsCustomAttribute,
       required: !!a.RequiredLevel && a.RequiredLevel.Value !== "None",

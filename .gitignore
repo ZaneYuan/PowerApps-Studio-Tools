@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Cached MSAL token for the real-Dataverse integration test suite — never commit this, it's
+# effectively a bearer credential for the ZaneTest connection (see scripts/dataverse-test-login.mjs).
+.dataverse-test-cache.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
