@@ -46,7 +46,7 @@ function nextTabId(prefix: string, entityLogicalName: string): string {
  *  INSERT that followed fail to parse, silently dropping that table's rows with no specific error
  *  (see bugs & requirements/8.19.md #2 — confirmed against the user's real file, which had this
  *  exact problem in three separate section comments, not just the one they happened to notice). */
-function splitStatements(sql: string): string[] {
+export function splitStatements(sql: string): string[] {
   const statements: string[] = [];
   let current = "";
   let inLineComment = false;
