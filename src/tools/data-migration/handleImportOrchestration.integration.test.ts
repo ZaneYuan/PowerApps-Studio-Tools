@@ -166,6 +166,27 @@ describe.skipIf(!hasTestCredentials())("Data Migration — handleImport 3-phase 
   }, 300_000);
 
   afterAll(async () => {
+    // CycleA and CycleB reference *each other* — deleting either table outright 400s with
+    // "referenced by N other components" no matter which one goes first, a real deadlock this
+    // suite's own cleanup ran into (confirmed live: EntityDefinitions delete on either side of a
+    // real mutual reference fails identically). Break the cycle first by deleting both
+    // relationships (by real SchemaName, not a guessed MetadataId), *then* the tables are free to
+    // delete in any order — same spirit as Plugin Registration's own "must cascade, can't bare-
+    // delete" lesson, just for a mutual-reference pair instead of a parent/children tree.
+    for (const relSchemaName of [`${PUBLISHER_PREFIX}_a_to_b_${suffix}`, `${PUBLISHER_PREFIX}_b_to_a_${suffix}`]) {
+      try {
+        const res = await dataverseTestRequest<{ value: { MetadataId: string }[] }>(
+          "GET",
+          `RelationshipDefinitions?$select=MetadataId&$filter=SchemaName eq '${relSchemaName}'`,
+        );
+        for (const rel of res.body.value) {
+          await dataverseTestRequest("DELETE", `RelationshipDefinitions(${rel.MetadataId})`);
+        }
+      } catch (err) {
+        console.warn(`[integration test cleanup] 删除循环引用关系失败（可能需要手动清理 ${relSchemaName}）：${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     for (const logical of [selfRefLogical, cycleALogical, cycleBLogical, nnParentLogical, nnOtherLogical]) {
       try {
         await dataverseTestRequest("DELETE", `EntityDefinitions(LogicalName='${logical}')`);
@@ -174,7 +195,7 @@ describe.skipIf(!hasTestCredentials())("Data Migration — handleImport 3-phase 
       }
     }
     uninstallMockNativeBridge();
-  }, 180_000);
+  }, 240_000);
 
   it("handleImport's real 3-phase sequence: cross-row self-reference, a genuine A<->B cycle, and N:N association, all in one mixed batch", async () => {
     const parentId = randomGuid();
