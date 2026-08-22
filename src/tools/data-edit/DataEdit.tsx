@@ -25,7 +25,7 @@ const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
  *  to see/fix the query rather than have it silently mangled. Only ever called on a query that
  *  already passed handleRunQuery's select-simple-only check, so the shape is always exactly
  *  `SELECT [TOP n] <cols> FROM ...`. */
-function replaceSelectColumns(sqlText: string, columnNames: string[]): string {
+export function replaceSelectColumns(sqlText: string, columnNames: string[]): string {
   if (columnNames.length === 0) return sqlText;
   const columnList = columnNames.join(", ");
   return sqlText.replace(/^(\s*SELECT\s+(?:TOP\s+\d+\s+)?)([\s\S]*?)(\s+FROM\s)/i, (_m, pre: string, _cols: string, post: string) => `${pre}${columnList}${post}`);
@@ -35,7 +35,7 @@ function replaceSelectColumns(sqlText: string, columnNames: string[]): string {
  *  does `String(rawValue ?? "")`), so a user who clicks in and clicks back out without really
  *  changing anything can still produce `""` where the query originally had `null`. Treat those as
  *  equal so that isn't mistaken for a real edit — everything else compares strictly. */
-function valuesEqual(a: unknown, b: unknown): boolean {
+export function valuesEqual(a: unknown, b: unknown): boolean {
   const na = a ?? null;
   const nb = b ?? null;
   if (na === nb) return true;
