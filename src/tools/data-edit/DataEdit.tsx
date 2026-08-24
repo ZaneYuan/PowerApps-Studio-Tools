@@ -335,7 +335,12 @@ export default function DataEdit() {
           {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个本页连接。</span>}
         </div>
         {queryError && <ErrorMessage error={queryError} />}
+        {!entityLogicalName && !queryError && !queryRunning && (
+          <p className="text-xs text-gray-400">输入并执行查询后，结果会显示在这里。</p>
+        )}
       </div>
+
+      {entityLogicalName && rows.length === 0 && <p className="text-xs text-gray-400">查询结果为空（0 行）。</p>}
 
       {entityLogicalName && rows.length > 0 && (
         <>

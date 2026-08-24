@@ -633,6 +633,9 @@ export default function DataMigration() {
             {fileNote}
           </p>
         )}
+        {tables.length === 0 && !queryError && !queryRunning && !fileImporting && (
+          <p className="text-xs text-gray-400">执行查询或上传 .sql 文件后，结果会在这里按表分 Tab 显示。</p>
+        )}
       </div>
 
       {tables.length > 0 && (

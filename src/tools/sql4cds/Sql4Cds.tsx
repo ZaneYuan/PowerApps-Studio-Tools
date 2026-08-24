@@ -720,6 +720,8 @@ export default function Sql4Cds() {
         />
       </div>
 
+      {result.kind === "empty" && <p className="text-xs text-gray-400">输入一条 SQL 后，解析结果和执行按钮会显示在这里。</p>}
+
       {result.kind === "error" && (
         <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
           {result.error}
