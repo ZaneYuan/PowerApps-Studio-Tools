@@ -13,7 +13,7 @@ import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
-import { isRowDirty, valuesEqual } from "../../shared/dirtyTracking";
+import { dirtyColumnKeys, isRowDirty, valuesEqual } from "../../shared/dirtyTracking";
 import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
 import { useAlertDialog, useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
@@ -242,7 +242,15 @@ export default function DataEdit() {
           const key = isUpdate ? row.id : `第 ${i + 1} 行（复制自 ${row.id}）`;
           let entry: Sql4CdsLogEntry;
           try {
-            const body = Object.fromEntries(checkedColumns.map((c) => [c.key, row.values[c.key] ?? null]));
+            // 更新模式下 body 只带这一行真正变了的字段，不是勾选的全部字段——避免把没动过的字段也
+            // PATCH 一遍（不必要地触发绑定在那些字段上的插件/工作流，也可能覆盖掉查询之后被别人改过
+            // 的、这次编辑压根没打算碰的值）。创建模式没有"原值"可比，仍然照旧带上勾选的全部字段。
+            const columnKeysToSend = isUpdate
+              ? new Set(dirtyColumnKeys(row, checkedColumns.map((c) => c.key)))
+              : null;
+            const body = Object.fromEntries(
+              checkedColumns.filter((c) => !columnKeysToSend || columnKeysToSend.has(c.key)).map((c) => [c.key, row.values[c.key] ?? null]),
+            );
             if (isUpdate) {
               await updateRow(activeConnectionId, entityLogicalName, entitySetName, row.id, body);
               entry = { key, state: "success" };
@@ -306,7 +314,7 @@ export default function DataEdit() {
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         写一条单表 SELECT 查出要处理的数据（对本页连接执行），结果表格可以直接编辑——支持文本、选项集（Picklist）、查找（Lookup/Customer/Owner，点 🔍
         搜索选择目标记录，表格里显示的是名称而非 GUID）三种类型的字段编辑，其余类型只读展示；列标题右边缘可拖拽调整宽度。列默认全部勾选，行默认不勾选——手动勾选，或编辑某行任意字段自动勾选该行；被改过的字段会标一个
-        ❗。勾选主键 ID 列（默认已勾选）时按钮是"更新"——把每一行按当前编辑后的值 PATCH 回原记录，仅当某行的字段值相对查询结果确实变了才会真正提交，未变更的行自动跳过；取消勾选主键 ID
+        ❗。勾选主键 ID 列（默认已勾选）时按钮是"更新"——仅当某行的字段值相对查询结果确实变了才会真正提交，未变更的行自动跳过；提交的 PATCH 也只带这一行真正变了的字段，没动过的字段不会被带上；取消勾选主键 ID
         列则变成"创建"——把勾选的行按当前值创建成全新记录，主键 ID 列不会被带上，由 Dataverse 自动生成新的。只支持单表，不支持 JOIN / 聚合。
       </div>
 

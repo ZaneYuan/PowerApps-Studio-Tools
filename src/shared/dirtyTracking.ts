@@ -25,3 +25,17 @@ export function isRowDirty(row: GridRow): boolean {
   const original = row.originalValues;
   return Object.keys(original).some((key) => !valuesEqual(row.values[key], original[key]));
 }
+
+/** Which of `columnKeys` actually differ from `row`'s baseline — the fields a partial-update PATCH
+ *  should include, instead of resending every checked column's current value regardless of
+ *  whether that particular field changed (harmless-looking, but re-triggers plugins/workflows
+ *  bound to fields nobody touched, and can clobber a value someone else changed in Dataverse
+ *  since this row was queried, for a field this edit never meant to touch at all). Falls back to
+ *  "all of them" when there's no baseline snapshot at all — same defensive "no snapshot, treat as
+ *  changed" fallback isRowDirty's own row-level callers already use — rather than silently
+ *  dropping every field into an empty body. */
+export function dirtyColumnKeys(row: GridRow, columnKeys: string[]): string[] {
+  if (!row.originalValues) return columnKeys;
+  const original = row.originalValues;
+  return columnKeys.filter((key) => !valuesEqual(row.values[key], original[key]));
+}

@@ -15,7 +15,7 @@ import { fetchEntityMeta } from "../../native/metadataService";
 import { unwrapODataRowWithFormatting } from "../../native/odata";
 import { createColumn, createTable } from "../solution-editor/dataverseOps";
 import { insertRow, updateRow } from "../sql4cds/writeOps";
-import { valuesEqual } from "../../shared/dirtyTracking";
+import { dirtyColumnKeys, valuesEqual } from "../../shared/dirtyTracking";
 
 const FAKE_CONNECTION_ID = "integration-test";
 const SOLUTION_UNIQUE_NAME = "ad_ClaudeSmokeTest";
@@ -27,6 +27,7 @@ describe.skipIf(!hasTestCredentials())("Data Edit — real Dataverse integration
   const tableSchema = `${PUBLISHER_PREFIX}_DataEditTest${suffix}`;
   const tableLogical = tableSchema.toLowerCase();
   const scoreField = `${PUBLISHER_PREFIX}_score${suffix}`.toLowerCase();
+  const noteField = `${PUBLISHER_PREFIX}_note${suffix}`.toLowerCase();
 
   let entitySet = "";
 
@@ -46,6 +47,13 @@ describe.skipIf(!hasTestCredentials())("Data Edit — real Dataverse integration
       displayName: "Score",
       description: "",
       required: false,
+    });
+    await createColumn(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, tableLogical, "String", {
+      schemaName: `${PUBLISHER_PREFIX}_Note${suffix}`,
+      displayName: "Note",
+      description: "",
+      required: false,
+      maxLength: 100,
     });
     const meta = await fetchEntityMeta(FAKE_CONNECTION_ID, tableLogical);
     entitySet = meta.entitySetName;
@@ -100,6 +108,30 @@ describe.skipIf(!hasTestCredentials())("Data Edit — real Dataverse integration
     const readBack3 = await dataverseTestRequest<Record<string, unknown>>("GET", `${entitySet}(${r3.newId})?$select=${scoreField}`);
     expect(readBack3.body[scoreField]).toBe(30);
   }, 60_000);
+
+  it("更新模式: the real dirtyColumnKeys trims the PATCH body to only the field that actually changed, not every checked column (Bugs/8.24.md #1 feedback)", async () => {
+    const r = await insertRow(FAKE_CONNECTION_ID, tableLogical, entitySet, {
+      [nameField]: `Trim${suffix}`,
+      [scoreField]: 10,
+      [noteField]: "original note",
+    });
+    const original: Record<string, unknown> = { [scoreField]: 10, [noteField]: "original note" };
+    // Only score is actually edited — note is left exactly as loaded.
+    const edited: Record<string, unknown> = { [scoreField]: 999, [noteField]: "original note" };
+    const checkedColumnKeys = [scoreField, noteField];
+
+    // Mirror handleSubmit's real per-field trim exactly, using the real dirtyColumnKeys.
+    const columnsToSend = dirtyColumnKeys({ id: r.newId!, checked: true, values: edited, originalValues: original }, checkedColumnKeys);
+    expect(columnsToSend).toEqual([scoreField]); // noteField never made it into the set at all
+
+    const body = Object.fromEntries(columnsToSend.map((k) => [k, edited[k]]));
+    expect(Object.keys(body)).toEqual([scoreField]); // the actual PATCH body really only has the one key
+    await updateRow(FAKE_CONNECTION_ID, tableLogical, entitySet, r.newId!, body);
+
+    const readBack = await dataverseTestRequest<Record<string, unknown>>("GET", `${entitySet}(${r.newId})?$select=${scoreField},${noteField}`);
+    expect(readBack.body[scoreField]).toBe(999); // the field that was actually sent did update
+    expect(readBack.body[noteField]).toBe("original note"); // untouched field survives a trimmed partial PATCH fine
+  }, 30_000);
 
   it("创建模式: unchecking the primary key column switches to create — a brand-new record, source untouched", async () => {
     const source = await insertRow(FAKE_CONNECTION_ID, tableLogical, entitySet, { [nameField]: `Source${suffix}`, [scoreField]: 42 });

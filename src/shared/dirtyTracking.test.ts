@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRowDirty, valuesEqual } from "./dirtyTracking";
+import { dirtyColumnKeys, isRowDirty, valuesEqual } from "./dirtyTracking";
 import type { GridRow } from "./CheckableGrid";
 
 describe("valuesEqual — the dirty-row detection Data Edit's real 'skip unchanged rows' feature (and every grid's modified-field marker) depends on", () => {
@@ -56,5 +56,37 @@ describe("isRowDirty", () => {
 
   it("editing a field back to its original value makes the row clean again", () => {
     expect(isRowDirty(row({ name: "Alpha" }, { name: "Alpha" }))).toBe(false);
+  });
+});
+
+describe("dirtyColumnKeys — the per-field PATCH-body trim Data Edit's 更新模式 depends on (Bugs/8.24.md #1 feedback)", () => {
+  it("only the field(s) that actually changed are returned, not every checked column", () => {
+    const r = row({ name: "Beta", score: 10, notes: "x" }, { name: "Alpha", score: 10, notes: "x" });
+    expect(dirtyColumnKeys(r, ["name", "score", "notes"])).toEqual(["name"]);
+  });
+
+  it("every requested column comes back when every one of them changed", () => {
+    const r = row({ name: "Beta", score: 20 }, { name: "Alpha", score: 10 });
+    expect(dirtyColumnKeys(r, ["name", "score"])).toEqual(["name", "score"]);
+  });
+
+  it("comes back empty when nothing in the requested set changed", () => {
+    const r = row({ name: "Alpha" }, { name: "Alpha" });
+    expect(dirtyColumnKeys(r, ["name"])).toEqual([]);
+  });
+
+  it("null/empty-string click-in-click-out doesn't count as a changed field (uses valuesEqual)", () => {
+    const r = row({ name: "" }, { name: null });
+    expect(dirtyColumnKeys(r, ["name"])).toEqual([]);
+  });
+
+  it("falls back to every requested column when there's no baseline snapshot at all", () => {
+    const r = row({ name: "Alpha", score: 10 });
+    expect(dirtyColumnKeys(r, ["name", "score"])).toEqual(["name", "score"]);
+  });
+
+  it("only considers the columns actually requested, ignoring other fields that changed in the baseline", () => {
+    const r = row({ name: "Beta", score: 999 }, { name: "Alpha", score: 10 });
+    expect(dirtyColumnKeys(r, ["name"])).toEqual(["name"]); // score changed too, but wasn't asked about
   });
 });
