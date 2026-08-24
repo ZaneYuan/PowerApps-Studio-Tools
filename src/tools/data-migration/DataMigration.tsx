@@ -3,7 +3,7 @@ import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
-import { unwrapODataRow } from "../../native/odata";
+import { unwrapODataRowWithFormatting } from "../../native/odata";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, fetchManyToManyInfo, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { buildSelectPath, literalToJsValue, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
@@ -12,6 +12,8 @@ import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid from "../../shared/CheckableGrid";
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
+import { isRowDirty } from "../../shared/dirtyTracking";
+import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
 import { planDeferredWrite, phase1Body, phase2Body } from "./deferredWrite";
 import {
   buildDataMigrationLogText,
@@ -183,13 +185,19 @@ export default function DataMigration() {
           connectionId: activeConnectionId,
           method: "GET",
           path,
+          includeFormattedValues: true,
         });
-        const unwrapped = res.value.map(unwrapODataRow);
-        const columnNames = unwrapped.length > 0 ? Object.keys(unwrapped[0]) : parsed.kind === "select-simple" && parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
+        const unwrapped = res.value.map(unwrapODataRowWithFormatting);
+        const columnNames = unwrapped.length > 0 ? Object.keys(unwrapped[0].fields) : parsed.kind === "select-simple" && parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
         const columns = await buildColumns(activeConnectionId, parsed.entityLogicalName, meta.primaryIdAttribute, columnNames);
-        const rows: ImportRow[] = unwrapped.map((r) => ({
-          id: String(r[meta.primaryIdAttribute]),
-          values: r,
+        // originalValues/formattedValues (baseline for the modified-field marker/unsaved badge,
+        // and the Lookup/OptionSet display name respectively) — same convention Data Edit/Data
+        // Copy use, safe to alias `fields` directly since edits never mutate it in place.
+        const rows: ImportRow[] = unwrapped.map((u) => ({
+          id: String(u.fields[meta.primaryIdAttribute]),
+          values: u.fields,
+          originalValues: u.fields,
+          formattedValues: u.formattedFields,
           checked: false,
         }));
         newTables.push({
@@ -274,7 +282,12 @@ export default function DataMigration() {
           fetchManyToManyInfo(activeConnectionId, entityLogicalName),
         ]);
         const columns = await buildColumns(activeConnectionId, entityLogicalName, meta.primaryIdAttribute, Array.from(group.columns));
-        const rows: ImportRow[] = group.rows.map((r) => ({ id: r.pkValue, values: r.values, checked: true }));
+        // No live API round-trip for a locally-parsed SQL file, so there's no FormattedValue
+        // annotation to carry — formattedValues stays unset and Lookup/OptionSet cells just show
+        // whatever literal the file itself had (unchanged from before). originalValues is still
+        // set so editing an imported row before actually importing it gets the same modified-field
+        // marker/unsaved-changes badge as a query-sourced row does.
+        const rows: ImportRow[] = group.rows.map((r) => ({ id: r.pkValue, values: r.values, originalValues: r.values, checked: true }));
         newTables.push({
           tabId: nextTabId("sql", entityLogicalName),
           entityLogicalName,
@@ -334,6 +347,9 @@ export default function DataMigration() {
   }
 
   const totalCheckedRows = tables.reduce((n, t) => n + t.rows.filter((r) => r.checked).length, 0);
+  // Across every tab, not just the one currently focused — the badge/tab-close warning should
+  // still fire for an edit made in a table the user has since switched away from.
+  const isDirty = tables.some((t) => t.rows.some(isRowDirty));
 
   async function handleImport() {
     if (!targetConnectionId || totalCheckedRows === 0) return;
@@ -548,10 +564,12 @@ export default function DataMigration() {
 
   return (
     <div className="max-w-5xl space-y-4">
+      <UnsavedChangesBadge dirty={isDirty} />
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         默认模式：写一条或多条 `;` 分隔的 SELECT（可以查不同的表），对本页连接执行，每条查询结果各开一个 Tab，行默认不勾选、列默认全选。也可以点"以
         SQL 导入"上传一个 `.sql` 文件——文件里的 INSERT 语句按表分组同样落进 Tab（行、列都默认全选），非 INSERT
-        语句会被忽略并提示。表格里文本、选项集（Picklist）、查找（Lookup/Customer/Owner）字段可直接编辑，列宽可拖拽。两种来源的 Tab
+        语句会被忽略并提示。表格里文本、选项集（Picklist）、查找（Lookup/Customer/Owner，显示的是名称而非
+        GUID）字段可直接编辑，被改过的字段会标一个 ❗，列宽可拖拽。两种来源的 Tab
         共存，配置好勾选后选一个目标连接点导入——自动识别这批数据里"一张表引用了另一张表还没创建的记录"这种依赖，先创建所有行（引用的字段先留空），再统一回填，不需要手动排好表的导入顺序。
       </div>
 

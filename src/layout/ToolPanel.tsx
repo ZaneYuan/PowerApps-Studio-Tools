@@ -1,7 +1,7 @@
-import { Suspense } from "react";
+import { Suspense, useCallback } from "react";
 import { isNativeBridgeAvailable } from "../native/bridge";
 import { TabConnectionContext, useActiveConnection } from "../native/activeConnection";
-import { useTabManager } from "../native/tabs";
+import { TabDirtyContext, useTabManager } from "../native/tabs";
 import type { ToolDefinition } from "../tools/types";
 import ToolErrorBoundary from "./ToolErrorBoundary";
 
@@ -31,51 +31,54 @@ export default function ToolPanel({
 }) {
   const { Component } = tool;
   const { connections } = useActiveConnection();
-  const { setTabConnection } = useTabManager();
+  const { setTabConnection, setTabDirty } = useTabManager();
   const activeConnection = connections.find((c) => c.id === connectionId);
+  const reportDirty = useCallback((dirty: boolean) => setTabDirty(tabKey, dirty), [tabKey, setTabDirty]);
 
   return (
     <TabConnectionContext.Provider value={connectionId}>
-      <div>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-2xl">{tool.icon}</span>
-            <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{tool.name}</h1>
+      <TabDirtyContext.Provider value={reportDirty}>
+        <div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">{tool.icon}</span>
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{tool.name}</h1>
+            </div>
+            {isNativeBridgeAvailable() && tool.connectionScoped !== false && (
+              <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+                本页连接
+                <select
+                  value={connectionId ?? ""}
+                  onChange={(e) => setTabConnection(tabKey, e.target.value || null)}
+                  className={selectCls}
+                >
+                  <option value="">未选择</option>
+                  {connections.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
-          {isNativeBridgeAvailable() && tool.connectionScoped !== false && (
-            <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-              本页连接
-              <select
-                value={connectionId ?? ""}
-                onChange={(e) => setTabConnection(tabKey, e.target.value || null)}
-                className={selectCls}
-              >
-                <option value="">未选择</option>
-                {connections.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{tool.description}</p>
+
+          {tool.connectionScoped !== false && activeConnection && !activeConnection.allowWrite && (
+            <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+              连接"{activeConnection.name}"已关闭"允许写入"，当前为只读模式：任何新建/修改/删除/发布等操作都会被拒绝。可在"我的连接"里重新打开该开关。
+            </div>
           )}
-        </div>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{tool.description}</p>
 
-        {tool.connectionScoped !== false && activeConnection && !activeConnection.allowWrite && (
-          <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-            连接"{activeConnection.name}"已关闭"允许写入"，当前为只读模式：任何新建/修改/删除/发布等操作都会被拒绝。可在"我的连接"里重新打开该开关。
+          <div className="mt-6">
+            <ToolErrorBoundary toolName={tool.name}>
+              <Suspense fallback={<div className="text-sm text-gray-400">加载中…</div>}>
+                <Component />
+              </Suspense>
+            </ToolErrorBoundary>
           </div>
-        )}
-
-        <div className="mt-6">
-          <ToolErrorBoundary toolName={tool.name}>
-            <Suspense fallback={<div className="text-sm text-gray-400">加载中…</div>}>
-              <Component />
-            </Suspense>
-          </ToolErrorBoundary>
         </div>
-      </div>
+      </TabDirtyContext.Provider>
     </TabConnectionContext.Provider>
   );
 }

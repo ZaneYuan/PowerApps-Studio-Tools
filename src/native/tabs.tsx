@@ -28,9 +28,20 @@ interface TabManagerContextValue {
    *  re-fetches on its own because the connectionId it reads (via TabConnectionContext) changes;
    *  no remount needed. */
   setTabConnection: (tabKey: string, connectionId: string | null) => void;
+  /** Tab keys whose tool currently has unsaved grid edits (reported via TabDirtyContext/
+   *  shared/UnsavedChangesBadge) — TabBar reads this to mark a dirty tab and to confirm before
+   *  discarding its edits on close. */
+  dirtyTabKeys: Set<string>;
+  setTabDirty: (tabKey: string, dirty: boolean) => void;
 }
 
 const TabManagerContext = createContext<TabManagerContextValue | null>(null);
+
+/** Set by ToolPanel (bound to that tab's own tabKey) so any tool can report "I have unsaved
+ *  edits right now" without needing to know its own tabKey itself — same delegation shape as
+ *  TabConnectionContext in native/activeConnection.tsx. `null` (no provider, e.g. a tool rendered
+ *  outside a tab) makes reporting a no-op. */
+export const TabDirtyContext = createContext<((dirty: boolean) => void) | null>(null);
 
 let tabKeySeq = 0;
 function makeTabKey(toolId: string): string {
@@ -44,6 +55,7 @@ function makeTabKey(toolId: string): string {
 export function TabManagerProvider({ children }: { children: ReactNode }) {
   const [openTabs, setOpenTabs] = useState<TabInstance[]>([]);
   const [activeTabKey, setActiveTabKey] = useState<string | null>(null);
+  const [dirtyTabKeys, setDirtyTabKeys] = useState<Set<string>>(new Set());
 
   function openTab(toolId: string, connectionId: string | null) {
     const existing = openTabs.find((t) => t.toolId === toolId && t.connectionId === connectionId);
@@ -69,6 +81,24 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
       }
       return next;
     });
+    // The closed tab's tool unmounts along with it — nothing left to ever report this tabKey
+    // clean again, so drop it here rather than leaving a stale entry in dirtyTabKeys forever.
+    setDirtyTabKeys((prev) => {
+      if (!prev.has(tabKey)) return prev;
+      const next = new Set(prev);
+      next.delete(tabKey);
+      return next;
+    });
+  }
+
+  function setTabDirty(tabKey: string, dirty: boolean) {
+    setDirtyTabKeys((prev) => {
+      if (prev.has(tabKey) === dirty) return prev;
+      const next = new Set(prev);
+      if (dirty) next.add(tabKey);
+      else next.delete(tabKey);
+      return next;
+    });
   }
 
   function activateHome() {
@@ -81,7 +111,7 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
 
   return (
     <TabManagerContext.Provider
-      value={{ openTabs, activeTabKey, openTab, activateTab, closeTab, activateHome, setTabConnection }}
+      value={{ openTabs, activeTabKey, openTab, activateTab, closeTab, activateHome, setTabConnection, dirtyTabKeys, setTabDirty }}
     >
       {children}
     </TabManagerContext.Provider>

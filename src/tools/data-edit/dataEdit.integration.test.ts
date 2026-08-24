@@ -10,10 +10,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dataverseTestRequest, hasTestCredentials, testRunSuffix } from "../../testSupport/dataverseTestClient";
 import { installMockNativeBridge, uninstallMockNativeBridge } from "../../testSupport/mockNativeBridge";
+import { callNative } from "../../native/bridge";
 import { fetchEntityMeta } from "../../native/metadataService";
+import { unwrapODataRowWithFormatting } from "../../native/odata";
 import { createColumn, createTable } from "../solution-editor/dataverseOps";
 import { insertRow, updateRow } from "../sql4cds/writeOps";
-import { valuesEqual } from "./DataEdit";
+import { valuesEqual } from "../../shared/dirtyTracking";
 
 const FAKE_CONNECTION_ID = "integration-test";
 const SOLUTION_UNIQUE_NAME = "ad_ClaudeSmokeTest";
@@ -110,5 +112,20 @@ describe.skipIf(!hasTestCredentials())("Data Edit — real Dataverse integration
     expect(readBack.body[scoreField]).toBe(42);
     const sourceReadBack = await dataverseTestRequest<Record<string, unknown>>("GET", `${entitySet}(${source.newId})?$select=${nameField}`);
     expect(sourceReadBack.body[nameField]).toBe(`Source${suffix}`);
+  }, 30_000);
+
+  it("includeFormattedValues: true (Data Edit/Data Copy/Data Migration's query path) really gets a FormattedValue label back from Dataverse for statuscode, and unwrapODataRowWithFormatting extracts it", async () => {
+    const created = await insertRow(FAKE_CONNECTION_ID, tableLogical, entitySet, { [nameField]: `Formatted${suffix}` });
+
+    const res = await callNative<Record<string, unknown>>("dataverse.request", {
+      connectionId: FAKE_CONNECTION_ID,
+      method: "GET",
+      path: `${entitySet}(${created.newId})?$select=statuscode`,
+      includeFormattedValues: true,
+    });
+
+    const { fields, formattedFields } = unwrapODataRowWithFormatting(res);
+    expect(typeof fields.statuscode).toBe("number"); // the raw option code — what a submit/write payload should use
+    expect(formattedFields.statuscode).toBeTruthy(); // the human-readable label CheckableGrid's display falls back to
   }, 30_000);
 });

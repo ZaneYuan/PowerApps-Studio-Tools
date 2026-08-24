@@ -4,6 +4,7 @@ import AttributePicker from "./AttributePicker";
 import LookupPickerModal from "./LookupPickerModal";
 import ColumnFilterPopover from "./ColumnFilterPopover";
 import { classifyColumnKind, compareForSort, matchesFilter, sortLabels, sortValueFor, type GridColumnFilter } from "./gridFilter";
+import { valuesEqual } from "./dirtyTracking";
 
 // Matches this grid's actual rendered row height closely enough for @tanstack/react-virtual's
 // scroll-position math — every cell uses the same py-1.5 padding and whitespace-nowrap (no
@@ -62,6 +63,21 @@ export interface GridRow {
   id: string;
   checked: boolean;
   values: Record<string, unknown>;
+  /** Snapshot of `values` exactly as originally loaded (a query result, a parsed SQL INSERT, ...)
+   *  — never mutated once set (every edit replaces `values` wholesale via spread, same convention
+   *  Data Edit's own dirty-row detection already relied on before this became shared). Drives the
+   *  per-field "modified" marker below and every caller's own isRowDirty(row)-based unsaved-
+   *  changes tracking (see shared/dirtyTracking.ts). Omit entirely for a read-only grid with no
+   *  "modified" concept — no baseline means no cell is ever marked dirty. */
+  originalValues?: Record<string, unknown>;
+  /** Human-readable label for a Lookup (or any FormattedValue-annotated) column, keyed by column
+   *  `key` — from the OData `...@OData.Community.Display.V1.FormattedValue` annotation a caller
+   *  requested via `includeFormattedValues: true` (see native/odata.ts's
+   *  unwrapODataRowWithFormatting). `values[key]` itself stays the raw value (a GUID, an option
+   *  code) that's actually submitted; this is purely a display-only side channel. Omit when the
+   *  caller never requested annotations — cells just fall back to showing the raw value, same as
+   *  before this existed. */
+  formattedValues?: Record<string, string>;
 }
 
 const inputCls =
@@ -154,26 +170,49 @@ const GridRowView = memo(function GridRowView({
         // always-on `<select>` resolved this for free (the browser matches `value` to the
         // matching `<option>`'s text), but the inactive span below renders plain text and has to
         // do that lookup itself, or every unclicked Picklist cell in the grid would show a bare
-        // code number instead of its label.
+        // code number instead of its label. "select" and "lookup" both fall back to the row's own
+        // `formattedValues` (the FormattedValue OData annotation, when the caller requested it via
+        // includeFormattedValues) before giving up and showing the raw code/GUID — for "select"
+        // that's a safety net for an option this app's own metadata lookup didn't resolve; for
+        // "lookup" it's the only source of a human name at all, since a Lookup's raw value is just
+        // the target record's GUID with nothing else to look it up against client-side.
         const displayValue =
           c.editKind === "select"
-            ? (c.options?.find((o) => o.value === String(rawValue ?? ""))?.label ?? String(rawValue ?? ""))
-            : c.editKind === "multiselect"
-              ? // Dataverse's Web API returns a MultiSelectPicklist as a comma-separated string of
-                // numeric codes, same convention as Picklist's single code — resolve each to its
-                // label the same way, joined back with ", " for display.
-                String(rawValue ?? "")
-                  .split(",")
-                  .map((v) => v.trim())
-                  .filter(Boolean)
-                  .map((v) => c.options?.find((o) => o.value === v)?.label ?? v)
-                  .join(", ")
-              : typeof rawValue === "object"
-                ? JSON.stringify(rawValue)
-                : String(rawValue ?? "");
+            ? (c.options?.find((o) => o.value === String(rawValue ?? ""))?.label ?? row.formattedValues?.[c.key] ?? String(rawValue ?? ""))
+            : c.editKind === "lookup"
+              ? (row.formattedValues?.[c.key] ?? String(rawValue ?? ""))
+              : c.editKind === "multiselect"
+                ? // Dataverse's Web API returns a MultiSelectPicklist as a comma-separated string of
+                  // numeric codes, same convention as Picklist's single code — resolve each to its
+                  // label the same way, joined back with ", " for display.
+                  String(rawValue ?? "")
+                    .split(",")
+                    .map((v) => v.trim())
+                    .filter(Boolean)
+                    .map((v) => c.options?.find((o) => o.value === v)?.label ?? v)
+                    .join(", ")
+                : typeof rawValue === "object"
+                  ? JSON.stringify(rawValue)
+                  : String(rawValue ?? "");
         const width = c.width ?? DEFAULT_COLUMN_WIDTH_PX;
+        // A baseline-tracking row (originalValues set — see GridRow's own doc comment) flags any
+        // checked/unchecked field the user has actually edited away from what was originally
+        // loaded — a read-only grid that never sets originalValues just never marks anything.
+        const isFieldModified = row.originalValues != null && !valuesEqual(rawValue, row.originalValues[c.key]);
         return (
-          <td key={c.key} className="whitespace-nowrap overflow-hidden px-3 py-1.5 font-mono text-xs" style={{ width, minWidth: width, maxWidth: width }}>
+          <td
+            key={c.key}
+            className="relative whitespace-nowrap overflow-hidden px-3 py-1.5 font-mono text-xs"
+            style={{ width, minWidth: width, maxWidth: width }}
+          >
+            {isFieldModified && (
+              <span
+                className="pointer-events-none absolute right-0.5 top-0.5 text-[10px] leading-none text-amber-500 dark:text-amber-400"
+                title={`该字段已修改（原值：${row.originalValues?.[c.key] == null || row.originalValues[c.key] === "" ? "(空)" : String(row.originalValues[c.key])}）`}
+              >
+                ❗
+              </span>
+            )}
             {!c.editable ? (
               <span className="block overflow-hidden text-ellipsis" title={displayValue}>
                 {displayValue}

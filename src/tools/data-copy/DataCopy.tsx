@@ -3,7 +3,7 @@ import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
-import { unwrapODataRow } from "../../native/odata";
+import { unwrapODataRowWithFormatting } from "../../native/odata";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { buildSelectPath, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
@@ -13,6 +13,8 @@ import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
+import { isRowDirty } from "../../shared/dirtyTracking";
+import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
 
 const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
 
@@ -86,10 +88,11 @@ export default function DataCopy() {
         connectionId: activeConnectionId,
         method: "GET",
         path,
+        includeFormattedValues: true,
       });
-      const unwrapped = res.value.map(unwrapODataRow);
+      const unwrapped = res.value.map(unwrapODataRowWithFormatting);
       const rawColumnNames =
-        unwrapped.length > 0 ? Object.keys(unwrapped[0]) : parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
+        unwrapped.length > 0 ? Object.keys(unwrapped[0].fields) : parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
 
       const [attrs, viewOrder] = await Promise.all([
         fetchAttributes(activeConnectionId, parsed.entityLogicalName),
@@ -101,7 +104,16 @@ export default function DataCopy() {
       // unchecked: a copy should get its own from the server, not the source row's.
       const columnNames = sortColumnsForDisplay(rawColumnNames, meta.primaryIdAttribute, viewOrder);
       const newColumns = await buildEditableGridColumns(activeConnectionId, parsed.entityLogicalName, columnNames, typeByName);
-      const newRows: GridRow[] = unwrapped.map((r) => ({ id: String(r[meta.primaryIdAttribute]), checked: true, values: r }));
+      // originalValues doubles as the baseline for CheckableGrid's own per-field modified marker
+      // and this tool's unsaved-changes badge — safe to alias `fields` directly (never mutated in
+      // place; edits always replace `values` wholesale via spread), same convention Data Edit uses.
+      const newRows: GridRow[] = unwrapped.map((u) => ({
+        id: String(u.fields[meta.primaryIdAttribute]),
+        checked: true,
+        values: u.fields,
+        originalValues: u.fields,
+        formattedValues: u.formattedFields,
+      }));
 
       setEntityLogicalName(parsed.entityLogicalName);
       setEntitySetName(meta.entitySetName);
@@ -217,6 +229,7 @@ export default function DataCopy() {
   }
 
   const checkedRowCount = rows.filter((r) => r.checked).length;
+  const isDirty = rows.some(isRowDirty);
 
   if (!isNativeBridgeAvailable()) {
     return (
@@ -228,9 +241,10 @@ export default function DataCopy() {
 
   return (
     <div className="max-w-5xl space-y-4">
+      <UnsavedChangesBadge dirty={isDirty} />
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         写一条单表 SELECT 查出要复制的数据（对本页连接执行），结果表格可以直接编辑——支持文本、选项集（Picklist）、查找（Lookup/Customer/Owner，点 🔍
-        搜索选择目标记录）三种类型的字段编辑，其余类型只读展示；列标题右边缘可拖拽调整宽度。行、列默认全部勾选，改好之后点"创建"，会把勾选的行按当前（编辑后的）值创建成全新记录——主键
+        搜索选择目标记录，表格里显示的是名称而非 GUID）三种类型的字段编辑，其余类型只读展示；被改过的字段会标一个 ❗；列标题右边缘可拖拽调整宽度。行、列默认全部勾选，改好之后点"创建"，会把勾选的行按当前（编辑后的）值创建成全新记录——主键
         ID 列不会被带上，由 Dataverse 自动生成新的。只支持单表，不支持 JOIN / 聚合。
       </div>
 

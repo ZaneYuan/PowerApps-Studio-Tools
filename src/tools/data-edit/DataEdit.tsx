@@ -3,7 +3,7 @@ import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
-import { unwrapODataRow } from "../../native/odata";
+import { unwrapODataRowWithFormatting } from "../../native/odata";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { buildSelectPath, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
@@ -13,6 +13,8 @@ import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
+import { isRowDirty, valuesEqual } from "../../shared/dirtyTracking";
+import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
 
 const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
 
@@ -31,18 +33,6 @@ export function replaceSelectColumns(sqlText: string, columnNames: string[]): st
   return sqlText.replace(/^(\s*SELECT\s+(?:TOP\s+\d+\s+)?)([\s\S]*?)(\s+FROM\s)/i, (_m, pre: string, _cols: string, post: string) => `${pre}${columnList}${post}`);
 }
 
-/** A null source cell renders as `""` in the grid's text/lookup `<input>` (CheckableGrid always
- *  does `String(rawValue ?? "")`), so a user who clicks in and clicks back out without really
- *  changing anything can still produce `""` where the query originally had `null`. Treat those as
- *  equal so that isn't mistaken for a real edit — everything else compares strictly. */
-export function valuesEqual(a: unknown, b: unknown): boolean {
-  const na = a ?? null;
-  const nb = b ?? null;
-  if (na === nb) return true;
-  if ((na === null || na === "") && (nb === null || nb === "")) return true;
-  return false;
-}
-
 export default function DataEdit() {
   const { activeConnectionId, connections } = useActiveConnection();
 
@@ -56,11 +46,6 @@ export default function DataEdit() {
   const [primaryIdAttribute, setPrimaryIdAttribute] = useState("");
   const [columns, setColumns] = useState<GridColumn[]>([]);
   const [rows, setRows] = useState<GridRow[]>([]);
-  // Snapshot of each row's values exactly as the query returned them, keyed by row id — the
-  // baseline "更新" mode diffs edited rows against to decide which rows actually need a PATCH.
-  // Never mutated in place (unwrapODataRow always hands back a fresh object, and edits replace
-  // `row.values` wholesale via spread), so it stays a safe read-only reference to compare against.
-  const originalValuesRef = useRef<Record<string, Record<string, unknown>>>({});
 
   const [writeRunning, setWriteRunning] = useState(false);
   const [writeResults, setWriteResults] = useState<Sql4CdsLogEntry[] | null>(null);
@@ -107,10 +92,11 @@ export default function DataEdit() {
         connectionId: activeConnectionId,
         method: "GET",
         path,
+        includeFormattedValues: true,
       });
-      const unwrapped = res.value.map(unwrapODataRow);
+      const unwrapped = res.value.map(unwrapODataRowWithFormatting);
       const rawColumnNames =
-        unwrapped.length > 0 ? Object.keys(unwrapped[0]) : parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
+        unwrapped.length > 0 ? Object.keys(unwrapped[0].fields) : parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
 
       const [attrs, viewOrder] = await Promise.all([
         fetchAttributes(activeConnectionId, parsed.entityLogicalName),
@@ -124,8 +110,20 @@ export default function DataEdit() {
       // "更新" mode by default, matching its primary use case (edit-in-place).
       const columnNames = sortColumnsForDisplay(rawColumnNames, meta.primaryIdAttribute, viewOrder);
       const newColumns = await buildEditableGridColumns(activeConnectionId, parsed.entityLogicalName, columnNames, typeByName);
-      const newRows: GridRow[] = unwrapped.map((r) => ({ id: String(r[meta.primaryIdAttribute]), checked: true, values: r }));
-      originalValuesRef.current = Object.fromEntries(newRows.map((r) => [r.id, r.values]));
+      // Rows themselves default *unchecked* (unlike the columns above) — 数据编辑 only wants to
+      // submit rows the user actually touched, so ticking a row is either manual or (see
+      // handleEditCell below) an automatic side effect of really editing one of its fields.
+      // `originalValues` doubles as the baseline `handleSubmit`'s dirty-row skip and
+      // CheckableGrid's own per-field modified marker both compare against — safe to alias the
+      // same `fields` object rather than clone it, since edits always replace `values` wholesale
+      // via spread and never mutate it in place.
+      const newRows: GridRow[] = unwrapped.map((u) => ({
+        id: String(u.fields[meta.primaryIdAttribute]),
+        checked: false,
+        values: u.fields,
+        originalValues: u.fields,
+        formattedValues: u.formattedFields,
+      }));
 
       setEntityLogicalName(parsed.entityLogicalName);
       setEntitySetName(meta.entitySetName);
@@ -151,9 +149,22 @@ export default function DataEdit() {
     setSql((prev) => replaceSelectColumns(prev, checkedNames));
   }
 
+  /** A row starts out unchecked (see handleRunQuery) — actually editing one of its fields ticks it
+   *  automatically, so the common case ("query, tweak a few rows, submit") never needs a manual
+   *  checkbox click at all. Only a *real* change (per the same valuesEqual click-in-click-out
+   *  tolerance handleSubmit's own skip-unchanged filter uses) does this; a click that leaves the
+   *  value exactly as loaded doesn't tick the row on its own. Deliberately one-directional — this
+   *  never *un*checks a row the user (or a previous edit) already ticked, so editing a second field
+   *  and then reverting the first doesn't make the row disappear from what's about to be submitted. */
   function handleEditCell(rowId: string, columnKey: string, value: string) {
     const finalValue = convertEditedCellValue(columns.find((c) => c.key === columnKey), value);
-    setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, values: { ...r.values, [columnKey]: finalValue } } : r)));
+    setRows((rs) =>
+      rs.map((r) => {
+        if (r.id !== rowId) return r;
+        const madeRealChange = !valuesEqual(finalValue, r.originalValues?.[columnKey]);
+        return { ...r, checked: r.checked || madeRealChange, values: { ...r.values, [columnKey]: finalValue } };
+      }),
+    );
   }
 
   function handleStop() {
@@ -190,7 +201,7 @@ export default function DataEdit() {
     // 更新模式下，只有这一行里勾选的字段相对查询结果确实发生了变更，才真正提交；没变的行直接跳过。
     const rowsToSubmit = isUpdate
       ? checkedRows.filter((row) => {
-          const original = originalValuesRef.current[row.id];
+          const original = row.originalValues;
           if (!original) return true; // 理论上不会发生（快照缺失），保守按"已变更"处理
           return checkedColumns.some((c) => !valuesEqual(row.values[c.key], original[c.key]));
         })
@@ -270,6 +281,7 @@ export default function DataEdit() {
   }
 
   const checkedRowCount = rows.filter((r) => r.checked).length;
+  const isDirty = rows.some(isRowDirty);
 
   if (!isNativeBridgeAvailable()) {
     return (
@@ -281,10 +293,11 @@ export default function DataEdit() {
 
   return (
     <div className="max-w-5xl space-y-4">
+      <UnsavedChangesBadge dirty={isDirty} />
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         写一条单表 SELECT 查出要处理的数据（对本页连接执行），结果表格可以直接编辑——支持文本、选项集（Picklist）、查找（Lookup/Customer/Owner，点 🔍
-        搜索选择目标记录）三种类型的字段编辑，其余类型只读展示；列标题右边缘可拖拽调整宽度。行、列默认全部勾选。勾选主键 ID
-        列（默认已勾选）时按钮是"更新"——把每一行按当前编辑后的值 PATCH 回原记录，仅当某行的字段值相对查询结果确实变了才会真正提交，未变更的行自动跳过；取消勾选主键 ID
+        搜索选择目标记录，表格里显示的是名称而非 GUID）三种类型的字段编辑，其余类型只读展示；列标题右边缘可拖拽调整宽度。列默认全部勾选，行默认不勾选——手动勾选，或编辑某行任意字段自动勾选该行；被改过的字段会标一个
+        ❗。勾选主键 ID 列（默认已勾选）时按钮是"更新"——把每一行按当前编辑后的值 PATCH 回原记录，仅当某行的字段值相对查询结果确实变了才会真正提交，未变更的行自动跳过；取消勾选主键 ID
         列则变成"创建"——把勾选的行按当前值创建成全新记录，主键 ID 列不会被带上，由 Dataverse 自动生成新的。只支持单表，不支持 JOIN / 聚合。
       </div>
 
