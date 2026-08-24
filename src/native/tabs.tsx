@@ -33,9 +33,26 @@ interface TabManagerContextValue {
    *  discarding its edits on close. */
   dirtyTabKeys: Set<string>;
   setTabDirty: (tabKey: string, dirty: boolean) => void;
+  /** Tool ids, most-recently-opened first, capped at RECENT_TOOL_LIMIT — Sidebar's own "最近使用"
+   *  section reads this. Updated from `openTab` itself (not duplicated in Sidebar) so it reflects
+   *  every entry point (sidebar click, home page card, ...) consistently. */
+  recentToolIds: string[];
 }
 
 const TabManagerContext = createContext<TabManagerContextValue | null>(null);
+
+const RECENT_TOOLS_STORAGE_KEY = "msdpptools.recentToolIds";
+const RECENT_TOOL_LIMIT = 5;
+
+function loadRecentToolIds(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_TOOLS_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 /** Set by ToolPanel (bound to that tab's own tabKey) so any tool can report "I have unsaved
  *  edits right now" without needing to know its own tabKey itself — same delegation shape as
@@ -56,8 +73,18 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
   const [openTabs, setOpenTabs] = useState<TabInstance[]>([]);
   const [activeTabKey, setActiveTabKey] = useState<string | null>(null);
   const [dirtyTabKeys, setDirtyTabKeys] = useState<Set<string>>(new Set());
+  const [recentToolIds, setRecentToolIds] = useState<string[]>(loadRecentToolIds);
+
+  function recordRecentTool(toolId: string) {
+    setRecentToolIds((prev) => {
+      const next = [toolId, ...prev.filter((id) => id !== toolId)].slice(0, RECENT_TOOL_LIMIT);
+      localStorage.setItem(RECENT_TOOLS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
 
   function openTab(toolId: string, connectionId: string | null) {
+    recordRecentTool(toolId);
     const existing = openTabs.find((t) => t.toolId === toolId && t.connectionId === connectionId);
     if (existing) {
       setActiveTabKey(existing.tabKey);
@@ -111,7 +138,7 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
 
   return (
     <TabManagerContext.Provider
-      value={{ openTabs, activeTabKey, openTab, activateTab, closeTab, activateHome, setTabConnection, dirtyTabKeys, setTabDirty }}
+      value={{ openTabs, activeTabKey, openTab, activateTab, closeTab, activateHome, setTabConnection, dirtyTabKeys, setTabDirty, recentToolIds }}
     >
       {children}
     </TabManagerContext.Provider>
