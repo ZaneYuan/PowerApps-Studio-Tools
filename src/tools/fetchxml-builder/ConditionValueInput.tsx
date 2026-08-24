@@ -88,6 +88,7 @@ export default function ConditionValueInput({
             type="button"
             onClick={() => setModalOpen(true)}
             title="搜索并选择记录"
+            aria-label="搜索并选择记录"
             disabled={!connectionId}
             className="shrink-0 rounded border border-gray-300 px-1.5 py-1 text-xs hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700"
           >

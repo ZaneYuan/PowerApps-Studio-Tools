@@ -438,6 +438,7 @@ export default function MetadataBrowser() {
                   onClick={(ev) => closeEntityTab(e.LogicalName, ev)}
                   className="rounded px-1 text-gray-400 opacity-0 hover:bg-gray-200 hover:text-gray-700 group-hover:opacity-100 dark:hover:bg-gray-800 dark:hover:text-gray-200"
                   title="关闭"
+                  aria-label={`关闭 ${labelOf(e.DisplayName, e.LogicalName)}`}
                 >
                   ✕
                 </button>

@@ -8,3 +8,10 @@ body {
   margin: 0;
   font-family: system-ui, "Segoe UI", Roboto, sans-serif;
 }
+
+/* Consistent keyboard-focus ring app-wide — same blue every focus:ring-blue-500 input already
+   uses, but :focus-visible so it only shows for keyboard navigation, not a mouse click. */
+:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+}

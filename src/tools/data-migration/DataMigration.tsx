@@ -324,6 +324,10 @@ export default function DataMigration() {
   const [writeConcurrency, setWriteConcurrency] = useState(8);
   const stopRequestedRef = useRef(false);
   const [writeStopped, setWriteStopped] = useState(false);
+  /** Phase1+3 row count (phase2's backfill is a small supplementary follow-up, excluded so the
+   *  denominator doesn't jump partway through a run) — set once at the start of handleImport,
+   *  drives the progress bar below. 0 outside of a run (no bar rendered then). */
+  const [writeTotal, setWriteTotal] = useState(0);
   /** handleImport only builds the real `writeLog` once every phase finishes — for a large batch
    *  that leaves a long stretch where rows are already streaming into the results table but there's
    *  nothing to download yet (see bugs & requirements/8.20.md #3: user watched ~2900 rows come in
@@ -340,6 +344,7 @@ export default function DataMigration() {
     setWriteLog(null);
     setWriteError(null);
     setWriteStopped(false);
+    setWriteTotal(0);
   }
 
   function targetConnectionName(): string {
@@ -374,6 +379,7 @@ export default function DataMigration() {
     setWriteResults([]);
     setWriteLog(null);
     setWriteError(null);
+    setWriteTotal(plan.rows.length + intersectRowCount);
     stopRequestedRef.current = false;
     setWriteStopped(false);
     const startedAt = new Date();
@@ -722,6 +728,26 @@ export default function DataMigration() {
           </div>
 
           {writeError && <ErrorMessage error={writeError} />}
+
+          {writeTotal > 0 &&
+            (writeRunning || (writeResults && writeResults.length > 0)) &&
+            (() => {
+              // Same "导入" = phase1+3 only, excluding phase2's backfill entries, as the results
+              // summary below — otherwise the bar would jump past 100% once backfill entries
+              // start landing for a batch that had any deferred (cross-row-reference) columns.
+              const imported = writeResults?.filter((r) => r.phase !== "backfill").length ?? 0;
+              const percent = Math.min(100, Math.round((imported / writeTotal) * 100));
+              return (
+                <div className="space-y-1">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-800">
+                    <div className="h-full bg-blue-600 transition-all" style={{ width: `${percent}%` }} />
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    已处理 {imported} / 约 {writeTotal} 行{writeRunning ? "…" : ""}
+                  </p>
+                </div>
+              );
+            })()}
 
           {writeResults &&
             writeResults.length > 0 &&

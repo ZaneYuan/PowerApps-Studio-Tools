@@ -95,8 +95,8 @@ const inputCls =
  *
  *  memo alone wasn't the whole story, though: real usage on a product-class table (150-280
  *  editable columns, so up to that many live `<input>`/`<select>` elements per row) kept stuttering
- *  on plain vertical scroll even once every re-render here was confirmed (via the `console.count`
- *  below) to be legitimately skipped — the cost wasn't React re-rendering these cells, it was the
+ *  on plain vertical scroll even once every re-render here was confirmed (via a temporary
+ *  `console.count`, since removed) to be legitimately skipped — the cost wasn't React re-rendering these cells, it was the
  *  browser having to keep that many real form controls laid out and painted at once, scaling
  *  directly with *checked column count* regardless of row count (a 5000-row/20-column table never
  *  stuttered; a 37-row/165-column one did). Standard fix, same one every serious data-grid uses
@@ -145,17 +145,6 @@ const GridRowView = memo(function GridRowView({
   entityLogicalName?: string;
   showRowCheckbox: boolean;
 }) {
-  // TEMP diagnostic (bugs & requirements/8.19.md #6) — remove once the wide-table scroll stutter
-  // is confirmed fixed. Deliberately NOT gated behind import.meta.env.DEV: the report this is
-  // chasing only reproduces against the real published desktop build (a production Vite build),
-  // not `npm run dev`. One shared counter (not per-row) so it reads as a single number in DevTools
-  // Console — reset it (right-click the console → Clear console, or the 🚫 icon) right before a
-  // scroll drag, then read it after: this component actually executing its render body dozens of
-  // times per second during the drag means memoization genuinely isn't taking effect (the bug is
-  // still in React-land); a low, roughly-visible-row-count number instead means rows are correctly
-  // being skipped and the remaining cost is elsewhere (browser layout, GC, something outside this
-  // component entirely).
-  console.count("GridRowView render");
   return (
     <tr className="border-t border-gray-100 dark:border-gray-800">
       {showRowCheckbox && (
@@ -261,6 +250,7 @@ const GridRowView = memo(function GridRowView({
                   type="button"
                   onClick={() => onOpenLookupEditor(row.id, c.key)}
                   title="搜索并选择记录"
+                  aria-label="搜索并选择记录"
                   disabled={!connectionId || !entityLogicalName}
                   className="shrink-0 rounded border border-gray-300 px-1 py-0.5 text-xs hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700"
                 >
@@ -387,11 +377,6 @@ const GridHeader = memo(function GridHeader({
   entityLogicalName?: string;
   showRowCheckbox: boolean;
 }) {
-  // TEMP diagnostic — see the matching comment on GridRowView's own counter above; same idea, so
-  // a header that's *also* re-executing every scroll tick (vs. only GridRowView) narrows down
-  // whether it's specifically the header, specifically the rows, or (if both stay low but the
-  // stutter persists anyway) something outside React's render cycle entirely.
-  console.count("GridHeader render");
   function startResize(e: ReactMouseEvent<HTMLDivElement>, key: string) {
     e.preventDefault();
     const th = e.currentTarget.parentElement;
@@ -478,6 +463,7 @@ const GridHeader = memo(function GridHeader({
                     }
                   }}
                   className="shrink-0 rounded px-0.5 text-gray-400 hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300"
+                  aria-label={`列 ${c.key} 的排序/筛选菜单`}
                 >
                   ▾
                 </button>
@@ -605,11 +591,6 @@ export default function CheckableGrid({
    *  migrates rows keeps the checkbox (default true) — this is purely additive. */
   showRowCheckbox?: boolean;
 }) {
-  // TEMP diagnostic — the parent's own render count is *expected* to climb fast during a scroll
-  // drag (the virtualizer's internal scroll-offset state lives here, so that's just it doing its
-  // job) — this counter is the baseline the GridRowView/GridHeader counters should be compared
-  // against, not a sign of a bug on its own.
-  console.count("CheckableGrid render");
   // Memoized on `columns` alone (not recomputed on every render) — a wide entity (product-class
   // tables routinely have 150-280 attributes) turned this into a real, visible cost once a
   // scroll container had anything actually subscribed to its scroll events (the row virtualizer
