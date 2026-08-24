@@ -580,7 +580,15 @@ export default function MetadataBrowser() {
       </div>
 
       {attributePanel && (
-        <div className="fixed inset-y-0 right-0 z-40 flex w-96 max-w-full flex-col border-l border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-950">
+        // A normal flex sibling (not `fixed`) — a fixed-positioned overlay here ignored this
+        // tool's own bounded layout entirely and positioned relative to the whole viewport,
+        // which both let it cover the app's outer Tab bar above (`inset-y-0` reaching all the
+        // way to the true top of the window, not just this tool's own content area) and never
+        // made the entity-list/attributes-table area on its left actually shrink to share space
+        // with it (Bugs/8.24.md #7). As an ordinary flex item in the same row, flexbox handles
+        // both for free: it's contained within the parent's own `h-[calc(100vh-8rem)]`, and the
+        // sibling's own `min-w-0 flex-1` already shrinks to whatever's left over.
+        <div className="flex w-96 max-w-full shrink-0 flex-col border-l border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-950">
           <div className="flex items-center justify-between border-b border-gray-200 p-3 dark:border-gray-800">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">
