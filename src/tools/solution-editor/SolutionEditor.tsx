@@ -6,6 +6,7 @@ import AddExistingTableDialog from "./AddExistingTableDialog";
 import NewColumnDialog from "./NewColumnDialog";
 import NewSolutionDialog from "./NewSolutionDialog";
 import NewTableDialog from "./NewTableDialog";
+import ErrorMessage from "../../shared/ErrorMessage";
 import {
   COMPONENT_TYPE_LABELS,
   ENTITY_COMPONENT_TYPE,
@@ -210,11 +211,7 @@ export default function SolutionEditor() {
           </button>
         </div>
 
-        {solutionsError && (
-          <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-            {solutionsError}
-          </pre>
-        )}
+        {solutionsError && <ErrorMessage error={solutionsError} />}
         {!solutions && !solutionsError && <p className="text-sm text-gray-400">加载中…</p>}
 
         {solutions && (

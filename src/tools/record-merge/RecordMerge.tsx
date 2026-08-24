@@ -17,6 +17,7 @@ import {
 } from "./types";
 import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
+import ErrorMessage from "../../shared/ErrorMessage";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -347,9 +348,7 @@ export default function RecordMerge() {
         {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
       </div>
 
-      {scanError && (
-        <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">{scanError}</div>
-      )}
+      {scanError && <ErrorMessage error={scanError} />}
 
       {scanResult && (
         <>
@@ -472,11 +471,7 @@ export default function RecordMerge() {
                 <ConcurrencyInput value={concurrency} onChange={setConcurrency} disabled={writeRunning} />
               </div>
 
-              {writeError && (
-                <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-                  {writeError}
-                </pre>
-              )}
+              {writeError && <ErrorMessage error={writeError} />}
 
               {writeResults && writeResults.length > 0 && <MigrationResultTable results={writeResults} stopped={writeStopped} log={writeLog} />}
             </div>

@@ -4,6 +4,7 @@ import { useActiveConnection } from "../../native/activeConnection";
 import { fetchBusinessProcessFlows, fetchBpfDefinition } from "./dataverseOps";
 import { parseBpfClientData } from "./bpfParser";
 import type { BpfGraph, BpfListItem, Edge, Stage } from "./types";
+import ErrorMessage from "../../shared/ErrorMessage";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -160,11 +161,7 @@ export default function BpfViewer() {
         {loading && <span className="text-xs text-gray-400">加载中…</span>}
       </div>
 
-      {loadError && (
-        <p className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-          {loadError}
-        </p>
-      )}
+      {loadError && <ErrorMessage error={loadError} className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" />}
 
       {graph && (
         <>

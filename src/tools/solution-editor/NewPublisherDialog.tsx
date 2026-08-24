@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { createPublisher, type NewPublisherParams } from "./dataverseOps";
+import ErrorMessage from "../../shared/ErrorMessage";
 
 const inputCls =
   "w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -114,11 +115,7 @@ export default function NewPublisherDialog({
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className={inputCls} />
           </div>
 
-          {submitError && (
-            <p className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-              {submitError}
-            </p>
-          )}
+          {submitError && <ErrorMessage error={submitError} className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" />}
         </div>
 
         <div className="mt-5 flex justify-end gap-2">

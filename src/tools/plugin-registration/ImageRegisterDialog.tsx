@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import AttributePicker from "../../shared/AttributePicker";
+import ErrorMessage from "../../shared/ErrorMessage";
 import { fetchEntityAttributes, fetchImageDetail, fetchStepDetail, registerImage, updateImage } from "./dataverseOps";
 import { IMAGE_TYPE_LABELS } from "./types";
 
@@ -182,11 +183,7 @@ export default function ImageRegisterDialog({
               </div>
             )}
 
-            {submitError && (
-              <p className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-                {submitError}
-              </p>
-            )}
+            {submitError && <ErrorMessage error={submitError} className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" />}
           </div>
         )}
 

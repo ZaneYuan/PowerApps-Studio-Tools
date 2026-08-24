@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
+import ErrorMessage from "../../shared/ErrorMessage";
 import {
   exportSolutionZip,
   fetchEffectiveRibbonCompressed,
@@ -332,17 +333,9 @@ export default function RibbonWorkbench() {
         </button>
       </div>
 
-      {loadError && (
-        <p className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-          {loadError}
-        </p>
-      )}
+      {loadError && <ErrorMessage error={loadError} className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" />}
 
-      {effectiveError && (
-        <p className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-          {effectiveError}
-        </p>
-      )}
+      {effectiveError && <ErrorMessage error={effectiveError} className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" />}
 
       {effectiveTabs && (
         <div className="rounded-lg border border-gray-200 dark:border-gray-800">
@@ -495,11 +488,7 @@ export default function RibbonWorkbench() {
             </div>
           </div>
 
-          {guidedError && (
-            <p className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-              {guidedError}
-            </p>
-          )}
+          {guidedError && <ErrorMessage error={guidedError} className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" />}
 
           <div className="flex items-center gap-3">
             <button
@@ -512,11 +501,7 @@ export default function RibbonWorkbench() {
             {saving && saveStep && <span className="text-xs text-gray-400">{saveStep}</span>}
           </div>
 
-          {saveError && (
-            <p className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-              {saveError}
-            </p>
-          )}
+          {saveError && <ErrorMessage error={saveError} className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" />}
           {!saveError && saveResultData !== null && !saving && (
             <div>
               <p className="mb-1 text-xs font-medium text-green-600 dark:text-green-400">保存并发布完成。</p>

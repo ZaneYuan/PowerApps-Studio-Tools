@@ -2,6 +2,7 @@ import { useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
+import ErrorMessage from "../../shared/ErrorMessage";
 import TreePanel, { type TreePanelHandle } from "./TreePanel";
 import StepRegisterDialog from "./StepRegisterDialog";
 import ImageRegisterDialog from "./ImageRegisterDialog";
@@ -343,11 +344,7 @@ export default function PluginRegistration() {
           </div>
         )}
 
-        {actionError && (
-          <p className="mb-2 rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-            {actionError}
-          </p>
-        )}
+        {actionError && <ErrorMessage error={actionError} className="mb-2 rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" />}
 
         {selected && detailLoading && <p className="text-xs text-gray-400">加载详情…</p>}
         {selected && detailError && <p className="text-xs text-red-600 dark:text-red-400">{detailError}</p>}

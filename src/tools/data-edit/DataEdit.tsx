@@ -16,6 +16,7 @@ import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/g
 import { isRowDirty, valuesEqual } from "../../shared/dirtyTracking";
 import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
 import { useAlertDialog, useConfirmDialog } from "../../shared/ConfirmDialog";
+import ErrorMessage from "../../shared/ErrorMessage";
 
 const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
 
@@ -333,11 +334,7 @@ export default function DataEdit() {
           </button>
           {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个本页连接。</span>}
         </div>
-        {queryError && (
-          <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-            {queryError}
-          </pre>
-        )}
+        {queryError && <ErrorMessage error={queryError} />}
       </div>
 
       {entityLogicalName && rows.length > 0 && (
@@ -401,11 +398,7 @@ export default function DataEdit() {
             </label>
           </div>
 
-          {writeError && (
-            <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-              {writeError}
-            </pre>
-          )}
+          {writeError && <ErrorMessage error={writeError} />}
 
           {writeResults && writeResults.length > 0 && (
             // The summary/下载日志 bar is a sibling *above* the scrolling body, not inside it — see

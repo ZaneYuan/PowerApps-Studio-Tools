@@ -6,6 +6,7 @@ import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
 import { unwrapODataRow } from "../../native/odata";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
+import ErrorMessage from "../../shared/ErrorMessage";
 import { fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
@@ -783,11 +784,7 @@ export default function Sql4Cds() {
             {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
 
-          {runError && (
-            <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-              {runError}
-            </pre>
-          )}
+          {runError && <ErrorMessage error={runError} />}
 
           {rows && rows.length === 0 && (
             <div className="rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">0 行</div>
@@ -857,11 +854,7 @@ export default function Sql4Cds() {
             {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
 
-          {writeError && (
-            <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-              {writeError}
-            </pre>
-          )}
+          {writeError && <ErrorMessage error={writeError} />}
 
           {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} log={writeLog} />}
         </>
@@ -906,11 +899,7 @@ export default function Sql4Cds() {
             {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
 
-          {writeError && (
-            <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-              {writeError}
-            </pre>
-          )}
+          {writeError && <ErrorMessage error={writeError} />}
 
           {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} log={writeLog} />}
         </>
@@ -972,11 +961,7 @@ export default function Sql4Cds() {
               {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
             </div>
 
-            {writeError && (
-              <pre className="overflow-x-auto rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-                {writeError}
-              </pre>
-            )}
+            {writeError && <ErrorMessage error={writeError} />}
 
             {writeResults && writeResults.length > 0 && <WriteResultTable results={writeResults} stopped={writeStopped} log={writeLog} />}
           </>

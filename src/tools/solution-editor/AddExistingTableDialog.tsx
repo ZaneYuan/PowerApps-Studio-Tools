@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { addExistingTableComponent, fetchAllEntitiesForPicker, type PickableEntity } from "./dataverseOps";
+import ErrorMessage from "../../shared/ErrorMessage";
 
 export default function AddExistingTableDialog({
   connectionId,
@@ -83,11 +84,7 @@ export default function AddExistingTableDialog({
           ))}
         </div>
 
-        {submitError && (
-          <p className="mx-4 mb-2 rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-            {submitError}
-          </p>
-        )}
+        {submitError && <ErrorMessage error={submitError} className="mx-4 mb-2 rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" />}
 
         <div className="flex justify-end gap-2 border-t border-gray-200 p-3 dark:border-gray-800">
           <button onClick={onClose} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800">

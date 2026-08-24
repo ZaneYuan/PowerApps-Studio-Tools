@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection, type ConnectionDto } from "../../native/activeConnection";
 import { parseConnectionString } from "./connectionString";
+import ErrorMessage from "../../shared/ErrorMessage";
 
 type AuthTypeInput = "interactive" | "clientSecret" | "certificate";
 
@@ -483,11 +484,7 @@ export default function ConnectionsPage() {
                   </div>
                 )}
 
-                {status[c.id]?.error && (
-                  <pre className="mt-2 overflow-x-auto rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-                    {status[c.id].error}
-                  </pre>
-                )}
+                {status[c.id]?.error && <ErrorMessage error={status[c.id].error} className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400" />}
                 {status[c.id]?.message && (
                   <pre className="mt-2 overflow-x-auto rounded-md border border-gray-200 bg-gray-50 p-2 text-xs text-gray-900 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100">
                     {status[c.id].message}
