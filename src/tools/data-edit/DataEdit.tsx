@@ -7,7 +7,7 @@ import { unwrapODataRowWithFormatting } from "../../native/odata";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { buildSelectPath, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
-import { insertRow, updateRow } from "../sql4cds/writeOps";
+import { deleteRow, insertRow, updateRow } from "../sql4cds/writeOps";
 import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry } from "../sql4cds/executionLog";
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
@@ -52,6 +52,10 @@ export default function DataEdit() {
   const [rows, setRows] = useState<GridRow[]>([]);
 
   const [writeRunning, setWriteRunning] = useState(false);
+  // Which of the two write buttons is actually in flight — handleSubmit and handleDelete share
+  // `writeRunning` (a row mid-update shouldn't also be deletable, and vice versa, so both buttons
+  // disable together) but each needs its own "…中" label instead of both changing at once.
+  const [writeKind, setWriteKind] = useState<"submit" | "delete">("submit");
   const [writeResults, setWriteResults] = useState<Sql4CdsLogEntry[] | null>(null);
   const [writeLog, setWriteLog] = useState<{ filename: string; text: string } | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
@@ -229,6 +233,7 @@ export default function DataEdit() {
     if (!(await confirmDialog(confirmMsg))) return;
 
     setWriteRunning(true);
+    setWriteKind("submit");
     setWriteResults([]);
     setWriteLog(null);
     setWriteError(null);
@@ -312,6 +317,89 @@ export default function DataEdit() {
     }
   }
 
+  /** Independent of 更新/创建模式 (that toggle only decides what handleSubmit does with the
+   *  primary key column) — deleting only ever needs the row's own id, so it's driven purely by
+   *  which rows are checked, same as 生成 INSERT SQL. */
+  async function handleDelete() {
+    if (!activeConnectionId || !entityLogicalName) return;
+    const checkedRows = rows.filter((r) => r.checked);
+    if (checkedRows.length === 0) return;
+    if (
+      !(await confirmDialog({
+        message: `即将在 ${connectionName()} 删除 ${checkedRows.length} 条 ${entityLogicalName} 记录，此操作不可撤销，确定吗？`,
+        confirmLabel: "删除",
+        danger: true,
+      }))
+    )
+      return;
+
+    setWriteRunning(true);
+    setWriteKind("delete");
+    setWriteResults([]);
+    setWriteLog(null);
+    setWriteError(null);
+    setWriteSkippedCount(0);
+    stopRequestedRef.current = false;
+    setWriteStopped(false);
+    const startedAt = new Date();
+    const entries: Sql4CdsLogEntry[] = [];
+    // Rows Dataverse actually confirmed deleting — dropped from the grid entirely below once the
+    // batch finishes, not just unchecked, since the record genuinely no longer exists (leaving it
+    // displayed would invite trying to "update" something that's already gone). A row that
+    // errored stays in the grid exactly as it was, still checked, so it's obvious what didn't go
+    // through and still selected to retry.
+    const succeededRowIds = new Set<string>();
+    let stopped = false;
+
+    try {
+      await runConcurrent(
+        checkedRows,
+        writeConcurrency,
+        async (row) => {
+          let entry: Sql4CdsLogEntry;
+          try {
+            await deleteRow(activeConnectionId, entitySetName, row.id);
+            entry = { key: row.id, state: "success" };
+            succeededRowIds.add(row.id);
+          } catch (err) {
+            entry = { key: row.id, state: "error", error: err instanceof Error ? err.message : String(err) };
+          }
+          entries.push(entry);
+          setWriteResults((r) => [...(r ?? []), entry]);
+        },
+        () => stopRequestedRef.current,
+      );
+      if (stopRequestedRef.current) {
+        stopped = true;
+        setWriteStopped(true);
+      }
+      if (succeededRowIds.size > 0) {
+        setRows((rs) => rs.filter((r) => !succeededRowIds.has(r.id)));
+      }
+
+      const finishedAt = new Date();
+      const text = buildSql4CdsLogText({
+        startedAt,
+        finishedAt,
+        connectionName: connectionName(),
+        action: "delete",
+        entityLogicalName,
+        entitySetName,
+        sql,
+        entries,
+        stopped,
+      });
+      const filename = sql4CdsLogFilename("delete", entityLogicalName, finishedAt);
+      setWriteLog({ filename, text });
+      // Only auto-download when something actually needs looking at — see Bugs/8.24.md #5.
+      if (entries.some((e) => e.state === "error")) downloadTextFile(filename, text);
+    } catch (err) {
+      setWriteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWriteRunning(false);
+    }
+  }
+
   const checkedRowCount = rows.filter((r) => r.checked).length;
   const isDirty = rows.some(isRowDirty);
 
@@ -330,7 +418,8 @@ export default function DataEdit() {
         写一条单表 SELECT 查出要处理的数据（对本页连接执行），结果表格可以直接编辑——支持文本、选项集（Picklist）、查找（Lookup/Customer/Owner，点 🔍
         搜索选择目标记录，表格里显示的是名称而非 GUID）三种类型的字段编辑，其余类型只读展示；列标题右边缘可拖拽调整宽度。列默认全部勾选，行默认不勾选——手动勾选，或编辑某行任意字段自动勾选该行；被改过的字段会标一个
         ❗。勾选主键 ID 列（默认已勾选）时按钮是"更新"——仅当某行的字段值相对查询结果确实变了才会真正提交，未变更的行自动跳过；提交的 PATCH 也只带这一行真正变了的字段，没动过的字段不会被带上；取消勾选主键 ID
-        列则变成"创建"——把勾选的行按当前值创建成全新记录，主键 ID 列不会被带上，由 Dataverse 自动生成新的。只支持单表，不支持 JOIN / 聚合。
+        列则变成"创建"——把勾选的行按当前值创建成全新记录，主键 ID 列不会被带上，由 Dataverse 自动生成新的。"删除"跟更新/创建模式无关，只看勾选了哪些行，直接删掉对应记录，不可撤销。只支持单表，不支持 JOIN /
+        聚合。
       </div>
 
       <div className="space-y-2">
@@ -389,13 +478,20 @@ export default function DataEdit() {
                 isUpdateMode ? "bg-blue-600 hover:bg-blue-700" : "bg-green-600 hover:bg-green-700"
               }`}
             >
-              {writeRunning
+              {writeRunning && writeKind === "submit"
                 ? isUpdateMode
                   ? "更新中…"
                   : "创建中…"
                 : isUpdateMode
                   ? `更新 ${checkedRowCount} 条记录`
                   : `创建 ${checkedRowCount} 条新记录`}
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={!activeConnectionId || checkedRowCount === 0 || writeRunning}
+              className="rounded-md bg-red-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              {writeRunning && writeKind === "delete" ? "删除中…" : `删除 ${checkedRowCount} 条记录`}
             </button>
             <button
               onClick={handleGenerateSql}

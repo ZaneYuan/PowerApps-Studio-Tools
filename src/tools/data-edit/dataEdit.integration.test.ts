@@ -14,7 +14,7 @@ import { callNative } from "../../native/bridge";
 import { fetchEntityMeta } from "../../native/metadataService";
 import { unwrapODataRowWithFormatting } from "../../native/odata";
 import { createColumn, createTable } from "../solution-editor/dataverseOps";
-import { insertRow, updateRow } from "../sql4cds/writeOps";
+import { deleteRow, insertRow, updateRow } from "../sql4cds/writeOps";
 import { dirtyColumnKeys, valuesEqual } from "../../shared/dirtyTracking";
 
 const FAKE_CONNECTION_ID = "integration-test";
@@ -144,6 +144,23 @@ describe.skipIf(!hasTestCredentials())("Data Edit — real Dataverse integration
     expect(readBack.body[scoreField]).toBe(42);
     const sourceReadBack = await dataverseTestRequest<Record<string, unknown>>("GET", `${entitySet}(${source.newId})?$select=${nameField}`);
     expect(sourceReadBack.body[nameField]).toBe(`Source${suffix}`);
+  }, 30_000);
+
+  it("删除: handleDelete's real deleteRow call actually removes the checked record, and a bogus id fails the way a real failed-row entry expects (Bugs/8.24.md #8)", async () => {
+    const toDelete = await insertRow(FAKE_CONNECTION_ID, tableLogical, entitySet, { [nameField]: `ToDelete${suffix}` });
+    const toKeep = await insertRow(FAKE_CONNECTION_ID, tableLogical, entitySet, { [nameField]: `ToKeep${suffix}` });
+
+    await deleteRow(FAKE_CONNECTION_ID, entitySet, toDelete.newId!);
+
+    await expect(dataverseTestRequest("GET", `${entitySet}(${toDelete.newId})?$select=${nameField}`)).rejects.toThrow();
+    const keptReadBack = await dataverseTestRequest<Record<string, unknown>>("GET", `${entitySet}(${toKeep.newId})?$select=${nameField}`);
+    expect(keptReadBack.body[nameField]).toBe(`ToKeep${suffix}`); // an unrelated row's own delete never touched this one
+
+    // handleDelete's own succeededRowIds tracking only removes a row from the grid when
+    // deleteRow itself didn't throw — a nonexistent id should reject, exactly like a real failed
+    // entry (the row it belongs to would stay in the grid, still checked, for the user to see).
+    const bogusId = "00000000-0000-0000-0000-000000000000";
+    await expect(deleteRow(FAKE_CONNECTION_ID, entitySet, bogusId)).rejects.toThrow();
   }, 30_000);
 
   it("includeFormattedValues: true (Data Edit/Data Copy/Data Migration's query path) really gets a FormattedValue label back from Dataverse for statuscode, and unwrapODataRowWithFormatting extracts it", async () => {
