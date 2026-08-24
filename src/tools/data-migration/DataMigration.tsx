@@ -390,6 +390,18 @@ export default function DataMigration() {
       tableLogs.set(t.tabId, { entityLogicalName: t.entityLogicalName, entitySetName: t.entitySetName, source: t.source, entries: [] });
     }
     let stopped = false;
+    // Rows whose primary write actually succeeded (phase1 "create" for a normal table, phase3
+    // "associate" for an intersect table — phase2's backfill doesn't gate this: a row created
+    // fine but whose deferred-field backfill separately failed is still a real, written row) —
+    // reset to "clean" per-table below once the whole import finishes (unchecked, ❗ cleared), so
+    // a successful import doesn't keep nagging "still pending" (Bugs/8.24.md #6). A row that
+    // errored keeps its checked/dirty state as-is — nothing was actually written from it.
+    const succeededRowIdsByTab = new Map<string, Set<string>>();
+    function markSucceeded(tabId: string, rowId: string) {
+      const set = succeededRowIdsByTab.get(tabId) ?? new Set<string>();
+      set.add(rowId);
+      succeededRowIdsByTab.set(tabId, set);
+    }
 
     function recordResult(
       tabId: string,
@@ -410,6 +422,7 @@ export default function DataMigration() {
           try {
             await updateRow(targetConnectionId, rowPlan.table.entityLogicalName, rowPlan.table.entitySetName, rowPlan.row.id, phase1Body(rowPlan));
             recordResult(rowPlan.table.tabId, "create", { key: rowPlan.row.id, state: "success" });
+            markSucceeded(rowPlan.table.tabId, rowPlan.row.id);
           } catch (err) {
             recordResult(rowPlan.table.tabId, "create", { key: rowPlan.row.id, state: "error", error: err instanceof Error ? err.message : String(err) });
           }
@@ -474,6 +487,7 @@ export default function DataMigration() {
                 const values = resolveIntersectRowValues(table.manyToManyInfo!, row.values);
                 await insertIntersectRow(targetConnectionId, envUrl, table.manyToManyInfo!, values);
                 recordResult(table.tabId, "associate", { key: row.id, state: "success" });
+                markSucceeded(table.tabId, row.id);
               } catch (err) {
                 recordResult(table.tabId, "associate", { key: row.id, state: "error", error: err instanceof Error ? err.message : String(err) });
               }
@@ -481,6 +495,16 @@ export default function DataMigration() {
             () => stopRequestedRef.current,
           );
         }
+      }
+
+      if (succeededRowIdsByTab.size > 0) {
+        setTables((ts) =>
+          ts.map((t) => {
+            const succeeded = succeededRowIdsByTab.get(t.tabId);
+            if (!succeeded || succeeded.size === 0) return t;
+            return { ...t, rows: t.rows.map((r) => (succeeded.has(r.id) ? { ...r, checked: false, originalValues: r.values } : r)) };
+          }),
+        );
       }
 
       const finishedAt = new Date();

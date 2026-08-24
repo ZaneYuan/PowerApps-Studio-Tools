@@ -191,6 +191,11 @@ export default function DataCopy() {
     setWriteStopped(false);
     const startedAt = new Date();
     const entries: Sql4CdsLogEntry[] = [];
+    // Source rows whose (edited) values actually made it into a newly-created record — reset to
+    // "clean" below once the batch finishes (unchecked, ❗ cleared), since a successful create has
+    // already consumed that edit; there's nothing left pending for it (Bugs/8.24.md #6). A row
+    // that errored keeps its checked/dirty state as-is — nothing was actually created from it.
+    const succeededRowIds = new Set<string>();
     let stopped = false;
 
     try {
@@ -204,6 +209,7 @@ export default function DataCopy() {
             const body = Object.fromEntries(checkedColumns.map((c) => [c.key, row.values[c.key] ?? null]));
             const { newId } = await insertRow(activeConnectionId, entityLogicalName, entitySetName, body);
             entry = { key, state: "success", detail: newId ?? undefined };
+            succeededRowIds.add(row.id);
           } catch (err) {
             entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
           }
@@ -215,6 +221,9 @@ export default function DataCopy() {
       if (stopRequestedRef.current) {
         stopped = true;
         setWriteStopped(true);
+      }
+      if (succeededRowIds.size > 0) {
+        setRows((rs) => rs.map((r) => (succeededRowIds.has(r.id) ? { ...r, checked: false, originalValues: r.values } : r)));
       }
 
       const finishedAt = new Date();

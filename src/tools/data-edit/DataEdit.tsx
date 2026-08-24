@@ -237,6 +237,12 @@ export default function DataEdit() {
     setWriteStopped(false);
     const startedAt = new Date();
     const entries: Sql4CdsLogEntry[] = [];
+    // Rows that actually made it to Dataverse — reset to "clean" below once the whole batch
+    // finishes (unchecked, ❗ cleared) so a successful submit doesn't keep nagging "still pending"
+    // (Bugs/8.24.md #6). A row that errored keeps its checked/dirty state exactly as-is: its
+    // edited value never actually landed in Dataverse, so silently treating it as the new
+    // baseline would make a later re-submit skip that field entirely, thinking it already matches.
+    const succeededRowIds = new Set<string>();
     let stopped = false;
 
     try {
@@ -263,6 +269,7 @@ export default function DataEdit() {
               const { newId } = await insertRow(activeConnectionId, entityLogicalName, entitySetName, body);
               entry = { key, state: "success", detail: newId ?? undefined };
             }
+            succeededRowIds.add(row.id);
           } catch (err) {
             entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
           }
@@ -274,6 +281,9 @@ export default function DataEdit() {
       if (stopRequestedRef.current) {
         stopped = true;
         setWriteStopped(true);
+      }
+      if (succeededRowIds.size > 0) {
+        setRows((rs) => rs.map((r) => (succeededRowIds.has(r.id) ? { ...r, checked: false, originalValues: r.values } : r)));
       }
 
       const finishedAt = new Date();
