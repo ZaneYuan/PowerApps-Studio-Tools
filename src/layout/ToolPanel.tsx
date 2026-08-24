@@ -2,6 +2,7 @@ import { Suspense, useCallback } from "react";
 import { isNativeBridgeAvailable } from "../native/bridge";
 import { TabConnectionContext, useActiveConnection } from "../native/activeConnection";
 import { TabDirtyContext, useTabManager } from "../native/tabs";
+import { useConnectionHealth } from "../native/useConnectionHealth";
 import type { ToolDefinition } from "../tools/types";
 import ToolErrorBoundary from "./ToolErrorBoundary";
 
@@ -34,6 +35,7 @@ export default function ToolPanel({
   const { setTabConnection, setTabDirty } = useTabManager();
   const activeConnection = connections.find((c) => c.id === connectionId);
   const reportDirty = useCallback((dirty: boolean) => setTabDirty(tabKey, dirty), [tabKey, setTabDirty]);
+  const connectionHealth = useConnectionHealth(tool.connectionScoped !== false ? connectionId : null);
 
   return (
     <TabConnectionContext.Provider value={connectionId}>
@@ -59,6 +61,17 @@ export default function ToolPanel({
                     </option>
                   ))}
                 </select>
+                {connectionHealth.status === "checking" && <span className="text-gray-400">检测中…</span>}
+                {connectionHealth.status === "ok" && (
+                  <span className="text-green-500 dark:text-green-400" title="连接正常">
+                    ●
+                  </span>
+                )}
+                {connectionHealth.status === "error" && (
+                  <span className="text-red-500 dark:text-red-400" title={`连接检测失败：${connectionHealth.error}`}>
+                    ●
+                  </span>
+                )}
               </label>
             )}
           </div>
