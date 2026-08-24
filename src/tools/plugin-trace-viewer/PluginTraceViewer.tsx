@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
+import { useConfirmDialog } from "../../shared/ConfirmDialog";
+import { runConcurrent } from "../sql4cds/concurrency";
 import {
   deleteTraceLog,
   fetchTraceLogDetail,
@@ -18,11 +20,14 @@ const TOP_OPTIONS = [50, 100, 200, 500];
 
 export default function PluginTraceViewer() {
   const { activeConnectionId } = useActiveConnection();
+  const confirmDialog = useConfirmDialog();
 
   const [filters, setFilters] = useState<TraceFilters>(DEFAULT_FILTERS);
   const [logs, setLogs] = useState<PluginTraceLog[] | null>(null);
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const [orgSetting, setOrgSetting] = useState<OrgTraceSetting | null>(null);
   const [settingError, setSettingError] = useState<string | null>(null);
@@ -37,6 +42,7 @@ export default function PluginTraceViewer() {
     if (!activeConnectionId) return;
     setListLoading(true);
     setListError(null);
+    setCheckedIds(new Set());
     try {
       setLogs(await fetchTraceLogs(activeConnectionId, filters));
     } catch (err) {
@@ -60,6 +66,7 @@ export default function PluginTraceViewer() {
     setLogs(null);
     setSelectedId(null);
     setDetail(null);
+    setCheckedIds(new Set());
     void loadLogs();
     void loadSetting();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -96,16 +103,72 @@ export default function PluginTraceViewer() {
 
   async function handleDelete(id: string) {
     if (!activeConnectionId) return;
-    if (!confirm("确定删除这条 Trace Log？")) return;
+    if (!(await confirmDialog({ message: "确定删除这条 Trace Log？", danger: true }))) return;
     try {
       await deleteTraceLog(activeConnectionId, id);
       setLogs((cur) => cur?.filter((l) => l.plugintracelogid !== id) ?? null);
+      setCheckedIds((cur) => {
+        if (!cur.has(id)) return cur;
+        const next = new Set(cur);
+        next.delete(id);
+        return next;
+      });
       if (selectedId === id) {
         setSelectedId(null);
         setDetail(null);
       }
     } catch (err) {
       setListError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function toggleChecked(id: string) {
+    setCheckedIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllChecked() {
+    if (!logs) return;
+    setCheckedIds((cur) => (cur.size === logs.length ? new Set() : new Set(logs.map((l) => l.plugintracelogid))));
+  }
+
+  /** Deletes every checked row — a single confirm up front (not one per row, unlike single-row
+   *  handleDelete above) and `runConcurrent` (same helper SQL4CDS/Data Migration's own batch
+   *  writes use) so a large selection doesn't delete one at a time in sequence. Rows that fail
+   *  stay checked (and in the list) so the user can see which ones didn't go through and retry. */
+  async function handleBulkDelete() {
+    if (!activeConnectionId || checkedIds.size === 0) return;
+    const ids = Array.from(checkedIds);
+    if (!(await confirmDialog({ message: `确定删除选中的 ${ids.length} 条 Trace Log？`, danger: true }))) return;
+    setBulkDeleting(true);
+    setListError(null);
+    const failedIds = new Set<string>();
+    try {
+      await runConcurrent(
+        ids,
+        8,
+        async (id) => {
+          try {
+            await deleteTraceLog(activeConnectionId, id);
+          } catch {
+            failedIds.add(id);
+          }
+        },
+        () => false,
+      );
+      setLogs((cur) => cur?.filter((l) => failedIds.has(l.plugintracelogid) || !ids.includes(l.plugintracelogid)) ?? null);
+      setCheckedIds(failedIds);
+      if (selectedId && !failedIds.has(selectedId) && ids.includes(selectedId)) {
+        setSelectedId(null);
+        setDetail(null);
+      }
+      if (failedIds.size > 0) setListError(`有 ${failedIds.size} 条删除失败，已保留在列表中，可以重试。`);
+    } finally {
+      setBulkDeleting(false);
     }
   }
 
@@ -238,6 +301,15 @@ export default function PluginTraceViewer() {
         >
           重置
         </button>
+        {checkedIds.size > 0 && (
+          <button
+            onClick={handleBulkDelete}
+            disabled={bulkDeleting}
+            className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+          >
+            {bulkDeleting ? "删除中…" : `批量删除选中的 ${checkedIds.size} 条`}
+          </button>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 gap-3">
@@ -255,6 +327,14 @@ export default function PluginTraceViewer() {
               <table className="w-full text-left text-sm">
                 <thead className="sticky top-0 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
                   <tr>
+                    <th className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={checkedIds.size > 0 && checkedIds.size === logs.length}
+                        onChange={toggleAllChecked}
+                        aria-label="全选"
+                      />
+                    </th>
                     <th className="px-3 py-2">创建时间</th>
                     <th className="px-3 py-2">Type Name</th>
                     <th className="px-3 py-2">Message</th>
@@ -274,6 +354,14 @@ export default function PluginTraceViewer() {
                         selectedId === log.plugintracelogid ? "bg-blue-50 dark:bg-blue-500/10" : ""
                       }`}
                     >
+                      <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={checkedIds.has(log.plugintracelogid)}
+                          onChange={() => toggleChecked(log.plugintracelogid)}
+                          aria-label="选择这条 Trace Log"
+                        />
+                      </td>
                       <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">
                         {new Date(log.createdon).toLocaleString()}
                       </td>

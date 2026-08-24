@@ -16,6 +16,7 @@ import {
   type RefTableRecordsResult,
 } from "./types";
 import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
+import { useConfirmDialog } from "../../shared/ConfirmDialog";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -160,6 +161,7 @@ function RefTableGrid({ columns, rows }: { columns: string[]; rows: GridRow[] })
 
 export default function RecordMerge() {
   const { activeConnectionId, connections } = useActiveConnection();
+  const confirmDialog = useConfirmDialog();
   const [entityName, setEntityName] = useState("");
   const [locator, setLocator] = useState("");
   const [scanResult, setScanResult] = useState<ReferenceScanResult | null>(null);
@@ -253,9 +255,9 @@ export default function RecordMerge() {
       return;
     }
     if (
-      !confirm(
+      !(await confirmDialog(
         `即将把 ${scanResult.tables.length} 张表、共 ${total.exceedsCap ? `至少 ${total.count}` : total.count} 条引用记录，从 ${scanResult.primaryName ?? scanResult.id}（${scanResult.id}）迁移到 ${newIdCheck.primaryName ?? newId}（${newId}），确定吗？`,
-      )
+      ))
     )
       return;
 

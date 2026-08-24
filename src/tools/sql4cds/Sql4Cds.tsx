@@ -5,6 +5,7 @@ import { useEntitySetName } from "../../native/useEntitySetName";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
 import { unwrapODataRow } from "../../native/odata";
+import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import { fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
@@ -162,6 +163,7 @@ function WriteResultTable({
 
 export default function Sql4Cds() {
   const { activeConnectionId, connections } = useActiveConnection();
+  const confirmDialog = useConfirmDialog();
   const [sql, setSql] = useState("");
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -367,7 +369,7 @@ export default function Sql4Cds() {
   async function handleInsert() {
     if (!activeConnectionId || result.kind !== "insert" || !entitySet) return;
     const rowCount = result.rows.length;
-    if (!confirm(`即将向 ${result.entityLogicalName} 插入 ${rowCount} 条新记录，确定吗？`)) return;
+    if (!(await confirmDialog(`即将向 ${result.entityLogicalName} 插入 ${rowCount} 条新记录，确定吗？`))) return;
 
     setWriteRunning(true);
     setWriteResults([]);
@@ -438,7 +440,7 @@ export default function Sql4Cds() {
     const ids = matchInfo.ids;
     if (ids.length === 0) return;
     const verb = result.action === "update" ? "更新" : "删除";
-    if (!confirm(`即将${verb} ${result.entityLogicalName} 的 ${ids.length} 条记录，确定吗？`)) return;
+    if (!(await confirmDialog({ message: `即将${verb} ${result.entityLogicalName} 的 ${ids.length} 条记录，确定吗？`, danger: result.action !== "update" }))) return;
 
     setWriteRunning(true);
     setWriteResults([]);
@@ -517,9 +519,16 @@ export default function Sql4Cds() {
     // Numbered by originalIndex (the statement's position in the pasted SQL), not execution
     // order — so "语句 N" in the confirm dialog, the log, and any error always matches what the
     // user actually typed, even when dependency ordering moved it.
-    const preview = statements.map((os) => `${os.originalIndex + 1}. ${describeStatement(os.statement)}`).join("\n");
-    const reorderNote = orderedBatch.reordered ? "\n\n（已按跨表/跨行依赖关系自动调整了执行顺序，上面列出的就是实际执行顺序。）" : "";
-    if (!confirm(`即将依次执行 ${statements.length} 条语句：\n${preview}${reorderNote}\n\n具体影响行数将在执行过程中依次查询/写入。确定吗？`)) return;
+    const preview = statements.map((os) => `${os.originalIndex + 1}. ${describeStatement(os.statement)}`);
+    const reorderNote = orderedBatch.reordered ? "（已按跨表/跨行依赖关系自动调整了执行顺序，上面列出的就是实际执行顺序。）" : "";
+    if (
+      !(await confirmDialog({
+        message: `即将依次执行 ${statements.length} 条语句，具体影响行数将在执行过程中依次查询/写入。${reorderNote}`,
+        detail: preview,
+        confirmLabel: "执行",
+      }))
+    )
+      return;
 
     setWriteRunning(true);
     setWriteResults([]);

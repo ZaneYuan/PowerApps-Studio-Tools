@@ -15,6 +15,7 @@ import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/Check
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
 import { isRowDirty } from "../../shared/dirtyTracking";
 import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
+import { useConfirmDialog } from "../../shared/ConfirmDialog";
 
 const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
 
@@ -35,6 +36,7 @@ export function replaceSelectColumns(sqlText: string, columnNames: string[]): st
 
 export default function DataCopy() {
   const { activeConnectionId, connections } = useActiveConnection();
+  const confirmDialog = useConfirmDialog();
 
   const [sql, setSql] = useState("");
   const { schema: editorSchema, defaultTable: editingTable } = useSqlEditorSchema(activeConnectionId, sql);
@@ -172,7 +174,7 @@ export default function DataCopy() {
     const checkedColumns = columns.filter((c) => c.checked && c.key.toLowerCase() !== primaryIdAttribute.toLowerCase());
     const checkedRows = rows.filter((r) => r.checked);
     if (checkedColumns.length === 0 || checkedRows.length === 0) return;
-    if (!confirm(`即将在 ${connectionName()} 创建 ${checkedRows.length} 条新的 ${entityLogicalName} 记录，确定吗？`)) return;
+    if (!(await confirmDialog(`即将在 ${connectionName()} 创建 ${checkedRows.length} 条新的 ${entityLogicalName} 记录，确定吗？`))) return;
 
     setWriteRunning(true);
     setWriteResults([]);

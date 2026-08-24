@@ -14,6 +14,7 @@ import CheckableGrid from "../../shared/CheckableGrid";
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
 import { isRowDirty } from "../../shared/dirtyTracking";
 import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
+import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import { planDeferredWrite, phase1Body, phase2Body } from "./deferredWrite";
 import {
   buildDataMigrationLogText,
@@ -131,6 +132,7 @@ async function buildColumns(
 
 export default function DataMigration() {
   const { activeConnectionId, connections } = useActiveConnection();
+  const confirmDialog = useConfirmDialog();
 
   const [sql, setSql] = useState("");
   const { schema: editorSchema, defaultTable: editingTable } = useSqlEditorSchema(activeConnectionId, sql);
@@ -359,11 +361,11 @@ export default function DataMigration() {
     const checkedTableCount = tables.filter((t) => t.rows.some((r) => r.checked)).length;
 
     if (
-      !confirm(
+      !(await confirmDialog(
         `即将向 ${targetConnectionName()} 导入 ${totalCheckedRows} 行（共 ${checkedTableCount} 张表）。` +
           (plan.deferredRowCount > 0 ? `其中 ${plan.deferredRowCount} 行有字段引用了本批数据里还没创建的记录，会先创建、再单独回填。` : "") +
           `\n\n确定吗？`,
-      )
+      ))
     )
       return;
 

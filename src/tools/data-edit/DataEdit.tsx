@@ -15,6 +15,7 @@ import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/Check
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
 import { isRowDirty, valuesEqual } from "../../shared/dirtyTracking";
 import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
+import { useAlertDialog, useConfirmDialog } from "../../shared/ConfirmDialog";
 
 const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
 
@@ -35,6 +36,8 @@ export function replaceSelectColumns(sqlText: string, columnNames: string[]): st
 
 export default function DataEdit() {
   const { activeConnectionId, connections } = useActiveConnection();
+  const confirmDialog = useConfirmDialog();
+  const alertDialog = useAlertDialog();
 
   const [sql, setSql] = useState("");
   const { schema: editorSchema, defaultTable: editingTable } = useSqlEditorSchema(activeConnectionId, sql);
@@ -209,7 +212,7 @@ export default function DataEdit() {
     const skippedCount = checkedRows.length - rowsToSubmit.length;
 
     if (rowsToSubmit.length === 0) {
-      alert(isUpdate ? "勾选的行都没有字段值变更，无需更新。" : "没有可创建的行。");
+      await alertDialog(isUpdate ? "勾选的行都没有字段值变更，无需更新。" : "没有可创建的行。");
       return;
     }
     const confirmMsg = isUpdate
@@ -217,7 +220,7 @@ export default function DataEdit() {
           skippedCount > 0 ? `（另有 ${skippedCount} 条未变更，已自动跳过）` : ""
         }，确定吗？`
       : `即将在 ${connectionName()} 创建 ${rowsToSubmit.length} 条新的 ${entityLogicalName} 记录，确定吗？`;
-    if (!confirm(confirmMsg)) return;
+    if (!(await confirmDialog(confirmMsg))) return;
 
     setWriteRunning(true);
     setWriteResults([]);

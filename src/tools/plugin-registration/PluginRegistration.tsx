@@ -1,6 +1,7 @@
 import { useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
+import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import TreePanel, { type TreePanelHandle } from "./TreePanel";
 import StepRegisterDialog from "./StepRegisterDialog";
 import ImageRegisterDialog from "./ImageRegisterDialog";
@@ -101,6 +102,7 @@ function detailRows(kind: TreeNodeKind, detail: unknown): { label: string; value
 
 export default function PluginRegistration() {
   const { activeConnectionId } = useActiveConnection();
+  const confirmDialog = useConfirmDialog();
   const treeRef = useRef<TreePanelHandle>(null);
 
   const [selected, setSelected] = useState<{ kind: TreeNodeKind; id: string } | null>(null);
@@ -184,7 +186,7 @@ export default function PluginRegistration() {
 
   async function handleDeleteStep() {
     if (!activeConnectionId || !selected || selected.kind !== "step") return;
-    if (!confirm("删除该 Step 会连带删除它下面的所有 Image（以及关联的 secure config）。确定继续？")) return;
+    if (!(await confirmDialog({ message: "删除该 Step 会连带删除它下面的所有 Image（以及关联的 secure config）。确定继续？", danger: true }))) return;
     setActionBusy(true);
     setActionError(null);
     try {
@@ -202,7 +204,7 @@ export default function PluginRegistration() {
 
   async function handleDeleteImage() {
     if (!activeConnectionId || !selected || selected.kind !== "image") return;
-    if (!confirm("确定删除该 Image？")) return;
+    if (!(await confirmDialog({ message: "确定删除该 Image？", danger: true }))) return;
     setActionBusy(true);
     setActionError(null);
     try {
@@ -220,7 +222,7 @@ export default function PluginRegistration() {
 
   async function handleDeleteType() {
     if (!activeConnectionId || !selected || selected.kind !== "type") return;
-    if (!confirm("删除该 PluginType 会连带删除它下面所有的 Step 和 Image。确定继续？")) return;
+    if (!(await confirmDialog({ message: "删除该 PluginType 会连带删除它下面所有的 Step 和 Image。确定继续？", danger: true }))) return;
     setActionBusy(true);
     setActionError(null);
     try {
