@@ -739,37 +739,43 @@ export default function DataMigration() {
               const backfillSuccess = backfilled.filter((r) => r.state === "success").length;
               const backfillError = backfilled.length - backfillSuccess;
               return (
-                <div className="max-h-[40vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
-                  <div className="inline-block min-w-full align-top">
-                    <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-                      <span>
-                        {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
-                        导入成功 {importSuccess} 行，失败 {importError} 行
-                        {backfilled.length > 0 && `；依赖回填成功 ${backfillSuccess} 处，失败 ${backfillError} 处`}
-                      </span>
-                      <button
-                        onClick={handleDownloadLog}
-                        className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
-                      >
-                        下载日志
-                      </button>
+                // The summary/下载日志 bar is a sibling *above* the scrolling body, not inside it —
+                // see DataCopy.tsx's matching comment (Bugs/8.24.md #5): it used to share the same
+                // horizontally-scrolling wrapper as the (often very wide) table rows, dragging the
+                // button off to whatever the widest row's far edge was.
+                <div className="flex max-h-[40vh] flex-col overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
+                  <div className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+                    <span>
+                      {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+                      导入成功 {importSuccess} 行，失败 {importError} 行
+                      {backfilled.length > 0 && `；依赖回填成功 ${backfillSuccess} 处，失败 ${backfillError} 处`}
+                    </span>
+                    <button
+                      onClick={handleDownloadLog}
+                      className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                    >
+                      下载日志
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-auto">
+                    <div className="inline-block min-w-full align-top">
+                      <table className="w-full text-left text-sm">
+                        <tbody>
+                          {writeResults.map((r, i) => (
+                            <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
+                              <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
+                              <td className="whitespace-nowrap px-3 py-1.5 text-xs">
+                                {r.state === "success" ? (
+                                  <span className="text-green-600 dark:text-green-400">成功</span>
+                                ) : (
+                                  <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
-                    <table className="w-full text-left text-sm">
-                      <tbody>
-                        {writeResults.map((r, i) => (
-                          <tr key={i} className="border-t border-gray-100 dark:border-gray-800">
-                            <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{r.key}</td>
-                            <td className="whitespace-nowrap px-3 py-1.5 text-xs">
-                              {r.state === "success" ? (
-                                <span className="text-green-600 dark:text-green-400">成功</span>
-                              ) : (
-                                <span className="text-red-600 dark:text-red-400">失败 — {r.error}</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
                   </div>
                 </div>
               );
