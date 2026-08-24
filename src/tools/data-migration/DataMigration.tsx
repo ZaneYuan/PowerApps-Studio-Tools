@@ -118,7 +118,7 @@ async function buildColumns(
   ]);
   const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
   const ordered = sortColumnsForDisplay(columnNames, primaryIdAttribute, viewOrder);
-  const columns = await buildEditableGridColumns(connectionId, entityLogicalName, ordered, typeByName);
+  const columns = await buildEditableGridColumns(connectionId, entityLogicalName, ordered, typeByName, primaryIdAttribute);
   // A column whose type didn't resolve at all (typically the SQL-file-import path, where a column
   // name may not match a real attribute) stays non-editable in buildEditableGridColumns' stricter
   // default — this tool's own established behavior instead treats that as plain editable text

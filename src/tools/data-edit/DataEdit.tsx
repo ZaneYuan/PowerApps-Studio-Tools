@@ -109,7 +109,7 @@ export default function DataEdit() {
       // key itself isn't an audit field, so it defaults checked — meaning this tool opens in
       // "更新" mode by default, matching its primary use case (edit-in-place).
       const columnNames = sortColumnsForDisplay(rawColumnNames, meta.primaryIdAttribute, viewOrder);
-      const newColumns = await buildEditableGridColumns(activeConnectionId, parsed.entityLogicalName, columnNames, typeByName);
+      const newColumns = await buildEditableGridColumns(activeConnectionId, parsed.entityLogicalName, columnNames, typeByName, meta.primaryIdAttribute);
       // Rows themselves default *unchecked* (unlike the columns above) — 数据编辑 only wants to
       // submit rows the user actually touched, so ticking a row is either manual or (see
       // handleEditCell below) an automatic side effect of really editing one of its fields.

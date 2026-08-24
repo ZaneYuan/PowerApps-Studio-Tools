@@ -103,7 +103,7 @@ export default function DataCopy() {
       // Migration uses. System/audit columns (createdon, ownerid, statecode, ...) default
       // unchecked: a copy should get its own from the server, not the source row's.
       const columnNames = sortColumnsForDisplay(rawColumnNames, meta.primaryIdAttribute, viewOrder);
-      const newColumns = await buildEditableGridColumns(activeConnectionId, parsed.entityLogicalName, columnNames, typeByName);
+      const newColumns = await buildEditableGridColumns(activeConnectionId, parsed.entityLogicalName, columnNames, typeByName, meta.primaryIdAttribute);
       // originalValues doubles as the baseline for CheckableGrid's own per-field modified marker
       // and this tool's unsaved-changes badge — safe to alias `fields` directly (never mutated in
       // place; edits always replace `values` wholesale via spread), same convention Data Edit uses.

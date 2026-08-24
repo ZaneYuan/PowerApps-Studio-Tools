@@ -4,10 +4,17 @@ import type { GridColumn } from "./CheckableGrid";
 const NUMBER_ATTRIBUTE_TYPES = new Set(["Integer", "BigInt", "Decimal", "Double", "Money"]);
 
 /** Builds one GridColumn per column name, assigning an editor for every Dataverse attribute type
- *  that has a safe, well-defined write path. Two kinds stay intentionally read-only: PartyList
+ *  that has a safe, well-defined write path. Three kinds stay intentionally read-only: PartyList
  *  (an array of `{partyid, participationtypemask}` recipient objects — no single-value text/select
- *  widget can represent that safely) and anything this app doesn't otherwise recognize (EntityName,
- *  ManagedProperty, or a type fetchAttributes hasn't already filtered out, like Virtual).
+ *  widget can represent that safely), anything this app doesn't otherwise recognize (EntityName,
+ *  ManagedProperty, or a type fetchAttributes hasn't already filtered out, like Virtual), and the
+ *  entity's own primary key — its raw `Uniqueidentifier` type would otherwise get the normal text
+ *  editor, but every write path in every caller (Data Edit's 更新/创建 body, Data Copy's create
+ *  body, Data Migration's phase1Body/phase2Body) already strips this exact column unconditionally
+ *  and instead always PATCHes/upserts at `row.id` — set once when the row loads and never touched
+ *  by `handleEditCell` (which only ever writes into `row.values`). A live, focus-and-type text
+ *  input on this cell was pure UI theater: it accepted keystrokes and looked like any other edit,
+ *  but nothing downstream ever read the result — see Bugs/8.24.md #4.
  *
  *  Shared by every tool that renders a query result as an editable CheckableGrid (Data Copy, Data
  *  Edit, Data Migration) — this exact type→editor switch used to be copied near-verbatim into all
@@ -19,6 +26,7 @@ export async function buildEditableGridColumns(
   entityLogicalName: string,
   columnNames: string[],
   typeByName: Map<string, string>,
+  primaryIdAttribute: string,
 ): Promise<GridColumn[]> {
   const columns: GridColumn[] = [];
   for (const name of columnNames) {
@@ -26,7 +34,9 @@ export async function buildEditableGridColumns(
     const checked = !isSystemAuditField(name);
     const base = { key: name, attributeType: attrType, checked };
 
-    if (attrType === "String" || attrType === "Memo" || attrType === "Uniqueidentifier") {
+    if (name.toLowerCase() === primaryIdAttribute.toLowerCase()) {
+      columns.push(base);
+    } else if (attrType === "String" || attrType === "Memo" || attrType === "Uniqueidentifier") {
       columns.push({ ...base, editable: true, editKind: "text" });
     } else if (attrType === "Picklist" || attrType === "State" || attrType === "Status") {
       const options = await fetchOptionSetValuesForType(connectionId, entityLogicalName, name, attrType);
