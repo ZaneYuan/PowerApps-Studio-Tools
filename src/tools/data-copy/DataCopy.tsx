@@ -11,7 +11,7 @@ import { insertRow } from "../sql4cds/writeOps";
 import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry } from "../sql4cds/executionLog";
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
-import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
+import CheckableGrid, { applyEditedLabel, type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
 import { isRowDirty } from "../../shared/dirtyTracking";
 import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
@@ -142,9 +142,15 @@ export default function DataCopy() {
     setSql((prev) => replaceSelectColumns(prev, checkedNames));
   }
 
-  function handleEditCell(rowId: string, columnKey: string, value: string) {
+  function handleEditCell(rowId: string, columnKey: string, value: string, label?: string) {
     const finalValue = convertEditedCellValue(columns.find((c) => c.key === columnKey), value);
-    setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, values: { ...r.values, [columnKey]: finalValue } } : r)));
+    setRows((rs) =>
+      rs.map((r) =>
+        r.id === rowId
+          ? { ...r, values: { ...r.values, [columnKey]: finalValue }, formattedValues: applyEditedLabel(r.formattedValues, columnKey, label) }
+          : r,
+      ),
+    );
   }
 
   function handleStop() {

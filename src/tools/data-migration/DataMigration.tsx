@@ -10,7 +10,7 @@ import { buildSelectPath, literalToJsValue, parseSql, resolveSqlSubqueries } fro
 import { insertIntersectRow, resolveIntersectRowValues, updateRow } from "../sql4cds/writeOps";
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
-import CheckableGrid from "../../shared/CheckableGrid";
+import CheckableGrid, { applyEditedLabel } from "../../shared/CheckableGrid";
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
 import { isRowDirty } from "../../shared/dirtyTracking";
 import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
@@ -508,12 +508,19 @@ export default function DataMigration() {
 
   /** Edits one cell in one table's row — needs the table's tabId (unlike Data Copy, which only
    *  ever has one table on screen) since several tabs stay mounted at once. */
-  function handleEditCell(tabId: string, rowId: string, columnKey: string, value: string) {
+  function handleEditCell(tabId: string, rowId: string, columnKey: string, value: string, label?: string) {
     setTables((ts) =>
       ts.map((t) => {
         if (t.tabId !== tabId) return t;
         const finalValue = convertEditedCellValue(t.columns.find((c) => c.key === columnKey), value);
-        return { ...t, rows: t.rows.map((r) => (r.id === rowId ? { ...r, values: { ...r.values, [columnKey]: finalValue } } : r)) };
+        return {
+          ...t,
+          rows: t.rows.map((r) =>
+            r.id === rowId
+              ? { ...r, values: { ...r.values, [columnKey]: finalValue }, formattedValues: applyEditedLabel(r.formattedValues, columnKey, label) }
+              : r,
+          ),
+        };
       }),
     );
   }
@@ -671,7 +678,7 @@ export default function DataMigration() {
               }
               onColumnsChange={(columns) => updateTable(activeTable.tabId, { ...activeTable, columns: columns as ImportColumn[] })}
               onRowsChange={(rows) => updateTable(activeTable.tabId, { ...activeTable, rows })}
-              onEditCell={(rowId, columnKey, value) => handleEditCell(activeTable.tabId, rowId, columnKey, value)}
+              onEditCell={(rowId, columnKey, value, label) => handleEditCell(activeTable.tabId, rowId, columnKey, value, label)}
               connectionId={activeConnectionId ?? undefined}
               entityLogicalName={activeTable.entityLogicalName}
             />

@@ -80,6 +80,21 @@ export interface GridRow {
   formattedValues?: Record<string, string>;
 }
 
+/** Applies an `onEditCell` edit's optional resolved `label` (see that prop's own doc comment
+ *  below) to a row's `formattedValues` — every tool's own `handleEditCell` calls this so the rule
+ *  ("set it when given, clear any stale entry for that column when not") lives in one place
+ *  instead of being reimplemented per tool. Never mutates the input. */
+export function applyEditedLabel(
+  formattedValues: Record<string, string> | undefined,
+  columnKey: string,
+  label: string | undefined,
+): Record<string, string> {
+  const next = { ...formattedValues };
+  if (label) next[columnKey] = label;
+  else delete next[columnKey];
+  return next;
+}
+
 const inputCls =
   "w-full min-w-24 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 
@@ -136,7 +151,9 @@ const GridRowView = memo(function GridRowView({
    *  that activates/deactivates a cell in some *other* row doesn't change this prop's value at
    *  all, and `memo` correctly leaves every other row alone. */
   activeColumnKey: string | null;
-  onEditCell?: (rowId: string, columnKey: string, value: string) => void;
+  /** See the same-named prop's own doc comment on the default-exported CheckableGrid below for
+   *  what the optional `label` argument means. */
+  onEditCell?: (rowId: string, columnKey: string, value: string, label?: string) => void;
   onToggleRow: (id: string) => void;
   onActivateCell: (rowId: string, columnKey: string) => void;
   onDeactivateCell: (rowId: string, columnKey: string) => void;
@@ -577,7 +594,16 @@ export default function CheckableGrid({
   onColumnsChange: (columns: GridColumn[]) => void;
   onRowsChange: (rows: GridRow[]) => void;
   /** Only needed when at least one column is `editable` — omit for a read-only grid. */
-  onEditCell?: (rowId: string, columnKey: string, value: string) => void;
+  /** `label` is only ever passed for a "lookup" cell edited via the 🔍 search-and-pick modal
+   *  (LookupPickerModal's own `onPick` already resolves the picked record's display name for
+   *  free) — the caller should store it as that row's new `formattedValues[columnKey]` so the
+   *  cell shows the picked record's name immediately instead of falling back to its raw GUID
+   *  until the next full reload. Absent for every other edit path (typing/pasting a raw GUID
+   *  directly, any other editKind) — the caller should then *clear* any existing
+   *  `formattedValues[columnKey]` for that field rather than leaving it as-is, since a stale
+   *  label from before the edit would now be paired with a different raw value and show a name
+   *  that doesn't match what's actually about to be submitted. */
+  onEditCell?: (rowId: string, columnKey: string, value: string, label?: string) => void;
   columnsLabel?: string;
   renderColumnBadge?: (column: GridColumn) => ReactNode;
   /** Only needed when at least one column is `editKind: "lookup"` — the row's own table and the
@@ -833,8 +859,8 @@ export default function CheckableGrid({
           entityLogicalName={entityLogicalName}
           attributeLogicalName={lookupEditorCell.columnKey}
           multiValue={false}
-          onPick={(value) => {
-            onEditCell?.(lookupEditorCell.rowId, lookupEditorCell.columnKey, value);
+          onPick={(value, label) => {
+            onEditCell?.(lookupEditorCell.rowId, lookupEditorCell.columnKey, value, label || undefined);
             setLookupEditorCell(null);
           }}
           onClose={() => setLookupEditorCell(null)}
