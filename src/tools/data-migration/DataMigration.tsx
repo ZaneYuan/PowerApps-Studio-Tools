@@ -482,7 +482,10 @@ export default function DataMigration() {
         tables: Array.from(tableLogs.values()).filter((t) => t.entries.length > 0),
         stopped,
       });
-      setWriteLog({ filename: dataMigrationLogFilename(finishedAt), text });
+      const filename = dataMigrationLogFilename(finishedAt);
+      setWriteLog({ filename, text });
+      // Only auto-download when something actually needs looking at — see Bugs/8.24.md #5.
+      if (Array.from(tableLogs.values()).some((t) => t.entries.some((e) => e.state === "error"))) downloadTextFile(filename, text);
     } catch (err) {
       setWriteError(err instanceof Error ? err.message : String(err));
     } finally {

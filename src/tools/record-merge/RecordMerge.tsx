@@ -298,7 +298,10 @@ export default function RecordMerge() {
         entries,
         stopped,
       });
-      setWriteLog({ filename: recordMergeLogFilename(scanResult.entityLogicalName, finishedAt), text });
+      const filename = recordMergeLogFilename(scanResult.entityLogicalName, finishedAt);
+      setWriteLog({ filename, text });
+      // Only auto-download when something actually needs looking at — see Bugs/8.24.md #5.
+      if (entries.some((e) => e.state === "error")) downloadTextFile(filename, text);
     } catch (err) {
       setWriteError(err instanceof Error ? err.message : String(err));
     } finally {

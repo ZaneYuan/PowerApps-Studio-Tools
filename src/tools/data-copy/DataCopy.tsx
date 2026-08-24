@@ -220,7 +220,10 @@ export default function DataCopy() {
         entries,
         stopped,
       });
-      setWriteLog({ filename: sql4CdsLogFilename("insert", entityLogicalName, finishedAt), text });
+      const filename = sql4CdsLogFilename("insert", entityLogicalName, finishedAt);
+      setWriteLog({ filename, text });
+      // Only auto-download when something actually needs looking at — see Bugs/8.24.md #5.
+      if (entries.some((e) => e.state === "error")) downloadTextFile(filename, text);
     } catch (err) {
       setWriteError(err instanceof Error ? err.message : String(err));
     } finally {

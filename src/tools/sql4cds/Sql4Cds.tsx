@@ -360,6 +360,8 @@ export default function Sql4Cds() {
       stopped,
     });
     setWriteLog({ filename, text });
+    // Only auto-download when something actually needs looking at — see Bugs/8.24.md #5.
+    if (entries.some((e) => e.state === "error")) downloadTextFile(filename, text);
   }
 
   async function handleInsert() {
@@ -663,7 +665,10 @@ export default function Sql4Cds() {
         statements: statementLogs,
         stopped,
       });
-      setWriteLog({ filename: sql4CdsBatchLogFilename(finishedAt), text });
+      const filename = sql4CdsBatchLogFilename(finishedAt);
+      setWriteLog({ filename, text });
+      // Only auto-download when something actually needs looking at — see Bugs/8.24.md #5.
+      if (statementLogs.some((s) => s.entries.some((e) => e.state === "error"))) downloadTextFile(filename, text);
     } catch (err) {
       setWriteError(err instanceof Error ? err.message : String(err));
     } finally {

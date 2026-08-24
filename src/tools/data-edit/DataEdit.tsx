@@ -272,7 +272,12 @@ export default function DataEdit() {
         stopped,
       });
       const text = skippedCount > 0 ? `${baseText}\n\n（另有 ${skippedCount} 行因字段值未变更被跳过，未提交）` : baseText;
-      setWriteLog({ filename: sql4CdsLogFilename(isUpdate ? "update" : "insert", entityLogicalName, finishedAt), text });
+      const filename = sql4CdsLogFilename(isUpdate ? "update" : "insert", entityLogicalName, finishedAt);
+      setWriteLog({ filename, text });
+      // Only auto-download when something actually needs looking at — a clean all-success run
+      // doesn't need the file pushed on the user unasked; 下载日志 is still right there to grab it
+      // manually. See Bugs/8.24.md #5.
+      if (entries.some((e) => e.state === "error")) downloadTextFile(filename, text);
     } catch (err) {
       setWriteError(err instanceof Error ? err.message : String(err));
     } finally {
