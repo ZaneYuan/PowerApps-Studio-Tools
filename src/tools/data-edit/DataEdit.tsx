@@ -67,6 +67,22 @@ export default function DataEdit() {
   // 勾选了主键 ID 列 = 更新模式（PATCH 回原记录），未勾选 = 创建模式（复制成新记录）。
   const isUpdateMode = !!primaryIdAttribute && columns.some((c) => c.key.toLowerCase() === primaryIdAttribute.toLowerCase() && c.checked);
 
+  // The primary key column never gets sent in the body either way — a create always gets a fresh
+  // server-generated id, and an update targets it via the URL, not the PATCH body.
+  const checkedColumns = columns.filter((c) => c.checked && c.key.toLowerCase() !== primaryIdAttribute.toLowerCase());
+  const checkedRows = rows.filter((r) => r.checked);
+  // 更新模式下，只有这一行里勾选的字段相对查询结果确实发生了变更，才真正提交——这份判断同时驱动
+  // "更新 N 条记录"按钮本身该不该可点、以及按钮上的 N（不是"勾了几行"，是"真的会提交几行"），也
+  // 是 handleSubmit 实际执行时用来跳过未变更行的同一份逻辑，两处不会各写一套、悄悄走出两个数字
+  // （Bugs/8.24.md #9）。创建模式没有"原值"可比，勾了就都算数。
+  const rowsToSubmit = isUpdateMode
+    ? checkedRows.filter((row) => {
+        const original = row.originalValues;
+        if (!original) return true; // 理论上不会发生（快照缺失），保守按"已变更"处理
+        return checkedColumns.some((c) => !valuesEqual(row.values[c.key], original[c.key]));
+      })
+    : checkedRows;
+
   function connectionName(): string {
     return connections.find((c) => c.id === activeConnectionId)?.name ?? activeConnectionId ?? "";
   }
@@ -205,20 +221,12 @@ export default function DataEdit() {
   async function handleSubmit() {
     if (!activeConnectionId || !entityLogicalName) return;
     const isUpdate = isUpdateMode;
-    // The primary key column never gets sent in the body either way — a create always gets a
-    // fresh server-generated id, and an update targets it via the URL, not the PATCH body.
-    const checkedColumns = columns.filter((c) => c.checked && c.key.toLowerCase() !== primaryIdAttribute.toLowerCase());
-    const checkedRows = rows.filter((r) => r.checked);
     if (checkedColumns.length === 0 || checkedRows.length === 0) return;
 
-    // 更新模式下，只有这一行里勾选的字段相对查询结果确实发生了变更，才真正提交；没变的行直接跳过。
-    const rowsToSubmit = isUpdate
-      ? checkedRows.filter((row) => {
-          const original = row.originalValues;
-          if (!original) return true; // 理论上不会发生（快照缺失），保守按"已变更"处理
-          return checkedColumns.some((c) => !valuesEqual(row.values[c.key], original[c.key]));
-        })
-      : checkedRows;
+    // rowsToSubmit/skippedCount are the same hoisted values the button's own label/disabled state
+    // already reads (see their declaration below) — handleSubmit doesn't recompute a second copy
+    // of "which rows actually have real changes" that could quietly drift from what the button
+    // told the user would happen (Bugs/8.24.md #9).
     const skippedCount = checkedRows.length - rowsToSubmit.length;
 
     if (rowsToSubmit.length === 0) {
@@ -322,7 +330,6 @@ export default function DataEdit() {
    *  which rows are checked, same as 生成 INSERT SQL. */
   async function handleDelete() {
     if (!activeConnectionId || !entityLogicalName) return;
-    const checkedRows = rows.filter((r) => r.checked);
     if (checkedRows.length === 0) return;
     if (
       !(await confirmDialog({
@@ -400,7 +407,7 @@ export default function DataEdit() {
     }
   }
 
-  const checkedRowCount = rows.filter((r) => r.checked).length;
+  const checkedRowCount = checkedRows.length;
   const isDirty = rows.some(isRowDirty);
 
   if (!isNativeBridgeAvailable()) {
@@ -417,7 +424,7 @@ export default function DataEdit() {
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         写一条单表 SELECT 查出要处理的数据（对本页连接执行），结果表格可以直接编辑——支持文本、选项集（Picklist）、查找（Lookup/Customer/Owner，点 🔍
         搜索选择目标记录，表格里显示的是名称而非 GUID）三种类型的字段编辑，其余类型只读展示；列标题右边缘可拖拽调整宽度。列默认全部勾选，行默认不勾选——手动勾选，或编辑某行任意字段自动勾选该行；被改过的字段会标一个
-        ❗。勾选主键 ID 列（默认已勾选）时按钮是"更新"——仅当某行的字段值相对查询结果确实变了才会真正提交，未变更的行自动跳过；提交的 PATCH 也只带这一行真正变了的字段，没动过的字段不会被带上；取消勾选主键 ID
+        ❗。勾选主键 ID 列（默认已勾选）时按钮是"更新"——仅当某行的字段值相对查询结果确实变了才会真正提交，未变更的行自动跳过（按钮上的数字和是否可点也是按"真的会提交几行"算的，不是按"勾了几行"）；提交的 PATCH 也只带这一行真正变了的字段，没动过的字段不会被带上；取消勾选主键 ID
         列则变成"创建"——把勾选的行按当前值创建成全新记录，主键 ID 列不会被带上，由 Dataverse 自动生成新的。"删除"跟更新/创建模式无关，只看勾选了哪些行，直接删掉对应记录，不可撤销。只支持单表，不支持 JOIN /
         聚合。
       </div>
@@ -473,7 +480,8 @@ export default function DataEdit() {
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
             <button
               onClick={handleSubmit}
-              disabled={!activeConnectionId || checkedRowCount === 0 || writeRunning}
+              disabled={!activeConnectionId || rowsToSubmit.length === 0 || writeRunning}
+              title={isUpdateMode && checkedRowCount > 0 && rowsToSubmit.length === 0 ? "勾选的行都没有字段值变更，无需更新" : undefined}
               className={`rounded-md px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50 ${
                 isUpdateMode ? "bg-blue-600 hover:bg-blue-700" : "bg-green-600 hover:bg-green-700"
               }`}
@@ -483,8 +491,8 @@ export default function DataEdit() {
                   ? "更新中…"
                   : "创建中…"
                 : isUpdateMode
-                  ? `更新 ${checkedRowCount} 条记录`
-                  : `创建 ${checkedRowCount} 条新记录`}
+                  ? `更新 ${rowsToSubmit.length} 条记录`
+                  : `创建 ${rowsToSubmit.length} 条新记录`}
             </button>
             <button
               onClick={handleDelete}
