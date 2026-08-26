@@ -10,7 +10,7 @@ import ErrorMessage from "../../shared/ErrorMessage";
 import { fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
-import { buildSelectPath, literalToJsValue, parseSql, previewSql, resolveSqlSubqueries, type InsertResult, type MutateResult, type SqlNode } from "./translate";
+import { buildSelectPath, literalToJsValue, parseSql, previewSql, resolveSqlSubqueries, type InsertResult, type MutateResult, type ParsedStatement, type SqlNode } from "./translate";
 import {
   deleteRow,
   insertIntersectRow,
@@ -175,7 +175,23 @@ export default function Sql4Cds() {
   // "执行查询" button entirely, since only select-simple/select-complex render it — see below),
   // even though handleRun's own resolveSqlSubqueries + fresh parseSql call would have handled it
   // fine. Only affects this live preview; handleRun always works off the real resolved SQL.
-  const result = useMemo(() => parseSql(previewSql(sql)), [sql]);
+  //
+  // Both previewSql and parseSql can *throw* on SQL that's syntactically incomplete mid-typing
+  // (e.g. `findFirstInSubquery` rejecting an `IN (SELECT ...` whose closing paren hasn't been
+  // typed yet) — this runs on every keystroke with no try/catch of its own, so an uncaught throw
+  // here used to propagate straight out of useMemo and get caught by ToolErrorBoundary, which
+  // unmounts and remounts the whole tool (losing whatever query results were already on screen,
+  // not just showing a validation message) — Bugs/8.25.md #2. A parse failure here is exactly the
+  // same "the user hasn't finished typing yet" situation parseSql's own `{kind: "error"}` return
+  // already handles gracefully (rendered inline below, execution stays blocked) — catching turns
+  // every such throw into that same inline path instead of a page-level crash.
+  const result = useMemo<ParsedStatement>(() => {
+    try {
+      return parseSql(previewSql(sql));
+    } catch (err) {
+      return { kind: "error", error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [sql]);
 
   // Every non-error/non-empty/non-batch statement kind carries entityLogicalName/entitySetGuess —
   // narrow once here instead of repeating the `"entityLogicalName" in result` check at every use

@@ -379,3 +379,41 @@ export async function fetchOptionSetValuesForType(
   if (!cast) throw new Error(`"${attributeType}" 不是可展开选项列表的字段类型。`);
   return fetchOptionSetValuesForCast(connectionId, entityLogicalName, attributeLogicalName, cast);
 }
+
+/** Cached like the rest of this module, keyed by connection+entity+attribute. */
+const dateTimeFormatCache = new Map<string, Promise<"DateOnly" | "DateAndTime">>();
+
+/** A DateTime attribute's `Format` — "DateOnly" fields are exposed over the Web API as `Edm.Date`
+ *  (a bare `YYYY-MM-DD` literal, no time/offset component at all), while "DateAndTime" fields are
+ *  `Edm.DateTimeOffset` (a full ISO datetime). Sending the wrong shape 400s either way ("Cannot
+ *  convert the literal '...' to the expected type 'Edm.Date'" for a DateOnly field given a full
+ *  ISO string — confirmed live, Bugs/8.25.md #3). Needed because `fetchAttributes`' bulk
+ *  `EntityDefinitions/Attributes` query only returns the base `AttributeType` ("DateTime" either
+ *  way) — `Format` is a `DateTimeAttributeMetadata`-only property, not exposed on the base type,
+ *  so it needs its own per-attribute cast request, same pattern as
+ *  `fetchOptionSetValuesForCast`/`NewColumnDialog`'s own `Format` field on create. */
+export async function fetchDateTimeFormat(
+  connectionId: string,
+  entityLogicalName: string,
+  attributeLogicalName: string,
+): Promise<"DateOnly" | "DateAndTime"> {
+  const trimmedEntity = entityLogicalName.trim();
+  const trimmedAttribute = attributeLogicalName.trim();
+  const key = `${cacheKey(connectionId, trimmedEntity)}:${trimmedAttribute.toLowerCase()}`;
+  const cached = dateTimeFormatCache.get(key);
+  if (cached) return cached;
+
+  const promise = (async (): Promise<"DateOnly" | "DateAndTime"> => {
+    const res = await callNative<{ Format: "DateOnly" | "DateAndTime" }>("dataverse.request", {
+      connectionId,
+      method: "GET",
+      path:
+        `EntityDefinitions(LogicalName='${trimmedEntity}')/Attributes(LogicalName='${trimmedAttribute}')` +
+        `/Microsoft.Dynamics.CRM.DateTimeAttributeMetadata?$select=Format`,
+    });
+    return res.Format;
+  })();
+  dateTimeFormatCache.set(key, promise);
+  promise.catch(() => dateTimeFormatCache.delete(key));
+  return promise;
+}

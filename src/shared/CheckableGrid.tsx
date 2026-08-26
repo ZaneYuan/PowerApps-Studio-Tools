@@ -57,6 +57,14 @@ export interface GridColumn {
    *  still render exactly as before, just without type-specific sort/filter behavior (falls back
    *  to plain string comparison). */
   attributeType?: string;
+  /** Only set when `editKind === "date"` and the real Format is known (see
+   *  metadataService.ts's `fetchDateTimeFormat`) — "DateOnly" fields are `Edm.Date` over the Web
+   *  API (a bare `YYYY-MM-DD` literal) while "DateAndTime" fields are `Edm.DateTimeOffset` (a full
+   *  ISO datetime); gridColumns.ts's `convertEditedCellValue` needs this to serialize an edit into
+   *  the shape the field's actual type expects instead of always sending a full ISO string (which
+   *  400s against a DateOnly field — Bugs/8.25.md #3). Undefined falls back to the previous
+   *  ISO-string behavior, so a caller that hasn't fetched Format yet degrades exactly as before. */
+  dateFormat?: "DateOnly" | "DateAndTime";
 }
 
 export interface GridRow {

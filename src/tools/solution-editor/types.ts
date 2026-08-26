@@ -112,6 +112,8 @@ export const COMPONENT_TYPE_LABELS: Record<number, string> = {
 };
 
 export const ENTITY_COMPONENT_TYPE = 1;
+export const ATTRIBUTE_COMPONENT_TYPE = 2;
+export const SYSTEM_FORM_COMPONENT_TYPE = 60;
 
 /** componenttype values that are really *sub*-components of a specific table (a field, a
  *  relationship) rather than standalone objects — Dataverse's solutioncomponents list still gives
@@ -136,7 +138,9 @@ export const COMPONENT_NAME_RESOLVERS: Record<number, { entitySet: string; nameF
   20: { entitySet: "roles", nameField: "name" },
   26: { entitySet: "savedqueries", nameField: "name" },
   29: { entitySet: "workflows", nameField: "name" },
-  60: { entitySet: "systemforms", nameField: "name" },
+  // 60 (System Form) is NOT here — it's special-cased in fetchSolutionComponents instead, since it
+  // also needs `objecttypecode` (the owning table) to nest under that table's tree node, not just
+  // a name (see SolutionComponentRow.ownerEntityLogicalName below).
   61: { entitySet: "webresourceset", nameField: "name" },
   63: { entitySet: "connectionroles", nameField: "name" },
   70: { entitySet: "fieldsecurityprofiles", nameField: "name" },
@@ -157,6 +161,23 @@ export interface SolutionComponentRow {
   /** Entity(1) rows only — the table's LogicalName, needed to list/create its fields. Every other
    *  componenttype leaves this undefined; the field panel only ever renders for Entity rows. */
   logicalName?: string;
+  /** Entity(1) rows only — `solutioncomponent.rootcomponentbehavior`: 0 = "Include Subcomponents"
+   *  (every current/future field/relationship/form/... is implicitly part of the solution;
+   *  Dataverse doesn't create an individual child solutioncomponent row for each one), 1 = "Do Not
+   *  Include Subcomponents", 2 = "Include As Shell Only". 1/2 both mean only what's explicitly
+   *  listed as its own solutioncomponent row actually belongs to this solution — SolutionEditor.tsx
+   *  uses this to decide whether the Columns panel should show the table's *entire* live field
+   *  list (behavior 0/undefined — the old, always-on behavior) or just the ones with their own
+   *  Attribute(2) row (Bugs/8.25.md #4: this tool used to always show every field a table has,
+   *  standard OOB fields included, even for a solution that only actually added a handful). */
+  rootComponentBehavior?: number;
+  /** System Form(60) rows only — the form's owning table (from `systemform.objecttypecode`), so
+   *  SolutionEditor.tsx can nest it under that table's tree node instead of an unrelated flat
+   *  "System Form" group with no indication of which table it belongs to (Bugs/8.25.md #4,
+   *  matching how make.powerapps nests a table's forms under the table itself). Undefined when the
+   *  lookup failed (stale/orphaned row) — falls back to the flat top-level grouping so the row
+   *  doesn't just disappear. */
+  ownerEntityLogicalName?: string;
 }
 
 /** The basic column types this tool builds a plain AttributeMetadata body for via
@@ -183,6 +204,10 @@ export const COLUMN_TYPE_LABELS: Record<BasicColumnType, string> = {
 };
 
 export interface ColumnFieldMeta {
+  /** The attribute's own MetadataId — matched against an Attribute(2) solutioncomponent row's
+   *  `objectid` to decide whether this field is actually part of the solution (see
+   *  SolutionComponentRow.rootComponentBehavior and SolutionEditor.tsx's field-list filtering). */
+  metadataId: string;
   logicalName: string;
   displayName: string;
   attributeType: string;

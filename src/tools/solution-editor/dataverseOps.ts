@@ -2,6 +2,7 @@ import { callNative } from "../../native/bridge";
 import {
   COMPONENT_NAME_RESOLVERS,
   ENTITY_COMPONENT_TYPE,
+  SYSTEM_FORM_COMPONENT_TYPE,
   type BasicColumnType,
   type ColumnFieldMeta,
   type EntityBasicInfo,
@@ -128,8 +129,11 @@ export async function createSolution(
  *  hundreds of components, and a failed lookup only drops that one row's name, never the list. */
 export async function fetchSolutionComponents(connectionId: string, solutionId: string): Promise<SolutionComponentRow[]> {
   const res = await fetchDataverse<{
-    value: { solutioncomponentid: string; componenttype: number; objectid: string }[];
-  }>(connectionId, `solutioncomponents?$select=solutioncomponentid,componenttype,objectid&$filter=_solutionid_value eq ${solutionId}`);
+    value: { solutioncomponentid: string; componenttype: number; objectid: string; rootcomponentbehavior?: number | null }[];
+  }>(
+    connectionId,
+    `solutioncomponents?$select=solutioncomponentid,componenttype,objectid,rootcomponentbehavior&$filter=_solutionid_value eq ${solutionId}`,
+  );
 
   return Promise.all(
     res.value.map(async (c): Promise<SolutionComponentRow> => {
@@ -140,7 +144,19 @@ export async function fetchSolutionComponents(connectionId: string, solutionId: 
             connectionId,
             `EntityDefinitions(${c.objectid})?$select=LogicalName,DisplayName`,
           );
-          return { ...base, name: meta.DisplayName?.UserLocalizedLabel?.Label ?? meta.LogicalName, logicalName: meta.LogicalName };
+          return {
+            ...base,
+            name: meta.DisplayName?.UserLocalizedLabel?.Label ?? meta.LogicalName,
+            logicalName: meta.LogicalName,
+            rootComponentBehavior: c.rootcomponentbehavior ?? undefined,
+          };
+        }
+        if (c.componenttype === SYSTEM_FORM_COMPONENT_TYPE) {
+          const row = await fetchDataverse<{ name: string; objecttypecode: string }>(
+            connectionId,
+            `systemforms(${c.objectid})?$select=name,objecttypecode`,
+          );
+          return { ...base, name: row.name ?? null, ownerEntityLogicalName: row.objecttypecode };
         }
         const resolver = COMPONENT_NAME_RESOLVERS[c.componenttype];
         if (!resolver) return { ...base, name: null };
@@ -632,6 +648,7 @@ export async function createColumn(
 export async function fetchEntityFields(connectionId: string, entityLogicalName: string): Promise<ColumnFieldMeta[]> {
   const res = await fetchDataverse<{
     value: {
+      MetadataId: string;
       LogicalName: string;
       AttributeType: string;
       AttributeTypeName?: { Value: string } | null;
@@ -643,11 +660,12 @@ export async function fetchEntityFields(connectionId: string, entityLogicalName:
   }>(
     connectionId,
     `EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes` +
-      "?$select=LogicalName,AttributeType,AttributeTypeName,IsPrimaryName,IsCustomAttribute,DisplayName,RequiredLevel",
+      "?$select=MetadataId,LogicalName,AttributeType,AttributeTypeName,IsPrimaryName,IsCustomAttribute,DisplayName,RequiredLevel",
   );
   return res.value
     .filter((a) => a.AttributeType !== "Virtual" || a.AttributeTypeName?.Value === "MultiSelectPicklistType")
     .map((a) => ({
+      metadataId: a.MetadataId,
       logicalName: a.LogicalName,
       displayName: a.DisplayName?.UserLocalizedLabel?.Label ?? a.LogicalName,
       // A multi-select choice column's real wire AttributeType is "Virtual" (see

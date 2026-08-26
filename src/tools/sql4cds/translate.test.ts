@@ -66,12 +66,23 @@ describe("parseSql — simple SELECT", () => {
     expect(r.filter).toBe("startswith(name,'acme')");
   });
 
-  it("IN with GUID-like values wraps the field and uses Microsoft.Dynamics.CRM.In", () => {
+  it("IN uses Microsoft.Dynamics.CRM.In with the bare field name, even for GUID-like values on a Lookup column", () => {
+    // Unlike an ordinary $filter comparison, Microsoft.Dynamics.CRM.In/NotIn's PropertyName always
+    // wants the bare attribute logical name — confirmed against a live org (Bugs/8.25.md #2): a
+    // genuine non-primary-key Lookup column (bupa_productid) IN (...) 400'd once wrapped to
+    // '_bupa_productid_value' ("entity doesn't contain attribute with Name = ...").
     const g1 = "d345ae8e-c722-f011-8c4d-00224819e439";
     const g2 = "5c8ccfc1-462a-f011-9a43-002248ed6f8a";
     const r = parseSql(`SELECT name FROM contact WHERE parentcustomerid IN ('${g1}', '${g2}')`);
     if (r.kind !== "select-simple") throw new Error("expected select-simple");
-    expect(r.filter).toBe(`Microsoft.Dynamics.CRM.In(PropertyName='_parentcustomerid_value',PropertyValues=['${g1}','${g2}'])`);
+    expect(r.filter).toBe(`Microsoft.Dynamics.CRM.In(PropertyName='parentcustomerid',PropertyValues=['${g1}','${g2}'])`);
+  });
+
+  it("IN strips an explicit _..._value wrapper down to the bare name too", () => {
+    const g1 = "d345ae8e-c722-f011-8c4d-00224819e439";
+    const r = parseSql(`SELECT name FROM contact WHERE _parentcustomerid_value IN ('${g1}')`);
+    if (r.kind !== "select-simple") throw new Error("expected select-simple");
+    expect(r.filter).toBe(`Microsoft.Dynamics.CRM.In(PropertyName='parentcustomerid',PropertyValues=['${g1}'])`);
   });
 
   it("rejects multi-table queries (no table-alias support yet)", () => {

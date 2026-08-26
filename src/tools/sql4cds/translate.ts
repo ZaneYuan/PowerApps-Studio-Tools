@@ -310,20 +310,20 @@ function stripValueWrapper(field: string): string {
   return m ? m[1] : field;
 }
 
-/** Adds the `_<field>_value` OData shadow-property wrapper for a $filter comparison against a
- *  literal that looks like a GUID, mirroring the one other place this codebase already solves the
- *  same problem (fetchxml-to-odata/convert.ts's resolveFieldName) — without real attribute-type
- *  metadata to consult synchronously (parseSql runs on every keystroke for the live preview),
- *  "the compared literal looks like a GUID and the field isn't already wrapped" is the same
- *  good-enough signal used there. Leaves the field alone when: (a) it's already wrapped — an
+/** Adds the `_<field>_value` OData shadow-property wrapper for an ordinary $filter comparison
+ *  (`=`, `<>`, `>`, ...) against a literal that looks like a GUID, mirroring the one other place
+ *  this codebase already solves the same problem (fetchxml-to-odata/convert.ts's
+ *  resolveFieldName) — without real attribute-type metadata to consult synchronously (parseSql
+ *  runs on every keystroke for the live preview), "the compared literal looks like a GUID and the
+ *  field isn't already wrapped" is the same good-enough signal used there. Not used for IN/NOT IN
+ *  (see translateWhere's own comment there) — Microsoft.Dynamics.CRM.In/NotIn always wants the
+ *  bare name regardless of column type. Leaves the field alone when: (a) it's already wrapped — an
  *  explicit `_x_value` the user typed keeps working exactly as before; (b) the literal doesn't
  *  look like a GUID, since wrapping a non-Lookup column would just break the request; or (c) the
  *  field is (a guess at) the entity's own primary id attribute — confirmed against a live org
  *  that Dataverse rejects a wrapped primary key outright ("entity doesn't contain attribute with
  *  Name = '_xid_value'"), unlike an ordinary Lookup column, which is only ever addressed through
- *  the wrapped form. This matters most for `WHERE <table>.<primarykey> IN (SELECT ...)` — the
- *  single most natural subquery shape — which resolveSqlSubqueries always splices in as a list of
- *  real GUIDs, so without this exclusion every such subquery 400'd. Same guessing convention as
+ *  the wrapped form (e.g. `WHERE accountid = 'guid'` must stay bare). Same guessing convention as
  *  guessPrimaryIdAttribute elsewhere in this file: no metadata round-trip, editable/inspectable
  *  rather than silently trusted. */
 function addValueWrapperForGuidFilter(field: string, literalNode: SqlNode, entityLogicalName: string): string {
@@ -375,7 +375,16 @@ function translateWhere(node: SqlNode, warnings: string[], entityLogicalName: st
   }
 
   if (op === "IN" || op === "NOT IN") {
-    const field = columnName(node.left!);
+    // Unlike an ordinary $filter comparison (which needs the `_..._value` shadow-property form
+    // for a Lookup column — see addValueWrapperForGuidFilter), Microsoft.Dynamics.CRM.In/NotIn's
+    // PropertyName always wants the bare attribute logical name, lookups included — confirmed
+    // against a live org (Bugs/8.25.md #2): `bupa_productid` (a genuine, non-primary-key Lookup
+    // column) IN (...) 400'd with "entity doesn't contain attribute with Name =
+    // '_bupa_productid_value'" once wrapped, exactly like the primary-key case this file already
+    // knew to leave unwrapped. `stripValueWrapper` also normalizes the rarer case of a user
+    // writing the wrapped form explicitly (e.g. `_parentcustomerid_value IN (...)`), which this
+    // function would otherwise pass straight through into a PropertyName Dataverse also rejects.
+    const field = stripValueWrapper(columnName(node.left!));
     const right = node.right as unknown as { value: SqlNode[] };
     if (right.value.some(isUnresolvedSubqueryNode)) {
       throw new Error(
@@ -385,11 +394,9 @@ function translateWhere(node: SqlNode, warnings: string[], entityLogicalName: st
     // Microsoft.Dynamics.CRM.In/NotIn's PropertyValues is always Edm.String, regardless of
     // the target field's real type — confirmed against a live org (int/picklist values sent
     // unquoted come back "Cannot convert the literal '0' to the expected type 'Edm.String'").
-    const allGuidLike = right.value.every((v) => isStringLiteral(v) && GUID_LOOSE_RE.test(stringLiteralValue(v)));
-    const resolvedField = allGuidLike ? addValueWrapperForGuidFilter(field, right.value[0], entityLogicalName) : field;
     const values = right.value.map((v) => quoteString(String(v.value))).join(",");
     const fn = op === "IN" ? "In" : "NotIn";
-    return `Microsoft.Dynamics.CRM.${fn}(PropertyName='${resolvedField}',PropertyValues=[${values}])`;
+    return `Microsoft.Dynamics.CRM.${fn}(PropertyName='${field}',PropertyValues=[${values}])`;
   }
 
   throw new Error(`不支持的操作符 "${op ?? node.type}"`);

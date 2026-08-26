@@ -1,4 +1,4 @@
-import { fetchOptionSetValuesForType, isLookupAttributeType, isSystemAuditField } from "../native/metadataService";
+import { fetchDateTimeFormat, fetchOptionSetValuesForType, isLookupAttributeType, isSystemAuditField } from "../native/metadataService";
 import type { GridColumn } from "./CheckableGrid";
 
 const NUMBER_ATTRIBUTE_TYPES = new Set(["Integer", "BigInt", "Decimal", "Double", "Money"]);
@@ -54,7 +54,12 @@ export async function buildEditableGridColumns(
     } else if (attrType && NUMBER_ATTRIBUTE_TYPES.has(attrType)) {
       columns.push({ ...base, editable: true, editKind: "number" });
     } else if (attrType === "DateTime") {
-      columns.push({ ...base, editable: true, editKind: "date" });
+      // Best-effort: a Format lookup failure (e.g. a transient network error) shouldn't block the
+      // whole query from rendering — falls back to `undefined`, which convertEditedCellValue
+      // already treats as "assume DateAndTime" (its pre-existing behavior before Format was
+      // fetched at all).
+      const dateFormat = await fetchDateTimeFormat(connectionId, entityLogicalName, name).catch(() => undefined);
+      columns.push({ ...base, editable: true, editKind: "date", dateFormat });
     } else {
       columns.push(base);
     }
@@ -74,10 +79,15 @@ export function convertEditedCellValue(column: GridColumn | undefined, value: st
     case "boolean":
       return value === "" ? null : value === "true";
     case "date":
-      // Serialized as UTC midnight of the picked date — see CheckableGrid's own date-editor doc
-      // comment for why this can't be exactly right for every DateTimeBehavior without metadata
-      // this app doesn't fetch anywhere.
-      return value === "" ? null : new Date(`${value}T00:00:00Z`).toISOString();
+      if (value === "") return null;
+      // A "DateOnly" field is Edm.Date over the Web API — a bare `YYYY-MM-DD` literal, exactly
+      // what the native `<input type="date">` editor already hands back; wrapping it in a full
+      // ISO datetime string 400s ("Cannot convert the literal '...' to the expected type
+      // 'Edm.Date'" — confirmed live, Bugs/8.25.md #3). Anything else (Format fetch failed, or a
+      // genuine "DateAndTime"/Edm.DateTimeOffset field) keeps the previous UTC-midnight ISO
+      // string — see CheckableGrid's own date-editor doc comment for why that can't be exactly
+      // right for every DateTimeBehavior without metadata this app doesn't fetch anywhere.
+      return column?.dateFormat === "DateOnly" ? value : new Date(`${value}T00:00:00Z`).toISOString();
     default:
       return value; // text / uniqueidentifier / lookup / multiselect (comma-separated codes as-is)
   }

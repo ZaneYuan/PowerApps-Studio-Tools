@@ -8,9 +8,11 @@ import NewSolutionDialog from "./NewSolutionDialog";
 import NewTableDialog from "./NewTableDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
 import {
+  ATTRIBUTE_COMPONENT_TYPE,
   COMPONENT_TYPE_LABELS,
   ENTITY_COMPONENT_TYPE,
   ENTITY_SUBCOMPONENT_TYPES,
+  SYSTEM_FORM_COMPONENT_TYPE,
   type ColumnFieldMeta,
   type EntityBasicInfo,
   type SolutionComponentRow,
@@ -19,6 +21,23 @@ import {
 
 const rowBase = "flex w-full items-center gap-1.5 truncate px-2 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800";
 const rowSelected = "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400";
+
+/** Scopes a table's full live field list down to what's actually part of this solution — an
+ *  unfiltered EntityDefinitions/Attributes query returns every field the table has, standard OOB
+ *  fields included, regardless of what the solution actually added (Bugs/8.25.md #4). `undefined`/
+ *  0 `rootComponentBehavior` ("Include Subcomponents", or unknown) keeps every field — the old,
+ *  always-on behavior, and also the only correct answer for that case since Dataverse doesn't
+ *  create an individual Attribute(2) solutioncomponent row per field when subcomponents are
+ *  included wholesale. 1/2 ("Do Not Include Subcomponents" / "Include As Shell Only") filters down
+ *  to fields with their own Attribute(2) row, plus the primary name column (not separately
+ *  addable/removable from a solution, so it wouldn't have its own row either way). */
+function scopeEntityFields(fields: ColumnFieldMeta[], entityRow: SolutionComponentRow, allComponents: SolutionComponentRow[]): ColumnFieldMeta[] {
+  if (entityRow.rootComponentBehavior === undefined || entityRow.rootComponentBehavior === 0) return fields;
+  const includedIds = new Set(
+    allComponents.filter((c) => c.componenttype === ATTRIBUTE_COMPONENT_TYPE).map((c) => c.objectid.toLowerCase()),
+  );
+  return fields.filter((f) => f.isPrimaryName || includedIds.has(f.metadataId.toLowerCase()));
+}
 
 /** Which node in the component tree is currently shown in the right-hand detail pane — an Entity
  *  node itself shows basic table properties (make.powerapps' "Table properties" card), its nested
@@ -110,22 +129,30 @@ export default function SolutionEditor() {
     }
   }
 
-  function selectEntityColumns(c: SolutionComponentRow) {
+  function selectEntityColumns(c: SolutionComponentRow, allComponents: SolutionComponentRow[] | null = components) {
     setSelectedNode({ kind: "entity-columns", component: c });
     setEntityFields(null);
     setEntityFieldsError(null);
     if (c.logicalName && activeConnectionId) {
       fetchEntityFields(activeConnectionId, c.logicalName)
-        .then(setEntityFields)
+        .then((fields) => setEntityFields(scopeEntityFields(fields, c, allComponents ?? [])))
         .catch((err) => setEntityFieldsError(err instanceof Error ? err.message : String(err)));
     }
   }
 
-  function reloadEntityFields() {
-    if (!activeConnectionId || selectedNode?.kind !== "entity-columns" || !selectedNode.component.logicalName) return;
-    fetchEntityFields(activeConnectionId, selectedNode.component.logicalName)
-      .then(setEntityFields)
-      .catch((err) => setEntityFieldsError(err instanceof Error ? err.message : String(err)));
+  /** Re-shows the entity-columns panel after creating a new column — re-fetches solutioncomponents
+   *  first (not just the field list) so the field just created, which now has its own Attribute(2)
+   *  row, is actually counted as "in scope" by scopeEntityFields instead of getting filtered right
+   *  back out by the stale pre-creation `components` snapshot. */
+  function reloadEntityFieldsAfterColumnCreate() {
+    if (!activeConnectionId || !selected || selectedNode?.kind !== "entity-columns") return;
+    const component = selectedNode.component;
+    fetchSolutionComponents(activeConnectionId, selected.solutionid)
+      .then((freshComponents) => {
+        setComponents(freshComponents);
+        selectEntityColumns(component, freshComponents);
+      })
+      .catch((err) => setComponentsError(err instanceof Error ? err.message : String(err)));
   }
 
   async function handlePublish() {
@@ -265,14 +292,28 @@ export default function SolutionEditor() {
 
   // ---- Detail view ----
   // Entity(1) rows become their own "表" group (each with a nested "字段" child that live-fetches
-  // the table's full column list); everything in ENTITY_SUBCOMPONENT_TYPES (a field/relationship
-  // row that's really *part of* some table) is dropped from the flat grouping entirely rather than
-  // shown as an unresolvable top-level GUID — see ENTITY_SUBCOMPONENT_TYPES' doc comment in
-  // types.ts for why. Every other componenttype keeps the old flat "group by type" treatment.
+  // the table's full column list, and a nested row per System Form(60) whose owner resolved back
+  // to this table); everything in ENTITY_SUBCOMPONENT_TYPES (a field/relationship row that's
+  // really *part of* some table) is dropped from the flat grouping entirely rather than shown as
+  // an unresolvable top-level GUID — see ENTITY_SUBCOMPONENT_TYPES' doc comment in types.ts for
+  // why. A System Form row whose owner *did* resolve is nested under its table the same way,
+  // instead of the flat "System Form" group make.powerapps never shows forms in either
+  // (Bugs/8.25.md #4) — only a form whose owner lookup failed (stale/orphaned row) falls back to
+  // the flat grouping, so it doesn't just disappear. Every other componenttype keeps the old flat
+  // "group by type" treatment.
   const entityRows = (components ?? []).filter((c) => c.componenttype === ENTITY_COMPONENT_TYPE);
+  const formsByOwnerEntity = new Map<string, SolutionComponentRow[]>();
+  for (const c of components ?? []) {
+    if (c.componenttype !== SYSTEM_FORM_COMPONENT_TYPE || !c.ownerEntityLogicalName) continue;
+    const key = c.ownerEntityLogicalName.toLowerCase();
+    const list = formsByOwnerEntity.get(key) ?? [];
+    list.push(c);
+    formsByOwnerEntity.set(key, list);
+  }
   const otherGrouped = new Map<number, SolutionComponentRow[]>();
   for (const c of components ?? []) {
     if (c.componenttype === ENTITY_COMPONENT_TYPE || ENTITY_SUBCOMPONENT_TYPES.has(c.componenttype)) continue;
+    if (c.componenttype === SYSTEM_FORM_COMPONENT_TYPE && c.ownerEntityLogicalName) continue; // nested under its table instead
     const list = otherGrouped.get(c.componenttype) ?? [];
     list.push(c);
     otherGrouped.set(c.componenttype, list);
@@ -347,6 +388,7 @@ export default function SolutionEditor() {
                       const isEntitySelected = selectedNode?.kind === "entity" && selectedNode.component.solutioncomponentid === c.solutioncomponentid;
                       const isColumnsSelected =
                         selectedNode?.kind === "entity-columns" && selectedNode.component.solutioncomponentid === c.solutioncomponentid;
+                      const ownForms = c.logicalName ? (formsByOwnerEntity.get(c.logicalName.toLowerCase()) ?? []) : [];
                       return (
                         <li key={c.solutioncomponentid}>
                           <div className={`${rowBase} ${isEntitySelected ? rowSelected : ""}`}>
@@ -365,6 +407,21 @@ export default function SolutionEditor() {
                                   字段（Columns）
                                 </button>
                               </li>
+                              {ownForms.map((f) => {
+                                const isFormSelected = selectedNode?.kind === "other" && selectedNode.component.solutioncomponentid === f.solutioncomponentid;
+                                return (
+                                  <li key={f.solutioncomponentid}>
+                                    <button
+                                      onClick={() => setSelectedNode({ kind: "other", component: f })}
+                                      className={`${rowBase} ${isFormSelected ? rowSelected : ""}`}
+                                      title={f.name ?? f.objectid}
+                                    >
+                                      <span className="inline-block w-3 shrink-0" />
+                                      📄 {f.name ?? f.objectid}
+                                    </button>
+                                  </li>
+                                );
+                              })}
                             </ul>
                           )}
                         </li>
@@ -557,7 +614,7 @@ export default function SolutionEditor() {
           onClose={() => setShowNewColumn(false)}
           onCreated={() => {
             setShowNewColumn(false);
-            reloadEntityFields();
+            reloadEntityFieldsAfterColumnCreate();
           }}
         />
       )}
