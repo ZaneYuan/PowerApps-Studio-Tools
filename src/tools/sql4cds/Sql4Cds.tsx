@@ -207,16 +207,6 @@ export default function Sql4Cds() {
 
   const { schema: editorSchema, defaultTable: editingTable } = useSqlEditorSchema(activeConnectionId, sql);
 
-  // Live preview only ("请求路径" below) — built from the as-typed SQL without resolving any
-  // IN (SELECT ...) subquery (that needs a network round-trip per subquery, which live/every-
-  // keystroke parsing can't afford), so a query that has one previews with a garbled filter until
-  // Run actually resolves it. handleRun does its own fresh build from the resolved SQL instead of
-  // reusing this.
-  const path = useMemo(() => {
-    if (!entitySet || (result.kind !== "select-simple" && result.kind !== "select-complex")) return "";
-    return buildSelectPath(result, entitySet);
-  }, [entitySet, result]);
-
   async function handleRun() {
     if (!activeConnectionId) return;
     setRunning(true);
@@ -744,53 +734,23 @@ export default function Sql4Cds() {
         </div>
       )}
 
-      {hasEntity && (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-gray-500 dark:text-gray-400">实体：</span>
-          <code className="rounded bg-gray-100 px-2 py-0.5 dark:bg-gray-800">{entityLogicalName}</code>
-          <span className="text-gray-500 dark:text-gray-400">
-            Entity Set Name（{entitySetMeta.resolved ? "已从元数据确认" : "猜测"}，可编辑覆盖）：
-          </span>
-          <input
-            type="text"
-            value={entitySetMeta.override}
-            onChange={(e) => entitySetMeta.setOverride(e.target.value)}
-            placeholder={entitySetMeta.resolved ?? entitySetGuess ?? ""}
-            className="rounded-md border border-gray-300 bg-white px-2 py-1 font-mono text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-          />
-          {entitySetMeta.loading && <span className="text-xs text-gray-400">读取真实值中…</span>}
-          {entitySetMeta.resolved && !entitySetMeta.loading && (
-            <span className="text-xs text-green-600 dark:text-green-400">✓ 真实值</span>
-          )}
-          {entitySetMeta.error && !entitySetMeta.loading && (
-            <span className="text-xs text-amber-600 dark:text-amber-400" title={entitySetMeta.error}>
-              ⚠ 读取失败，已回退为猜测值
-            </span>
-          )}
-          {activeConnectionId && (
-            <button onClick={entitySetMeta.refresh} className="text-xs text-blue-600 hover:underline dark:text-blue-400">
-              刷新
-            </button>
-          )}
+      {(result.kind === "select-simple" || result.kind === "select-complex") && result.warnings.length > 0 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+          {result.warnings.map((w, i) => (
+            <div key={i}>⚠ {w}</div>
+          ))}
         </div>
       )}
 
-      {(result.kind === "select-simple" || result.kind === "select-complex") && (
+      {/* Run button + results table stay up even when the live-typed SQL currently fails to parse
+       *  (result.kind === "error") as long as a previous run's rows are still around — Bugs/8.25.md
+       *  #5: a query already fetched is real content the user is looking at, and a transient parse
+       *  error while mid-editing the box (e.g. an incomplete IN (SELECT ...)) is just that, transient
+       *  — it shouldn't blank out content that has nothing to do with the edit in progress. Switching
+       *  to a different, successfully-parsed statement kind (insert/mutate/batch) still swaps this
+       *  out for that kind's own dedicated UI below, same as before. */}
+      {(result.kind === "select-simple" || result.kind === "select-complex" || (result.kind === "error" && rows !== null)) && (
         <>
-          {result.kind === "select-complex" ? (
-            <OutputRow label="FetchXML" value={result.fetchXml} />
-          ) : (
-            <OutputRow label="请求路径" value={path} />
-          )}
-
-          {result.warnings.length > 0 && (
-            <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-              {result.warnings.map((w, i) => (
-                <div key={i}>⚠ {w}</div>
-              ))}
-            </div>
-          )}
-
           <div>
             <button
               onClick={handleRun}
@@ -813,8 +773,8 @@ export default function Sql4Cds() {
               rows={resultGridRows}
               onColumnsChange={setResultColumns}
               onRowsChange={() => {}}
-              columnsLabel="列（显示）"
               showRowCheckbox={false}
+              hideColumnPicker
             />
           )}
         </>

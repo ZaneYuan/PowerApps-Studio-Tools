@@ -596,6 +596,7 @@ export default function CheckableGrid({
   connectionId,
   entityLogicalName,
   showRowCheckbox = true,
+  hideColumnPicker = false,
 }: {
   columns: GridColumn[];
   rows: GridRow[];
@@ -624,6 +625,14 @@ export default function CheckableGrid({
    *  per-type cell editors when `editable` is set). Every existing caller that imports/copies/
    *  migrates rows keeps the checkbox (default true) — this is purely additive. */
   showRowCheckbox?: boolean;
+  /** Set to true to skip rendering the "列（勾选）" AttributePicker header entirely — for a caller
+   *  that wants every column shown with no way to hide any of them, and no picker UI cluttering
+   *  the view above the table (SQL4CDS's SELECT results, Bugs/8.25.md #5: the user explicitly
+   *  asked for nothing but the SQL box and the result table). `columns`/`onColumnsChange` still
+   *  drive which columns actually render (resize, sort, Filter by all still work) — only the
+   *  show/hide checkbox list disappears; every existing caller keeps it (default false), so this
+   *  is purely additive. */
+  hideColumnPicker?: boolean;
 }) {
   // Memoized on `columns` alone (not recomputed on every render) — a wide entity (product-class
   // tables routinely have 150-280 attributes) turned this into a real, visible cost once a
@@ -773,14 +782,16 @@ export default function CheckableGrid({
 
   return (
     <div className="space-y-3">
-      <AttributePicker
-        label={columnsLabel}
-        options={columnKeys}
-        selected={checkedColumnKeys}
-        onToggle={toggleColumn}
-        onToggleAll={toggleAllColumns}
-        renderBadge={renderBadge}
-      />
+      {!hideColumnPicker && (
+        <AttributePicker
+          label={columnsLabel}
+          options={columnKeys}
+          selected={checkedColumnKeys}
+          onToggle={toggleColumn}
+          onToggleAll={toggleAllColumns}
+          renderBadge={renderBadge}
+        />
+      )}
 
       <div ref={scrollRef} className="max-h-[45vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-800">
         <div className="inline-block min-w-full align-top">
