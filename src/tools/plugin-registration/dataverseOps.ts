@@ -1,4 +1,5 @@
 import { callNative } from "../../native/bridge";
+import { escapeODataString } from "../../native/odata";
 import { getBindNavigationProperty } from "../../native/navProperty";
 import { withSelectRetry } from "../../native/withSelectRetry";
 import type { PluginAssembly, PluginStep, PluginStepImage, PluginType } from "./types";
@@ -45,13 +46,10 @@ export async function fetchSteps(connectionId: string, pluginTypeId: string): Pr
   return res.value;
 }
 
-/** Web API's default page size (5000) — the same cap this codebase's own record-merge
- *  countMatchingCapped doc comment documents Dataverse silently applying to $count once the real
- *  total reaches it. Confirmed live: this org alone already has ≥5000 sdkmessageprocessingsteps
- *  rows (mostly Microsoft's own built-in ones), so a single unpaginated GET here was silently
- *  truncating fetchAllSteps to just the first page — a freshly registered step could be
- *  completely invisible to the tree's own search dropdown depending on where its name happened
- *  to sort. Follows @odata.nextLink until the real result set is exhausted. */
+/** Follows `@odata.nextLink` until the result set is exhausted — Web API caps a single page at
+ *  5000 rows, so any org-wide query that can legitimately exceed that (here: `fetchAllPluginTypes`)
+ *  has to page or it silently truncates to the first 5000, and a record past that point becomes
+ *  invisible to the search dropdown depending on where its name sorts. */
 async function fetchAllPages<T>(connectionId: string, path: string): Promise<T[]> {
   const out: T[] = [];
   const apiVersionSegment = "/api/data/v9.2/";
@@ -70,9 +68,11 @@ export interface PluginTypeFlat extends PluginType {
   _pluginassemblyid_value: string;
 }
 
-/** Every plugin type org-wide in a single query, carrying its parent assembly id. Used only by
- *  the tree's search dropdown, which needs to match names across the whole org — fetching this
- *  once beats cascading a per-assembly fetchPluginTypes call for every assembly on screen. */
+/** Every plugin type org-wide in a single query, carrying its parent assembly id. Backs the
+ *  tree's search dropdown — both to match type names across the whole org, and to resolve a
+ *  matched step's `_eventhandler_value` up to its assembly for grouping. Far smaller than the
+ *  step table (one class per type, not one row per message/entity combo), so loading it whole
+ *  once per session is cheap; only the step side needs a server-side filter. */
 export async function fetchAllPluginTypes(connectionId: string): Promise<PluginTypeFlat[]> {
   return fetchAllPages<PluginTypeFlat>(
     connectionId,
@@ -84,14 +84,25 @@ export interface PluginStepFlat extends PluginStep {
   _eventhandler_value: string;
 }
 
-/** Every step org-wide in a single query, carrying its parent plugin type id — same rationale
- *  as fetchAllPluginTypes, for the search dropdown. */
-export async function fetchAllSteps(connectionId: string): Promise<PluginStepFlat[]> {
-  return fetchAllPages<PluginStepFlat>(
+/** Cap on a single step-search request — the dropdown only renders ~150 rows anyway, and beyond
+ *  this the user is told to refine the query. Kept under the 5000 page size so one GET suffices. */
+export const STEP_SEARCH_LIMIT = 250;
+
+/** Steps whose own `name` contains `search`, carrying the parent plugin type id — backs the tree's
+ *  search dropdown. Deliberately NOT "every step org-wide": this org can hold well over 5000
+ *  `sdkmessageprocessingsteps` (mostly Microsoft's built-ins), and scanning all of them with an
+ *  `$expand` on two lookups per row reliably blew the native bridge's 30s timeout — that was the
+ *  "plugin 搜索一直搜索不出来 / 报超时" bug (Bugs/8.27.md #2). A server-side `contains(name,…)`
+ *  filter returns only the handful that matter, and the label-only `$expand` is dropped (the
+ *  dropdown labels each match by its raw `name`, which the search already matches on). The tree's
+ *  own per-type `fetchSteps` still carries the full detail for a node the user actually opens. */
+export async function searchSteps(connectionId: string, search: string): Promise<PluginStepFlat[]> {
+  const res = await fetchDataverse<{ value: PluginStepFlat[] }>(
     connectionId,
     "sdkmessageprocessingsteps?$select=sdkmessageprocessingstepid,name,stage,mode,rank,statecode,statuscode,_eventhandler_value" +
-      "&$orderby=name&$expand=sdkmessageid($select=name),sdkmessagefilterid($select=primaryobjecttypecode)",
+      `&$filter=contains(name,'${escapeODataString(search)}')&$orderby=name&$top=${STEP_SEARCH_LIMIT}`,
   );
+  return res.value;
 }
 
 export async function fetchImages(connectionId: string, stepId: string): Promise<PluginStepImage[]> {

@@ -1,11 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import {
   fetchAllPluginTypes,
-  fetchAllSteps,
   fetchAssemblies,
   fetchImages,
   fetchPluginTypes,
   fetchSteps,
+  searchSteps,
+  STEP_SEARCH_LIMIT,
   type PluginStepFlat,
   type PluginTypeFlat,
 } from "./dataverseOps";
@@ -36,6 +37,9 @@ interface SearchRow {
 }
 
 const MAX_SEARCH_ROWS = 150;
+/** Below this many characters the step query doesn't fire — a 1-char `contains()` matches
+ *  thousands of Microsoft built-in steps and defeats the point of filtering server-side. */
+const MIN_SEARCH_LEN = 2;
 
 export interface TreePanelHandle {
   /** Clears the whole tree and reloads the assembly list from scratch. */
@@ -79,20 +83,25 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
   const [loadingKeys, setLoadingKeys] = useState<Set<string>>(new Set());
   const [errorByKey, setErrorByKey] = useState<Record<string, string>>({});
 
-  // Fuzzy search across Assembly/Type/Step names. Rather than cascading a fetch per matched
-  // Assembly and then per matched Type (which is what made the old version slow), this loads
-  // every Type and every Step org-wide in two flat queries the first time the user searches,
-  // then matches names against those in-memory lists. The tree itself is never filtered by
-  // search — matches surface in a dropdown below the box, and picking one expands/scrolls the
-  // always-complete tree to that node.
+  // Fuzzy search across Assembly/Type/Step names. Assemblies are already in memory and every
+  // plugin Type is loaded once in one flat query (small — one class per type); Steps, though,
+  // number well over 5000 org-wide on a real org (mostly Microsoft's built-ins), so they're
+  // fetched with a debounced server-side `contains(name,…)` filter per query instead of scanned
+  // whole — an unfiltered scan blew the 30s bridge timeout (Bugs/8.27.md #2). The tree itself is
+  // never filtered by search — matches surface in a dropdown below the box, and picking one
+  // expands/scrolls the always-complete tree to that node.
   const [searchQuery, setSearchQuery] = useState("");
-  const searching = searchQuery.trim().length > 0;
   const q = searchQuery.trim().toLowerCase();
+  const searchActive = q.length > 0;
+  const canSearch = q.length >= MIN_SEARCH_LEN;
   const [allTypesFlat, setAllTypesFlat] = useState<PluginTypeFlat[] | null>(null);
-  const [allStepsFlat, setAllStepsFlat] = useState<PluginStepFlat[] | null>(null);
-  const [searchLoading, setSearchLoading] = useState(false);
+  const [matchedSteps, setMatchedSteps] = useState<PluginStepFlat[] | null>(null);
+  const [typesLoading, setTypesLoading] = useState(false);
+  const [stepsLoading, setStepsLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [pendingScrollKey, setPendingScrollKey] = useState<string | null>(null);
+  const searchLoading = typesLoading || stepsLoading;
+  const stepsCapped = (matchedSteps?.length ?? 0) >= STEP_SEARCH_LIMIT;
 
   // Rows that support double-click-to-edit also have a plain onClick (select/load detail) — a
   // real double-click fires two native `click` events before the `dblclick`, so without this
@@ -148,7 +157,7 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
     setImagesCache({});
     setExpanded(new Set());
     setAllTypesFlat(null);
-    setAllStepsFlat(null);
+    setMatchedSteps(null);
     setSearchError(null);
     setSearchQuery("");
     loadAssemblies();
@@ -176,36 +185,66 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
     });
   }
 
-  // The first time the user searches, load every Type and every Step org-wide in one shot each
-  // (not per-assembly/per-type) and keep them cached for the rest of the session.
+  // The first time the user searches, load every plugin Type org-wide in one shot (small, one
+  // class per type) and keep it cached for the rest of the session — used both to match type
+  // names and to resolve a matched Step up to its assembly for grouping.
   useEffect(() => {
-    if (!searching || (allTypesFlat && allStepsFlat) || searchLoading) return;
+    if (!searchActive || allTypesFlat || typesLoading) return;
     let cancelled = false;
-    setSearchLoading(true);
+    setTypesLoading(true);
     setSearchError(null);
-    Promise.all([fetchAllPluginTypes(connectionId), fetchAllSteps(connectionId)])
-      .then(([types, steps]) => {
-        if (cancelled) return;
-        setAllTypesFlat(types);
-        setAllStepsFlat(steps);
+    fetchAllPluginTypes(connectionId)
+      .then((types) => {
+        if (!cancelled) setAllTypesFlat(types);
       })
       .catch((err) => {
         if (!cancelled) setSearchError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
-        if (!cancelled) setSearchLoading(false);
+        if (!cancelled) setTypesLoading(false);
       });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searching, connectionId]);
+  }, [searchActive, connectionId]);
+
+  // Steps: debounced server-side `contains(name,…)` per query — never a full scan. Re-runs on
+  // every query change (below MIN_SEARCH_LEN it just clears, so the dropdown falls back to
+  // Assembly/Type matches only).
+  useEffect(() => {
+    if (!canSearch) {
+      setMatchedSteps(null);
+      setStepsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setStepsLoading(true);
+    setSearchError(null);
+    const timer = setTimeout(() => {
+      searchSteps(connectionId, q)
+        .then((steps) => {
+          if (!cancelled) setMatchedSteps(steps);
+        })
+        .catch((err) => {
+          if (!cancelled) setSearchError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          if (!cancelled) setStepsLoading(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSearch, q, connectionId]);
 
   // Independently match names against Assembly/Type/Step, then combine matches into the
   // Assembly > Type > Step hierarchy for display — a non-matching ancestor is included only as
   // context for a matched descendant (`matched: false`, rendered dimmer).
   const searchRows = useMemo<SearchRow[]>(() => {
-    if (!searching || !assemblies) return [];
+    if (!canSearch || !assemblies) return [];
     const asmById = new Map(assemblies.map((a) => [a.pluginassemblyid, a]));
     const typeById = new Map((allTypesFlat ?? []).map((t) => [t.plugintypeid, t]));
 
@@ -246,7 +285,10 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
       if (!asm) continue;
       ensureType(ensureGroup(asm), t).matched = true;
     }
-    for (const s of allStepsFlat ?? []) {
+    for (const s of matchedSteps ?? []) {
+      // matchedSteps is already server-filtered by contains(name,…); re-check against the
+      // current q so stale results from the previous keystroke don't leak through while the
+      // new debounced fetch is still in flight.
       if (!stepMatches(s)) continue;
       const t = typeById.get(s._eventhandler_value);
       const asm = t && asmById.get(t._pluginassemblyid_value);
@@ -285,7 +327,9 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
             id: s.sdkmessageprocessingstepid,
             assemblyId: g.assembly.pluginassemblyid,
             typeId: tg.type.plugintypeid,
-            label: `${s.sdkmessageid?.name ?? "?"} · ${STAGE_LABELS[s.stage] ?? s.stage}`,
+            // The step-search query drops the label-only $expand, so key off the step's own
+            // `name` (which is what the search matched anyway) plus its stage.
+            label: `${s.name} · ${STAGE_LABELS[s.stage] ?? s.stage}`,
             matched: true,
           });
         }
@@ -293,19 +337,16 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
     }
     return rows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searching, q, assemblies, allTypesFlat, allStepsFlat]);
+  }, [canSearch, q, assemblies, allTypesFlat, matchedSteps]);
 
-  // Picking a dropdown result expands its ancestors (seeding their caches from the flat search
-  // data, so no extra fetch is needed) and scrolls the always-complete tree to that node.
+  // Picking a dropdown result expands its ancestors and scrolls the always-complete tree to that
+  // node. The assembly's type list can be seeded straight from the in-memory flat data (types
+  // ARE loaded in full), but the type's steps must be fetched on demand — the search only
+  // carries the *matched* steps, not every sibling under that type.
   function jumpTo(row: SearchRow) {
     if (allTypesFlat && !typesCache[row.assemblyId]) {
       const types = allTypesFlat.filter((t) => t._pluginassemblyid_value === row.assemblyId);
       setTypesCache((c) => ({ ...c, [row.assemblyId]: types }));
-    }
-    if (row.typeId && allStepsFlat && !stepsCache[row.typeId]) {
-      const typeId = row.typeId;
-      const steps = allStepsFlat.filter((s) => s._eventhandler_value === typeId);
-      setStepsCache((c) => ({ ...c, [typeId]: steps }));
     }
     setExpanded((s) => {
       const next = new Set(s);
@@ -313,6 +354,7 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
       if (row.typeId) next.add(nodeKey("type", row.typeId));
       return next;
     });
+    if (row.typeId && !stepsCache[row.typeId]) loadSteps(row.typeId);
     onSelect(row.kind, row.id);
     setSearchQuery("");
     setPendingScrollKey(nodeKey(row.kind, row.id));
@@ -392,29 +434,37 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
           />
-          {searching && (
+          {searchActive && (
             <div className="absolute inset-x-2 top-full z-20 mt-1 max-h-80 overflow-y-auto rounded-md border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-900">
-              {searchLoading && <p className="p-2 text-xs text-gray-400">正在搜索…</p>}
-              {searchError && <p className="p-2 text-xs text-red-500">{searchError}</p>}
-              {!searchLoading && !searchError && searchRows.length === 0 && (
-                <p className="p-2 text-xs text-gray-400">没有匹配的 Assembly / Type / Step。</p>
+              {!canSearch && (
+                <p className="p-2 text-xs text-gray-400">再输入 {MIN_SEARCH_LEN - q.length} 个字符开始搜索…</p>
               )}
-              {!searchLoading &&
-                searchRows.slice(0, MAX_SEARCH_ROWS).map((row) => (
-                  <button
-                    key={`${row.kind}:${row.id}`}
-                    onClick={() => jumpTo(row)}
-                    style={{ paddingLeft: 8 + row.depth * 14 }}
-                    className={`flex w-full items-center gap-1 truncate py-1 pr-2 text-left text-xs hover:bg-gray-100 dark:hover:bg-gray-800 ${
-                      row.matched ? "text-gray-900 dark:text-gray-100" : "text-gray-400 dark:text-gray-500"
-                    }`}
-                    title={row.label}
-                  >
-                    {row.kind === "assembly" ? "📦" : row.kind === "type" ? "🧩" : "⚙️"} {row.label}
-                  </button>
-                ))}
-              {searchRows.length > MAX_SEARCH_ROWS && (
-                <p className="px-2 py-1 text-[10px] text-gray-400">还有更多匹配项，请输入更精确的关键字缩小范围。</p>
+              {canSearch && (
+                <>
+                  {searchLoading && <p className="p-2 text-xs text-gray-400">正在搜索…</p>}
+                  {searchError && <p className="p-2 text-xs text-red-500">{searchError}</p>}
+                  {!searchLoading && !searchError && searchRows.length === 0 && (
+                    <p className="p-2 text-xs text-gray-400">没有匹配的 Assembly / Type / Step。</p>
+                  )}
+                  {/* Keep already-found rows visible while a follow-up keystroke's query is still
+                   *  loading — replacing them with the spinner on every character flickers badly. */}
+                  {searchRows.slice(0, MAX_SEARCH_ROWS).map((row) => (
+                    <button
+                      key={`${row.kind}:${row.id}`}
+                      onClick={() => jumpTo(row)}
+                      style={{ paddingLeft: 8 + row.depth * 14 }}
+                      className={`flex w-full items-center gap-1 truncate py-1 pr-2 text-left text-xs hover:bg-gray-100 dark:hover:bg-gray-800 ${
+                        row.matched ? "text-gray-900 dark:text-gray-100" : "text-gray-400 dark:text-gray-500"
+                      }`}
+                      title={row.label}
+                    >
+                      {row.kind === "assembly" ? "📦" : row.kind === "type" ? "🧩" : "⚙️"} {row.label}
+                    </button>
+                  ))}
+                  {(searchRows.length > MAX_SEARCH_ROWS || stepsCapped) && (
+                    <p className="px-2 py-1 text-[10px] text-gray-400">结果较多，只显示了一部分——请输入更精确的关键字缩小范围。</p>
+                  )}
+                </>
               )}
             </div>
           )}

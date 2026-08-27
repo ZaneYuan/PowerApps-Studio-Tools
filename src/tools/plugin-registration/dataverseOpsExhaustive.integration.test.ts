@@ -19,7 +19,6 @@ import {
   deleteAssemblyCascade,
   deleteTypeCascade,
   fetchAllPluginTypes,
-  fetchAllSteps,
   fetchImages,
   fetchMessageFilters,
   fetchMessages,
@@ -29,6 +28,7 @@ import {
   registerAssembly,
   registerImage,
   registerStep,
+  searchSteps,
   type AssemblyInspectionResult,
 } from "./dataverseOps";
 
@@ -341,17 +341,25 @@ describe.skipIf(!hasTestCredentials())("Plugin Registration — exhaustive real 
     ).rejects.toThrow(/not allowed/i);
   }, 30_000);
 
-  it("fetchAllPluginTypes and fetchAllSteps (the org-wide search-dropdown queries) include our real records", async () => {
+  it("fetchAllPluginTypes and searchSteps (the search-dropdown queries) include our real records", async () => {
     const allTypes = await fetchAllPluginTypes(FAKE_CONNECTION_ID);
     expect(allTypes.some((t) => t.plugintypeid === typeId1)).toBe(true);
     expect(allTypes.find((t) => t.plugintypeid === typeId1)?._pluginassemblyid_value).toBe(assemblyId);
 
-    const allSteps = await fetchAllSteps(FAKE_CONNECTION_ID);
+    // registerStep names each step `${message}: ${entity} ${pluginTypeName}`, so the fixture
+    // type's own name is a substring of every step registered against it — the same kind of
+    // name fragment a user would type into the search box.
     const stepsForType1 = await fetchSteps(FAKE_CONNECTION_ID, typeId1);
     expect(stepsForType1.length).toBeGreaterThan(0);
     const oneStepId = stepsForType1[0].sdkmessageprocessingstepid;
-    expect(allSteps.some((s) => s.sdkmessageprocessingstepid === oneStepId)).toBe(true);
-    expect(allSteps.find((s) => s.sdkmessageprocessingstepid === oneStepId)?._eventhandler_value).toBe(typeId1);
+
+    const found = await searchSteps(FAKE_CONNECTION_ID, TYPE_NAME_1);
+    expect(found.some((s) => s.sdkmessageprocessingstepid === oneStepId)).toBe(true);
+    expect(found.find((s) => s.sdkmessageprocessingstepid === oneStepId)?._eventhandler_value).toBe(typeId1);
+
+    // A query that matches nothing comes back empty, not as a full-table scan.
+    const none = await searchSteps(FAKE_CONNECTION_ID, "zzz-no-such-step-name-zzz");
+    expect(none).toEqual([]);
   }, 60_000);
 
   it("deleteTypeCascade removes only its own type's steps, leaving the sibling type and the assembly intact", async () => {
