@@ -4,7 +4,7 @@
 import pkg from "node-sql-parser/build/transactsql";
 import { serializeFetchXml, type FxAggregateFunc, type FxAttribute, type FxCondition, type FxFilter, type FxFilterType, type FxLink, type FxLinkType, type FxOrder, type FxQuery } from "./fetchXml";
 import { callNative } from "../../native/bridge";
-import { fetchEntityMeta } from "../../native/metadataService";
+import { fetchAttributes, fetchEntityMeta, isLookupAttributeType } from "../../native/metadataService";
 const { Parser } = pkg;
 
 const GUID_RE =
@@ -175,6 +175,157 @@ export function buildSelectPath(result: SelectSimpleResult | SelectComplexResult
   if (result.orderby) parts.push(`$orderby=${result.orderby}`);
   if (result.top) parts.push(`$top=${result.top}`);
   return parts.length ? `${entitySetName}?${parts.join("&")}` : entitySetName;
+}
+
+const ODATA_COMPARISON_KEYWORDS = new Set(["eq", "ne", "gt", "ge", "lt", "le"]);
+const ODATA_STRING_FUNCTIONS = new Set(["contains", "startswith", "endswith"]);
+// Words translateWhere emits into a $filter that are never a field name — listed so a column
+// somehow named `and`/`null`/etc. can't be misread as the left operand of a following comparison.
+const ODATA_FILTER_KEYWORDS = new Set([...ODATA_COMPARISON_KEYWORDS, "and", "or", "not", "true", "false", "null"]);
+
+/** Applies `rename` to every field-name identifier in an OData `$filter` string produced by
+ *  translateWhere — i.e. the left operand of a comparison (`x eq …`) and the first argument of
+ *  `contains(` / `startswith(` / `endswith(`. Tokenised rather than regex-replaced so string
+ *  literals are skipped whole (a `''`-escape included): `name eq 'a eq b'` never touches `b`, and
+ *  `Microsoft.Dynamics.CRM.In(PropertyName='x',…)` keeps its bare `x` (it sits inside quotes).
+ *  Exported for direct unit testing. */
+export function rewriteODataFilterFields(filter: string, rename: (field: string) => string): string {
+  interface Token {
+    kind: "id" | "str" | "space" | "other";
+    text: string;
+  }
+  const tokens: Token[] = [];
+  let i = 0;
+  while (i < filter.length) {
+    const ch = filter[i];
+    if (ch === "'") {
+      let j = i + 1;
+      while (j < filter.length) {
+        if (filter[j] === "'") {
+          if (filter[j + 1] === "'") {
+            j += 2;
+            continue;
+          }
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      tokens.push({ kind: "str", text: filter.slice(i, j) });
+      i = j;
+    } else if (/\s/.test(ch)) {
+      let j = i;
+      while (j < filter.length && /\s/.test(filter[j])) j += 1;
+      tokens.push({ kind: "space", text: filter.slice(i, j) });
+      i = j;
+    } else if (/[A-Za-z_]/.test(ch)) {
+      let j = i;
+      while (j < filter.length && /[A-Za-z0-9_.]/.test(filter[j])) j += 1;
+      tokens.push({ kind: "id", text: filter.slice(i, j) });
+      i = j;
+    } else {
+      tokens.push({ kind: "other", text: ch });
+      i += 1;
+    }
+  }
+
+  // Index bookkeeping so each identifier can look at its neighbouring *significant* tokens
+  // (whitespace skipped) without re-scanning.
+  const significant = tokens.map((t, idx) => (t.kind === "space" ? -1 : idx)).filter((idx) => idx !== -1);
+  const significantPos = new Map<number, number>();
+  significant.forEach((tokenIdx, p) => significantPos.set(tokenIdx, p));
+  const sigTok = (p: number): Token | null => (significant[p] !== undefined ? tokens[significant[p]] : null);
+
+  return tokens
+    .map((token, idx) => {
+      if (token.kind !== "id") return token.text;
+      const lower = token.text.toLowerCase();
+      if (ODATA_FILTER_KEYWORDS.has(lower) || ODATA_STRING_FUNCTIONS.has(lower)) return token.text;
+
+      const p = significantPos.get(idx)!;
+      const next = sigTok(p + 1);
+      const prev = sigTok(p - 1);
+      const prevPrev = sigTok(p - 2);
+
+      // left operand of a comparison: `<id> eq …`
+      if (next && next.kind === "id" && ODATA_COMPARISON_KEYWORDS.has(next.text.toLowerCase())) {
+        return rename(token.text);
+      }
+      // first argument of a string function: `contains ( <id> ,`
+      if (
+        prev?.kind === "other" &&
+        prev.text === "(" &&
+        prevPrev?.kind === "id" &&
+        ODATA_STRING_FUNCTIONS.has(prevPrev.text.toLowerCase()) &&
+        next?.kind === "other" &&
+        next.text === ","
+      ) {
+        return rename(token.text);
+      }
+      return token.text;
+    })
+    .join("");
+}
+
+/** Applies `rename` to each field name in an OData `$orderby` string (`"a,b desc,c"`), leaving
+ *  the optional `asc`/`desc` direction suffix untouched. */
+function rewriteODataOrderByFields(orderby: string, rename: (field: string) => string): string {
+  return orderby
+    .split(",")
+    .map((clause) => {
+      const trimmed = clause.trim();
+      const spaceAt = trimmed.search(/\s/);
+      return spaceAt === -1 ? rename(trimmed) : rename(trimmed.slice(0, spaceAt)) + trimmed.slice(spaceAt);
+    })
+    .join(",");
+}
+
+/** OData's Web API only exposes a Lookup/Customer/Owner column's value through the shadow
+ *  property `_<logicalname>_value` — a bare Lookup logical name 400s in `$select`/`$filter`/
+ *  `$orderby` ("Could not find a property named 'x' on type '...'", Bugs/8.27.md). parseSql runs
+ *  synchronously on every keystroke for the live preview and has no metadata to tell a Lookup
+ *  column apart from an ordinary one, so it passes field names through verbatim (only
+ *  translateWhere's addValueWrapperForGuidFilter guesses, and only from a GUID-shaped literal).
+ *  This is the async follow-up pass every SELECT-executing tool (SQL4CDS, Data Edit, Data Copy,
+ *  Data Migration) runs once, right before buildSelectPath: it reads the entity's cached
+ *  attribute metadata and rewrites every Lookup column named in `$select`/`$orderby`/`$filter` to
+ *  its `_x_value` form, so a user can write the ordinary field name
+ *  (`SELECT contoso_plantype FROM contoso_product`) and have it just work. Left untouched:
+ *  select-complex (FetchXML never uses the shadow-property convention), names already in
+ *  `_x_value` form, non-Lookup columns, and Microsoft.Dynamics.CRM.In/NotIn's PropertyName (that
+ *  one wants the bare name — see translateWhere's IN branch, which strips the wrapper). The query
+ *  result is unwrapped back to bare names by unwrapODataRow, so this stays invisible downstream. */
+export async function resolveLookupColumns(
+  connectionId: string,
+  result: SelectSimpleResult | SelectComplexResult,
+): Promise<SelectSimpleResult | SelectComplexResult> {
+  if (result.kind !== "select-simple") return result;
+  if (!result.select && !result.filter && !result.orderby) return result;
+
+  const attributes = await fetchAttributes(connectionId, result.entityLogicalName);
+  const lookupNames = new Set(
+    attributes.filter((a) => isLookupAttributeType(a.attributeType)).map((a) => a.logicalName.toLowerCase()),
+  );
+  return applyLookupColumnRenames(result, lookupNames);
+}
+
+/** Pure core of resolveLookupColumns — given the entity's Lookup logical names (lowercased),
+ *  rewrite each one named in `$select`/`$orderby`/`$filter` to its `_x_value` shadow-property
+ *  form. Split out from the metadata fetch so it can be unit-tested without a live connection. */
+export function applyLookupColumnRenames(result: SelectSimpleResult, lookupLogicalNames: Set<string>): SelectSimpleResult {
+  if (lookupLogicalNames.size === 0) return result;
+
+  const rename = (field: string): string => {
+    if (/^_.+_value$/i.test(field)) return field;
+    return lookupLogicalNames.has(field.toLowerCase()) ? `_${field}_value` : field;
+  };
+
+  return {
+    ...result,
+    select: result.select ? result.select.split(",").map((c) => rename(c.trim())).join(",") : result.select,
+    orderby: result.orderby ? rewriteODataOrderByFields(result.orderby, rename) : result.orderby,
+    filter: result.filter ? rewriteODataFilterFields(result.filter, rename) : result.filter,
+  };
 }
 
 const COMPARISON_OPERATORS: Record<string, string> = {
@@ -406,15 +557,14 @@ function translateWhere(node: SqlNode, warnings: string[], entityLogicalName: st
 // parseColumnRefNormalized, used only by the FetchXML/JOIN path where bare names are correct) —
 // confirmed against a live org that OData's Web API rejects a Lookup's *bare* attribute name in
 // both $select and $orderby outright ("Could not find a property named 'x' on type '...'"); only
-// the `_x_value` shadow-property form works there. The earlier version of this code stripped the
-// wrapper unconditionally on the theory that the wrapped form was "never" needed in $select — that
-// was backwards and broke every SELECT/ORDER BY (including inside an IN (SELECT ...) subquery)
-// that named a Lookup column. Preserving whatever the user wrote (wrapped or bare) is the correct
-// behavior here: a Lookup column requires the wrapped form and there's no synchronous metadata
-// available to add it automatically (same fundamental constraint addValueWrapperForGuidFilter's
-// own doc comment describes for $filter), so this SQL layer's contract for $select/$orderby stays
-// "you must write the real Web API property name" — this fix stops actively breaking the one case
-// (writing it correctly) it used to sabotage.
+// the `_x_value` shadow-property form works there. This sync parse layer just preserves whatever
+// the user wrote (wrapped or bare) — it has no metadata to tell a Lookup column apart from an
+// ordinary one, and it re-runs on every keystroke for the live preview. `resolveLookupColumns` is
+// the async follow-up pass (run once by every SELECT-executing tool, right before buildSelectPath)
+// that reads attribute metadata and rewrites a bare Lookup name here to `_x_value`, so a user can
+// write the ordinary field name and have it work — see its own doc comment. An earlier version of
+// this code instead *stripped* the wrapper unconditionally, which broke every SELECT/ORDER BY that
+// named a Lookup column correctly.
 function translateSelectColumns(columns: ColumnItem[] | string): string | null {
   if (typeof columns === "string") return null; // some dialects use the literal string "*"
   if (columns.length === 1 && isStar(columns[0].expr)) return null;
@@ -943,12 +1093,17 @@ async function runSubquerySelect(connectionId: string, subquerySql: string): Pro
   }
   const [column] = columns;
   const meta = await fetchEntityMeta(connectionId, parsed.entityLogicalName);
+  // A bare Lookup column here needs the same `_x_value` resolution the outer SELECT gets — and
+  // since the raw response isn't unwrapped, read the value back under whatever name the resolver
+  // ended up using.
+  const resolved = await resolveLookupColumns(connectionId, { ...parsed, select: column });
+  const resolvedColumn = resolved.kind === "select-simple" && resolved.select ? resolved.select : column;
   const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
     connectionId,
     method: "GET",
-    path: buildSelectPath({ ...parsed, select: column }, meta.entitySetName),
+    path: buildSelectPath(resolved, meta.entitySetName),
   });
-  return res.value.map((row) => row[column]);
+  return res.value.map((row) => row[resolvedColumn]);
 }
 
 /** Resolves every `[NOT] IN (SELECT ...)` subquery in `sqlText` by actually running each one

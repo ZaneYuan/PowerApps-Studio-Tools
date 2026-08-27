@@ -6,7 +6,7 @@ import { downloadTextFile } from "../../native/download";
 import { unwrapODataRowWithFormatting } from "../../native/odata";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
-import { buildSelectPath, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
+import { buildSelectPath, parseSql, resolveLookupColumns, resolveSqlSubqueries } from "../sql4cds/translate";
 import { insertRow } from "../sql4cds/writeOps";
 import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry } from "../sql4cds/executionLog";
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
@@ -86,7 +86,7 @@ export default function DataCopy() {
       }
 
       const meta = await fetchEntityMeta(activeConnectionId, parsed.entityLogicalName);
-      const path = buildSelectPath(parsed, meta.entitySetName);
+      const path = buildSelectPath(await resolveLookupColumns(activeConnectionId, parsed), meta.entitySetName);
       const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
         connectionId: activeConnectionId,
         method: "GET",

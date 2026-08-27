@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSelectPath, guessEditingTable, literalToJsValue, parseSql, previewSql } from "./translate";
+import { applyLookupColumnRenames, buildSelectPath, guessEditingTable, literalToJsValue, parseSql, previewSql, rewriteODataFilterFields, type SelectSimpleResult } from "./translate";
 
 describe("parseSql — simple SELECT", () => {
   it("translates a basic filter/orderby/top", () => {
@@ -264,5 +264,78 @@ describe("guessEditingTable", () => {
     expect(guessEditingTable("INSERT INTO account (name) VALUES ('x')")).toBe("account");
     expect(guessEditingTable("UPDATE account SET name = 'x'")).toBe("account");
     expect(guessEditingTable("DELETE FROM account")).toBe("account");
+  });
+});
+
+describe("rewriteODataFilterFields", () => {
+  const wrap = (f: string) => (f === "contoso_plantype" ? `_${f}_value` : f);
+
+  it("rewrites the left operand of a comparison", () => {
+    expect(rewriteODataFilterFields("contoso_plantype eq 12345678-1234-1234-1234-123456789012", wrap)).toBe(
+      "_contoso_plantype_value eq 12345678-1234-1234-1234-123456789012",
+    );
+  });
+
+  it("rewrites `x eq null` (IS NULL), which the GUID-literal heuristic never reaches", () => {
+    expect(rewriteODataFilterFields("contoso_plantype eq null", wrap)).toBe("_contoso_plantype_value eq null");
+  });
+
+  it("rewrites the first argument of contains()/startswith()/endswith()", () => {
+    expect(rewriteODataFilterFields("contains(contoso_plantype,'x')", wrap)).toBe("contains(_contoso_plantype_value,'x')");
+    expect(rewriteODataFilterFields("not startswith(contoso_plantype,'x')", wrap)).toBe("not startswith(_contoso_plantype_value,'x')");
+  });
+
+  it("leaves a matching token inside a string literal alone", () => {
+    expect(rewriteODataFilterFields("name eq 'contoso_plantype eq 1'", wrap)).toBe("name eq 'contoso_plantype eq 1'");
+  });
+
+  it("keeps Microsoft.Dynamics.CRM.In's bare PropertyName (it wants the unwrapped name)", () => {
+    const f = "Microsoft.Dynamics.CRM.In(PropertyName='contoso_plantype',PropertyValues=['a','b'])";
+    expect(rewriteODataFilterFields(f, wrap)).toBe(f);
+  });
+
+  it("handles nested boolean groups and only touches field positions", () => {
+    expect(rewriteODataFilterFields("(contoso_plantype eq 1 and name eq 'x')", wrap)).toBe(
+      "(_contoso_plantype_value eq 1 and name eq 'x')",
+    );
+  });
+
+  it("does not double-wrap a name already in _x_value form", () => {
+    const wrapAll = (f: string) => (/^_.+_value$/.test(f) ? f : `_${f}_value`);
+    expect(rewriteODataFilterFields("_contoso_plantype_value eq 1", wrapAll)).toBe("_contoso_plantype_value eq 1");
+  });
+});
+
+describe("applyLookupColumnRenames", () => {
+  const base: SelectSimpleResult = {
+    kind: "select-simple",
+    entityLogicalName: "contoso_product",
+    entitySetGuess: "contoso_products",
+    select: null,
+    filter: null,
+    orderby: null,
+    top: null,
+    warnings: [],
+  };
+  const lookups = new Set(["contoso_plantype", "ownerid"]);
+
+  it("wraps a Lookup column in $select, leaves ordinary columns bare", () => {
+    const r = applyLookupColumnRenames({ ...base, select: "contoso_productid,name,contoso_plantype,ownerid" }, lookups);
+    expect(r.select).toBe("contoso_productid,name,_contoso_plantype_value,_ownerid_value");
+  });
+
+  it("wraps a Lookup column in $orderby, preserving the direction suffix", () => {
+    const r = applyLookupColumnRenames({ ...base, orderby: "contoso_plantype desc,name" }, lookups);
+    expect(r.orderby).toBe("_contoso_plantype_value desc,name");
+  });
+
+  it("wraps a Lookup column in $filter", () => {
+    const r = applyLookupColumnRenames({ ...base, filter: "contoso_plantype eq null" }, lookups);
+    expect(r.filter).toBe("_contoso_plantype_value eq null");
+  });
+
+  it("is a no-op when the entity has no Lookup columns", () => {
+    const input = { ...base, select: "name,contoso_plantype" };
+    expect(applyLookupColumnRenames(input, new Set())).toBe(input);
   });
 });

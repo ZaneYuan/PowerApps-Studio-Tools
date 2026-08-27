@@ -10,7 +10,7 @@ import ErrorMessage from "../../shared/ErrorMessage";
 import { fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
-import { buildSelectPath, literalToJsValue, parseSql, previewSql, resolveSqlSubqueries, type InsertResult, type MutateResult, type ParsedStatement, type SqlNode } from "./translate";
+import { buildSelectPath, literalToJsValue, parseSql, previewSql, resolveLookupColumns, resolveSqlSubqueries, type InsertResult, type MutateResult, type ParsedStatement, type SqlNode } from "./translate";
 import {
   deleteRow,
   insertIntersectRow,
@@ -225,10 +225,11 @@ export default function Sql4Cds() {
       }
       const meta = await fetchEntityMeta(activeConnectionId, resolvedResult.entityLogicalName);
       const entitySetName = meta.entitySetName || resolvedResult.entitySetGuess;
+      const withLookups = await resolveLookupColumns(activeConnectionId, resolvedResult);
       const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
         connectionId: activeConnectionId,
         method: "GET",
-        path: buildSelectPath(resolvedResult, entitySetName),
+        path: buildSelectPath(withLookups, entitySetName),
       });
       const unwrapped = res.value.map(unwrapODataRow);
       setRows(unwrapped);

@@ -13,7 +13,7 @@ import { installMockNativeBridge, uninstallMockNativeBridge } from "../../testSu
 import { fetchEntityMeta } from "../../native/metadataService";
 import { createColumn, createLookupColumn, createTable } from "../solution-editor/dataverseOps";
 import { insertRow } from "./writeOps";
-import { buildSelectPath, parseSql, resolveSqlSubqueries } from "./translate";
+import { buildSelectPath, parseSql, resolveLookupColumns, resolveSqlSubqueries } from "./translate";
 
 const FAKE_CONNECTION_ID = "integration-test";
 const SOLUTION_UNIQUE_NAME = "ad_ClaudeSmokeTest";
@@ -33,7 +33,10 @@ async function runSelect(entitySetName: string, sql: string): Promise<{ value: R
   if (parsed.kind !== "select-simple" && parsed.kind !== "select-complex") {
     throw new Error(`expected a select-simple/select-complex parse, got ${parsed.kind}: ${(parsed as { error?: string }).error ?? ""}`);
   }
-  const path = buildSelectPath(parsed, entitySetName);
+  // Same follow-up pass the real tools (SQL4CDS/Data Edit/Data Copy/Data Migration) run — turns a
+  // bare Lookup column name into its `_x_value` shadow-property form before the request.
+  const resolved = await resolveLookupColumns(FAKE_CONNECTION_ID, parsed);
+  const path = buildSelectPath(resolved, entitySetName);
   const res = await dataverseTestRequest<{ value: Record<string, unknown>[] }>("GET", path);
   return res.body;
 }
@@ -285,6 +288,24 @@ describe.skipIf(!hasTestCredentials())("SQL4CDS SELECT path — real Dataverse i
     expect(new Set(res.value.map((r) => r[nameField]))).toEqual(new Set(["Child1", "Child2"]));
   }, 30_000);
 
+  it("a bare Lookup column name in $select / $orderby is resolved to its _x_value form via metadata (Bugs/8.27.md)", async () => {
+    // The user writes the ordinary field name; resolveLookupColumns rewrites it to the shadow
+    // property Dataverse actually accepts. The response is unwrapped back to the bare name.
+    const res = await runSelect(
+      childEntitySet,
+      `SELECT ${nameField}, ${childLookupField} FROM ${childLogical} WHERE ${childLookupField} IS NOT NULL ORDER BY ${childLookupField}`,
+    );
+    expect(res.value.length).toBe(3);
+    for (const row of res.value) {
+      expect(typeof row[childLookupField]).toBe("string"); // the lookup's GUID, keyed by the bare name
+    }
+  }, 30_000);
+
+  it("a bare Lookup column IS NULL filter is resolved too (the GUID-literal heuristic never fires here)", async () => {
+    const res = await runSelect(childEntitySet, `SELECT ${nameField} FROM ${childLogical} WHERE ${childLookupField} IS NULL`);
+    expect(res.value).toHaveLength(0); // every seeded child row has a parent
+  }, 30_000);
+
   // ---------- JOIN / GROUP BY / aggregates (-> FetchXML) ----------
 
   it("INNER JOIN / JOIN only returns matched rows", async () => {
@@ -392,8 +413,8 @@ describe.skipIf(!hasTestCredentials())("SQL4CDS SELECT path — real Dataverse i
   // ---------- Subqueries ----------
 
   it("WHERE x IN (SELECT ...) resolves and executes against real data", async () => {
-    // Lookup columns require the wrapped `_x_value` form in $select (see translateSelectColumns'
-    // own doc comment — a bare Lookup name 400s: "Could not find a property named ...").
+    // The explicit `_x_value` form still works (resolveLookupColumns leaves an already-wrapped
+    // name alone); the bare Lookup name is covered by its own test below.
     const sql = `SELECT ${nameField} FROM ${parentLogical} WHERE ${parentIdAttr} IN (SELECT _${childLookupField}_value FROM ${childLogical} WHERE ${nameField} = 'Child1')`;
     const resolved = await resolveSqlSubqueries(FAKE_CONNECTION_ID, sql);
     expect(resolved).not.toContain("(SELECT"); // the subquery itself was spliced away — the outer SELECT keyword still legitimately remains
@@ -406,6 +427,13 @@ describe.skipIf(!hasTestCredentials())("SQL4CDS SELECT path — real Dataverse i
     const resolved = await resolveSqlSubqueries(FAKE_CONNECTION_ID, sql);
     const res = await runSelect(parentEntitySet, resolved);
     expect(res.value.map((r) => r[nameField])).toEqual(["Gamma LLC"]);
+  }, 30_000);
+
+  it("a subquery SELECTing a bare Lookup column resolves it to _x_value before running (Bugs/8.27.md)", async () => {
+    const sql = `SELECT ${nameField} FROM ${parentLogical} WHERE ${parentIdAttr} IN (SELECT ${childLookupField} FROM ${childLogical} WHERE ${nameField} = 'Child1')`;
+    const resolved = await resolveSqlSubqueries(FAKE_CONNECTION_ID, sql);
+    const res = await runSelect(parentEntitySet, resolved);
+    expect(res.value.map((r) => r[nameField])).toEqual(["Alpha Corp"]);
   }, 30_000);
 
   it("nested subqueries resolve depth-first", async () => {

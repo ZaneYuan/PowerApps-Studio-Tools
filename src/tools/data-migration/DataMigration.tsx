@@ -6,7 +6,7 @@ import { downloadTextFile } from "../../native/download";
 import { unwrapODataRowWithFormatting } from "../../native/odata";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, fetchManyToManyInfo, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
-import { buildSelectPath, literalToJsValue, parseSql, resolveSqlSubqueries } from "../sql4cds/translate";
+import { buildSelectPath, literalToJsValue, parseSql, resolveLookupColumns, resolveSqlSubqueries } from "../sql4cds/translate";
 import { insertIntersectRow, resolveIntersectRowValues, updateRow } from "../sql4cds/writeOps";
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
@@ -183,7 +183,7 @@ export default function DataMigration() {
           fetchEntityMeta(activeConnectionId, parsed.entityLogicalName),
           fetchManyToManyInfo(activeConnectionId, parsed.entityLogicalName),
         ]);
-        const path = buildSelectPath(parsed, meta.entitySetName);
+        const path = buildSelectPath(await resolveLookupColumns(activeConnectionId, parsed), meta.entitySetName);
         const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
           connectionId: activeConnectionId,
           method: "GET",
