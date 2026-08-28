@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { tools, getCategories, getToolById } from "../tools/registry";
+import { tools, getCategories, getToolById, isBetaCategory } from "../tools/registry";
 import { useActiveConnection } from "../native/activeConnection";
 import { useTabManager } from "../native/tabs";
 import type { ToolDefinition } from "../tools/types";
@@ -93,8 +93,13 @@ export default function Sidebar() {
             )}
             {categories.map((category) => (
               <div key={category}>
-                <div className="px-2 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                  {category}
+                <div className="flex items-center gap-1.5 px-2 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                  <span>{category}</span>
+                  {isBetaCategory(category) && (
+                    <span className="rounded bg-amber-100 px-1 py-px text-[10px] font-semibold normal-case tracking-normal text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
+                      beta
+                    </span>
+                  )}
                 </div>
                 <ul className="mt-2 space-y-1">
                   {tools

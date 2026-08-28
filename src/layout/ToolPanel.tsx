@@ -4,6 +4,7 @@ import { TabConnectionContext, useActiveConnection } from "../native/activeConne
 import { TabDirtyContext, useTabManager } from "../native/tabs";
 import { useConnectionHealth } from "../native/useConnectionHealth";
 import type { ToolDefinition } from "../tools/types";
+import { isBetaCategory } from "../tools/registry";
 import ToolErrorBoundary from "./ToolErrorBoundary";
 
 const selectCls =
@@ -45,6 +46,11 @@ export default function ToolPanel({
             <div className="flex items-center gap-2">
               <span className="text-2xl">{tool.icon}</span>
               <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{tool.name}</h1>
+              {isBetaCategory(tool.category) && (
+                <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
+                  beta
+                </span>
+              )}
             </div>
             {isNativeBridgeAvailable() && tool.connectionScoped !== false && (
               <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">

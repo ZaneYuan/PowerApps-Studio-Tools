@@ -1,4 +1,4 @@
-import { tools } from "../tools/registry";
+import { tools, isBetaCategory } from "../tools/registry";
 import { useActiveConnection } from "../native/activeConnection";
 import { useTabManager } from "../native/tabs";
 
@@ -36,9 +36,16 @@ export default function Home() {
               <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
                 {tool.description}
               </p>
-              <span className="mt-3 inline-block rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                {tool.category}
-              </span>
+              <div className="mt-3 flex items-center gap-1.5">
+                <span className="inline-block rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                  {tool.category}
+                </span>
+                {isBetaCategory(tool.category) && (
+                  <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
+                    beta
+                  </span>
+                )}
+              </div>
             </button>
           ))}
         </div>

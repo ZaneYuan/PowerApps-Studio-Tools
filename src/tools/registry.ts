@@ -106,6 +106,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./bpf-viewer/BpfViewer")),
   },
   {
+    id: "solution-diff",
+    name: "Solution 深度对比",
+    description: "上传两个 solution.zip，对比实体/属性/Web资源/流程等组件的差异。",
+    category: "Power Apps",
+    icon: "🧬",
+    Component: lazy(() => import("./solution-diff/SolutionDiff")),
+  },
+  {
     id: "fetchxml-to-odata",
     name: "FetchXML → OData",
     description: "把 FetchXML 转换为 $select/$filter/$orderby 等 OData 查询片段。",
@@ -121,15 +129,17 @@ export const tools: ToolDefinition[] = [
     icon: "🔀",
     Component: lazy(() => import("./record-merge/RecordMerge")),
   },
-  {
-    id: "solution-diff",
-    name: "Solution 深度对比",
-    description: "上传两个 solution.zip，对比实体/属性/Web资源/流程等组件的差异。",
-    category: "数据 & Solution",
-    icon: "🧬",
-    Component: lazy(() => import("./solution-diff/SolutionDiff")),
-  },
 ];
+
+/**
+ * Categories still being built out — the UI tags the whole group "beta" (sidebar heading,
+ * home-page card, tool header) so users know the tools under it aren't feature-complete yet.
+ */
+const betaCategories = new Set<string>(["Power Apps"]);
+
+export function isBetaCategory(category: string): boolean {
+  return betaCategories.has(category);
+}
 
 export function getToolById(id: string): ToolDefinition | undefined {
   return tools.find((t) => t.id === id);
