@@ -702,8 +702,12 @@ export default function Sql4Cds() {
   }
 
   return (
-    <div className="max-w-4xl space-y-6">
-      <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
+    // No max-width cap (other tools use max-w-4xl/5xl): a SELECT result is often very wide and the
+    // user explicitly wants the grid to grow with the window instead of sitting in a fixed column
+    // with dead space to its right (Bugs/8.31.md #2). The intro blurb below keeps its own readable
+    // max-width so a full-screen window doesn't stretch that paragraph edge to edge.
+    <div className="max-w-none space-y-6">
+      <div className="max-w-4xl rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         支持 SELECT（含 JOIN / GROUP BY / 聚合函数，翻译成 FetchXML 执行）、INSERT、UPDATE、DELETE。UPDATE/DELETE
         必须带 WHERE 子句（不支持整表操作，请自己写恒真条件），执行前会弹窗二次确认，单次最多处理 5000 条匹配记录并自动下载执行日志。用 T-SQL
         语法解析，翻译成 Dataverse Web API 查询后真实执行。支持用分号分隔粘贴多条 INSERT/UPDATE/DELETE 语句一次性批量执行（可以跨不同的表），
@@ -776,6 +780,7 @@ export default function Sql4Cds() {
               onRowsChange={() => {}}
               showRowCheckbox={false}
               hideColumnPicker
+              textSize="sm"
             />
           )}
         </>

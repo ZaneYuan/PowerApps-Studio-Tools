@@ -10,7 +10,10 @@ import { valuesEqual } from "./dirtyTracking";
 // scroll-position math — every cell uses the same py-1.5 padding and whitespace-nowrap (no
 // wrapping, so no row is taller than another), so a fixed estimate is accurate rather than a
 // rough approximation, and there's no need for the library's (pricier) dynamic remeasurement.
+// The `_LG` variant is for `textSize="sm"` callers (SQL4CDS results — Bugs/8.31.md #2): text-sm's
+// taller line-height plus the roomier py-2 cell padding lands a row a few px taller.
 const ROW_HEIGHT_PX = 33;
+const ROW_HEIGHT_PX_LG = 40;
 
 // The <table> below never set `table-layout`, so it defaulted to `auto` — which requires the
 // browser to examine content across *every* row to size columns, and re-examine it whenever
@@ -140,6 +143,8 @@ const GridRowView = memo(function GridRowView({
   connectionId,
   entityLogicalName,
   showRowCheckbox,
+  cellTextClass,
+  cellPadClass,
 }: {
   row: GridRow;
   /** Only the columns currently in (or near) the horizontal viewport — see the column virtualizer
@@ -169,11 +174,17 @@ const GridRowView = memo(function GridRowView({
   connectionId?: string;
   entityLogicalName?: string;
   showRowCheckbox: boolean;
+  /** Tailwind text-size + cell-padding utilities, threaded from CheckableGrid's `textSize` prop so
+   *  the header and every row stay in lockstep — `"text-xs"`/`"px-3 py-1.5"` by default, the
+   *  roomier `"text-sm"`/`"px-3 py-2"` for SQL4CDS's result grid (Bugs/8.31.md #2). Passed as
+   *  plain interned string literals so `memo` still sees stable props across scroll re-renders. */
+  cellTextClass: string;
+  cellPadClass: string;
 }) {
   return (
     <tr className="border-t border-gray-100 dark:border-gray-800">
       {showRowCheckbox && (
-        <td className="px-3 py-1.5" style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
+        <td className={cellPadClass} style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
           <input type="checkbox" checked={row.checked} onChange={() => onToggleRow(row.id)} />
         </td>
       )}
@@ -216,7 +227,7 @@ const GridRowView = memo(function GridRowView({
         return (
           <td
             key={c.key}
-            className="relative whitespace-nowrap overflow-hidden px-3 py-1.5 font-mono text-xs"
+            className={`relative whitespace-nowrap overflow-hidden font-mono ${cellPadClass} ${cellTextClass}`}
             style={{ width, minWidth: width, maxWidth: width }}
           >
             {isFieldModified && (
@@ -381,6 +392,7 @@ const GridHeader = memo(function GridHeader({
   connectionId,
   entityLogicalName,
   showRowCheckbox,
+  cellTextClass,
 }: {
   /** Same horizontally-windowed slice GridRowView renders — see its own doc comment. The header
    *  and every row share one column virtualizer instance (CheckableGrid below), so they always
@@ -401,6 +413,9 @@ const GridHeader = memo(function GridHeader({
   connectionId?: string;
   entityLogicalName?: string;
   showRowCheckbox: boolean;
+  /** Header text size — matches GridRowView's `cellTextClass` (see there); `"text-xs"` default,
+   *  `"text-sm"` for SQL4CDS's result grid. */
+  cellTextClass: string;
 }) {
   function startResize(e: ReactMouseEvent<HTMLDivElement>, key: string) {
     e.preventDefault();
@@ -443,7 +458,7 @@ const GridHeader = memo(function GridHeader({
   }
 
   return (
-    <thead className="sticky top-[29px] z-10 bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+    <thead className={`sticky top-[29px] z-10 bg-gray-50 text-gray-500 dark:bg-gray-900 dark:text-gray-400 ${cellTextClass}`}>
       <tr>
         {showRowCheckbox && (
           <th className="px-3 py-2" style={{ width: CHECKBOX_COLUMN_WIDTH_PX }}>
@@ -597,6 +612,7 @@ export default function CheckableGrid({
   entityLogicalName,
   showRowCheckbox = true,
   hideColumnPicker = false,
+  textSize = "xs",
 }: {
   columns: GridColumn[];
   rows: GridRow[];
@@ -633,7 +649,15 @@ export default function CheckableGrid({
    *  show/hide checkbox list disappears; every existing caller keeps it (default false), so this
    *  is purely additive. */
   hideColumnPicker?: boolean;
+  /** Header + body-cell text size. Default `"xs"` (every write tool's grid — keeps a wide,
+   *  data-dense table readable at a glance). SQL4CDS's result grid passes `"sm"` for a more
+   *  comfortable read (Bugs/8.31.md #2); that also swaps cell padding to `py-2` and bumps the
+   *  virtual-row height estimate. Purely additive — omitting it is exactly the old behavior. */
+  textSize?: "xs" | "sm";
 }) {
+  const cellTextClass = textSize === "sm" ? "text-sm" : "text-xs";
+  const cellPadClass = textSize === "sm" ? "px-3 py-2" : "px-3 py-1.5";
+  const rowHeightPx = textSize === "sm" ? ROW_HEIGHT_PX_LG : ROW_HEIGHT_PX;
   // Memoized on `columns` alone (not recomputed on every render) — a wide entity (product-class
   // tables routinely have 150-280 attributes) turned this into a real, visible cost once a
   // scroll container had anything actually subscribed to its scroll events (the row virtualizer
@@ -704,7 +728,7 @@ export default function CheckableGrid({
   const rowVirtualizer = useVirtualizer({
     count: displayRows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_HEIGHT_PX,
+    estimateSize: () => rowHeightPx,
     overscan: 15,
   });
   const virtualRows = rowVirtualizer.getVirtualItems();
@@ -824,6 +848,7 @@ export default function CheckableGrid({
               connectionId={connectionId}
               entityLogicalName={entityLogicalName}
               showRowCheckbox={showRowCheckbox}
+              cellTextClass={cellTextClass}
             />
             <tbody>
               {topSpacerHeight > 0 && (
@@ -859,6 +884,8 @@ export default function CheckableGrid({
                     connectionId={connectionId}
                     entityLogicalName={entityLogicalName}
                     showRowCheckbox={showRowCheckbox}
+                    cellTextClass={cellTextClass}
+                    cellPadClass={cellPadClass}
                   />
                 );
               })}

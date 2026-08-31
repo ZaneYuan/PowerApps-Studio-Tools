@@ -355,9 +355,20 @@ function quoteString(raw: string): string {
 /** T-SQL's `N'...'` national/Unicode string literals (used throughout this tool's own INSERT
  *  samples for CJK text) parse to AST type "var_string", not "single_quote_string" — confirmed
  *  by running node-sql-parser directly (`N'卓越'` → `{type: "var_string", value: "卓越"}`, prefix
- *  and quotes already stripped). Treated identically to a plain quoted string everywhere below. */
+ *  and quotes already stripped). A double-quoted literal (`WHERE x IN ("IBBF","IBBA")`) parses to
+ *  "double_quote_string" — strict T-SQL treats `"..."` as a delimited identifier when
+ *  QUOTED_IDENTIFIER is ON, but node-sql-parser hands it back as a string-literal node (value
+ *  already unquoted), never as a column_ref, so accepting it here is safe (field-name positions go
+ *  through columnName/parseColumnRef, which never call this) and matches what users expect when
+ *  they paste `IN ("a","b")`. All treated identically to a plain single-quoted string everywhere
+ *  below (formatLiteral / formatFxLiteral / literalToJsValue and the GUID heuristics). */
 function isStringLiteral(node: SqlNode): boolean {
-  return node.type === "single_quote_string" || node.type === "string" || node.type === "var_string";
+  return (
+    node.type === "single_quote_string" ||
+    node.type === "string" ||
+    node.type === "var_string" ||
+    node.type === "double_quote_string"
+  );
 }
 
 /** An `IN (SELECT ...)` subquery that hasn't been resolved to a literal list yet parses to a

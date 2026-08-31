@@ -147,6 +147,41 @@ describe("parseSql — JOIN / GROUP BY (complex select -> FetchXML)", () => {
   });
 });
 
+describe("double-quoted string literals (node-sql-parser parses them as double_quote_string)", () => {
+  // Bugs/8.31.md #1: users routinely paste `IN ("A","B")` with double quotes. node-sql-parser's
+  // transactsql grammar hands those back as a `double_quote_string` literal node (value already
+  // unquoted), not a column_ref — isStringLiteral() has to recognize that node type or every
+  // path that formats a literal (formatLiteral / formatFxLiteral / literalToJsValue) throws
+  // "不支持的字面量类型: double_quote_string".
+  it("simple SELECT: `= \"x\"` comparison formats to an OData string literal", () => {
+    const r = parseSql('SELECT name FROM account WHERE name = "Contoso"');
+    if (r.kind !== "select-simple") throw new Error(`expected select-simple, got ${r.kind}`);
+    expect(r.filter).toBe("name eq 'Contoso'");
+  });
+
+  it("simple SELECT: `IN (\"A\",\"B\")` formats to Microsoft.Dynamics.CRM.In", () => {
+    const r = parseSql('SELECT name FROM product WHERE productnumber IN ("IBBF", "IBBA", "IBBB")');
+    if (r.kind !== "select-simple") throw new Error(`expected select-simple, got ${r.kind}`);
+    expect(r.filter).toBe("Microsoft.Dynamics.CRM.In(PropertyName='productnumber',PropertyValues=['IBBF','IBBA','IBBB'])");
+  });
+
+  it("JOIN query: `IN (\"A\",\"B\")` in a WHERE against a joined table formats into the FetchXML condition", () => {
+    const r = parseSql(
+      'select p.productnumber from product p LEFT JOIN product pp on p.productid = pp.productid where pp.productnumber in ("IBBF", "IBBA")',
+    );
+    if (r.kind !== "select-complex") throw new Error(`expected select-complex, got ${r.kind === "error" ? r.error : r.kind}`);
+    expect(r.fetchXml).toContain('operator="in"');
+    expect(r.fetchXml).toContain("IBBF");
+    expect(r.fetchXml).toContain("IBBA");
+  });
+
+  it("INSERT: a double-quoted value converts to a plain JS string", () => {
+    const r = parseSql('INSERT INTO account (name) VALUES ("Fabrikam")');
+    if (r.kind !== "insert") throw new Error("expected insert");
+    expect(literalToJsValue(r.rows[0][0])).toBe("Fabrikam");
+  });
+});
+
 describe("previewSql — live/as-you-type preview placeholder", () => {
   it("replaces an IN (SELECT ...) subquery with a distinctive placeholder, not a real value", () => {
     const sql = "select name from product where productid in (select productid from uomschedule)";
