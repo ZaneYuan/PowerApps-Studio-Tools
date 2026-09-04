@@ -106,7 +106,7 @@ export default function DataEdit() {
         return;
       }
       if (parsed.kind === "select-complex") {
-        setQueryError("数据编辑只支持单表 SELECT，不支持 JOIN / GROUP BY 聚合（结果里的聚合列没法原样写回）。需要这类查询请用 SQL4CDS。");
+        setQueryError("数据编辑只支持单表 SELECT，不支持 DISTINCT / JOIN / GROUP BY 聚合（去重后的结果和聚合列都没法原样写回）。需要这类查询请用 SQL4CDS。");
         return;
       }
 

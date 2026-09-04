@@ -28,7 +28,7 @@ export const tools: ToolDefinition[] = [
   {
     id: "sql4cds",
     name: "SQL4CDS",
-    description: "SELECT（含 JOIN/GROUP BY/聚合函数）、INSERT/UPDATE/DELETE，用 T-SQL 语法写，翻译成 Dataverse Web API/FetchXML 查询后真实执行。仅桌面版可用。",
+    description: "SELECT（含 DISTINCT/JOIN/GROUP BY/聚合函数）、INSERT/UPDATE/DELETE，用 T-SQL 语法写，翻译成 Dataverse Web API/FetchXML 查询后真实执行。仅桌面版可用。",
     category: "查询工具",
     icon: "🗄️",
     Component: lazy(() => import("./sql4cds/Sql4Cds")),

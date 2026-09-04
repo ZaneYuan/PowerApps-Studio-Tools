@@ -770,7 +770,7 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
   }
 
   if (typeof ast.columns === "string" || ast.columns.some((c) => isStar(c.expr))) {
-    throw new Error("使用 JOIN / GROUP BY / 聚合函数时不支持 SELECT *，请显式列出字段。");
+    throw new Error("使用 DISTINCT / JOIN / GROUP BY / 聚合函数时不支持 SELECT *，请显式列出字段。");
   }
   const hasAggregate = ast.columns.some((c) => c.expr.type === "aggr_func");
   const needsGrouping = hasAggregate || !!ast.groupby;
@@ -876,7 +876,11 @@ function parseSelect(ast: SelectAst): ParsedStatement {
     return { kind: "error", error: "无法识别 FROM 子句中的表名。" };
   }
 
+  // DISTINCT joins the JOIN/GROUP BY/aggregate cases on the FetchXML path: the Web API has no
+  // OData equivalent of SELECT DISTINCT (no $apply/groupby support here), while FetchXML expresses
+  // it directly as <fetch distinct="true">, which translateComplexSelect already emits.
   const isComplex =
+    !!ast.distinct ||
     !!ast.groupby ||
     ast.from.some((f) => f.join) ||
     (typeof ast.columns !== "string" && ast.columns.some((c) => c.expr.type === "aggr_func"));
@@ -892,9 +896,6 @@ function parseSelect(ast: SelectAst): ParsedStatement {
 
   if (ast.from.length !== 1 || ast.from[0].join) {
     return { kind: "error", error: "当前只支持单表查询，检测到 JOIN 或多个表（暂不支持）。" };
-  }
-  if (ast.distinct) {
-    return { kind: "error", error: "暂不支持 DISTINCT。" };
   }
   const entityLogicalName = ast.from[0].table ?? null;
   if (!entityLogicalName) {
@@ -1091,7 +1092,13 @@ function formatSubqueryLiteral(value: unknown): string {
 /** Runs an already-resolved (no nested subqueries left) single-column single-table subquery
  *  against Dataverse and returns that column's value from every matching row. */
 async function runSubquerySelect(connectionId: string, subquerySql: string): Promise<unknown[]> {
-  const parsed = parseSql(subquerySql);
+  // A subquery feeds an IN list, which dedupes on its own — so a leading DISTINCT is redundant
+  // here and is simply dropped, keeping this on the (much simpler) OData path instead of pushing
+  // the subquery through FetchXML for no behavioral gain. Left alone when TOP is also present:
+  // there DISTINCT genuinely changes which rows TOP keeps, so the query goes on to be rejected
+  // below rather than silently answering a different question.
+  const withoutDistinct = subquerySql.replace(/^(\s*SELECT\s+)DISTINCT\s+(?!TOP\b)/i, "$1");
+  const parsed = parseSql(withoutDistinct);
   if (parsed.kind !== "select-simple") {
     throw new Error(`子查询暂时只支持简单单表 SELECT（不支持 JOIN / GROUP BY / 聚合函数）："${subquerySql.trim()}"`);
   }

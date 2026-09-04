@@ -269,8 +269,20 @@ describe.skipIf(!hasTestCredentials())("SQL4CDS SELECT path — real Dataverse i
     expect(res.value.map((r) => r[nameField])).toEqual(["Gamma LLC", "Beta Inc"]);
   }, 30_000);
 
-  it("DISTINCT is rejected at parse time", () => {
+  it("SELECT DISTINCT dedupes server-side (routed through FetchXML, not OData)", async () => {
+    // Four parent rows carry only two distinct Active values (true, true, false, false), so a
+    // working DISTINCT collapses them to two — and confirms Dataverse really applies
+    // <fetch distinct="true"> rather than silently returning every row.
     const parsed = parseSql(`SELECT DISTINCT ${activeField} FROM ${parentLogical}`);
+    expect(parsed.kind).toBe("select-complex");
+
+    const res = await runSelect(parentEntitySet, `SELECT DISTINCT ${activeField} FROM ${parentLogical}`);
+    expect(res.value.length).toBe(2);
+    expect(new Set(res.value.map((r) => r[activeField]))).toEqual(new Set([true, false]));
+  }, 30_000);
+
+  it("SELECT DISTINCT * is rejected — FetchXML needs an explicit attribute list to dedupe on", () => {
+    const parsed = parseSql(`SELECT DISTINCT * FROM ${parentLogical}`);
     expect(parsed.kind).toBe("error");
   });
 

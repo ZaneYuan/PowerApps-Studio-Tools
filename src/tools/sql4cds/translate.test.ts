@@ -132,6 +132,34 @@ describe("parseSql — JOIN / GROUP BY (complex select -> FetchXML)", () => {
     expect(r.kind).toBe("error");
   });
 
+  it("SELECT DISTINCT goes down the FetchXML path and emits distinct=\"true\"", () => {
+    // OData has no SELECT DISTINCT equivalent, so a DISTINCT query is routed to FetchXML even
+    // when it's an otherwise plain single-table SELECT (no JOIN/GROUP BY/aggregate).
+    const r = parseSql("select distinct contoso_ruleid from contoso_rule where contoso_name like '%ABC%'");
+    if (r.kind !== "select-complex") throw new Error(`expected select-complex, got ${r.kind === "error" ? r.error : r.kind}`);
+    expect(r.entityLogicalName).toBe("contoso_rule");
+    expect(r.fetchXml).toContain('<fetch distinct="true">');
+    expect(r.fetchXml).toContain('<attribute name="contoso_ruleid" />');
+    expect(r.fetchXml).toContain('<condition attribute="contoso_name" operator="like" value="%ABC%" />');
+    // No GROUP BY/aggregate involved — the attribute must stay alias-free and <fetch> must not
+    // claim aggregate="true" (which would make Dataverse demand an alias on every attribute).
+    expect(r.fetchXml).not.toContain("aggregate");
+    expect(r.fetchXml).not.toContain("alias=");
+  });
+
+  it("DISTINCT combines with TOP and ORDER BY", () => {
+    const r = parseSql("select distinct top 10 name from account order by name desc");
+    if (r.kind !== "select-complex") throw new Error(`expected select-complex, got ${r.kind}`);
+    expect(r.fetchXml).toContain('<fetch top="10" distinct="true">');
+    expect(r.fetchXml).toContain('<order attribute="name" descending="true" />');
+  });
+
+  it("SELECT DISTINCT * is rejected — FetchXML needs an explicit attribute list", () => {
+    const r = parseSql("select distinct * from account");
+    expect(r.kind).toBe("error");
+    if (r.kind === "error") expect(r.error).toContain("DISTINCT");
+  });
+
   it("IN (SELECT ...) subquery not yet resolved gives a specific, actionable error — not the old generic crash", () => {
     const sql = "select name from product where productid in (select productid from uomschedule)";
     const r = parseSql(sql);
