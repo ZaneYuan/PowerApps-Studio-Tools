@@ -86,8 +86,10 @@ interface UpdateAst {
 
 interface DeleteAst {
   type: "delete";
-  table: { table: string }[] | null;
-  from: { table: string }[] | null;
+  /** `DELETE <alias> FROM ...` puts the target alias here (a `FromItem`-shaped node); plain
+   *  `DELETE FROM <table>` leaves it null and the table lives in `from` instead. */
+  table: FromItem[] | null;
+  from: FromItem[] | null;
   where: SqlNode | null;
 }
 
@@ -139,8 +141,14 @@ export interface MutateResult {
   action: "update" | "delete";
   entityLogicalName: string;
   entitySetGuess: string;
-  /** OData $filter — WHERE is mandatory for both update and delete (enforced below). */
+  /** OData $filter — WHERE is mandatory for both update and delete (enforced below). Empty string
+   *  when `fetchXml` is set instead (a JOIN'd DELETE, see below). */
   filter: string;
+  /** Set only for `DELETE ... JOIN ... WHERE` (Bugs/9.7.md #5): Dataverse has no bulk
+   *  delete-with-join, so the target table's matching primary keys are resolved by running this
+   *  FetchXML (link-entities + WHERE, selecting just the PK), then deleted one by one — exactly
+   *  what the plain-WHERE delete does after queryMatchingIds. `filter` is "" in this case. */
+  fetchXml?: string;
   setClauses?: SetClause[];
   warnings: string[];
 }
@@ -1024,15 +1032,66 @@ function parseUpdate(ast: UpdateAst): ParsedStatement {
 }
 
 function parseDelete(ast: DeleteAst): ParsedStatement {
-  const fromList = ast.from ?? ast.table ?? [];
-  const table = fromList[0]?.table;
+  const fromList: FromItem[] = ast.from ?? ast.table ?? [];
+  const root = fromList[0];
+  const table = root?.table;
   if (!table) return { kind: "error", error: "无法识别 DELETE FROM 的表名。" };
-  if (fromList.length > 1) return { kind: "error", error: "暂不支持一次 DELETE 多个表。" };
   if (!ast.where) {
     return {
       kind: "error",
       error: "DELETE 必须带 WHERE 子句（不支持不写 WHERE 删除整张表；如果确实要清空整张表，请自己写一个恒真条件，例如 WHERE statecode >= 0）。",
     };
+  }
+
+  if (fromList.some((f) => f.join)) {
+    // DELETE ... JOIN ... WHERE — Dataverse has no bulk delete-with-join, so resolve the *target*
+    // table's matching primary keys with a FetchXML query (link-entities + WHERE), then delete
+    // them one at a time, exactly like the plain-WHERE delete does after queryMatchingIds.
+    const rootAlias = root.as ?? table;
+    // `DELETE <alias> FROM a x JOIN b y ...` — the alias before FROM must be the root (first)
+    // table; FetchXML's root is always ast.from[0], so deleting a JOINed-in table isn't supported.
+    if (Array.isArray(ast.table) && ast.table[0]?.table) {
+      const target = ast.table[0].table.toLowerCase();
+      if (target !== rootAlias.toLowerCase() && target !== table.toLowerCase()) {
+        return {
+          kind: "error",
+          error: `DELETE 只能删掉 FROM 里的第一张表（"${table}"${root.as ? ` ${root.as}` : ""}），不支持删除 JOIN 进来的 "${ast.table[0].table}"，把要删的表写在 FROM 后面第一个。`,
+        };
+      }
+    }
+    try {
+      const pkAttr = guessPrimaryIdAttribute(table);
+      const warnings = [
+        `DELETE + JOIN：先用 FetchXML 查出 ${table} 的匹配记录、再逐条删除；假设其主键字段名为 "${pkAttr}"（Dataverse 惯例：{实体名}+id），若不是这个格式请改写查询。`,
+      ];
+      const synthetic: SelectAst = {
+        type: "select",
+        columns: [{ expr: { type: "column_ref", table: rootAlias, column: pkAttr } }],
+        from: fromList,
+        where: ast.where,
+        groupby: null,
+        having: null,
+        distinct: null,
+        top: null,
+        orderby: null,
+      };
+      const { fetchXml } = translateComplexSelect(synthetic);
+      return {
+        kind: "mutate",
+        action: "delete",
+        entityLogicalName: table,
+        entitySetGuess: naivePluralize(table),
+        filter: "",
+        fetchXml,
+        warnings,
+      };
+    } catch (err) {
+      return { kind: "error", error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  if (fromList.length > 1) {
+    return { kind: "error", error: "暂不支持逗号并列多表的 DELETE，请改用 JOIN 写法。" };
   }
 
   const warnings: string[] = [];
@@ -1268,6 +1327,9 @@ export function parseSql(sql: string): ParsedStatement {
     const parsed = astResult.map((a) => parseOneStatement(a as { type: string }));
     for (let i = 0; i < parsed.length; i++) {
       const p = parsed[i];
+      if (p.kind === "mutate" && p.fetchXml) {
+        return { kind: "error", error: `第 ${i + 1} 条是 DELETE + JOIN，暂不支持放进批量里，请单独执行。` };
+      }
       if (p.kind === "insert" || p.kind === "mutate") continue;
       if (p.kind === "error") return { kind: "error", error: `第 ${i + 1} 条语句解析失败：${p.error}` };
       return {

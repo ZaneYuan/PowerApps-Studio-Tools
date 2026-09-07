@@ -16,6 +16,7 @@ import {
   insertIntersectRow,
   insertRow,
   queryMatchingIds,
+  queryMatchingIdsViaFetchXml,
   resolveIntersectRowValues,
   updateRow,
   type MatchingIds,
@@ -200,7 +201,10 @@ export default function Sql4Cds() {
   const hasEntity = result.kind !== "error" && result.kind !== "empty" && result.kind !== "batch";
   const entityLogicalName = hasEntity ? result.entityLogicalName : null;
   const entitySetGuess = hasEntity ? result.entitySetGuess : null;
-  const mutateFilter = result.kind === "mutate" ? result.filter : null;
+  // A JOIN'd DELETE carries a FetchXML instead of an OData $filter — the two are mutually
+  // exclusive on a mutate result (filter is "" when fetchXml is set).
+  const mutateFetchXml = result.kind === "mutate" ? (result.fetchXml ?? null) : null;
+  const mutateFilter = result.kind === "mutate" && !result.fetchXml ? result.filter : null;
 
   const entitySetMeta = useEntitySetName(activeConnectionId, entityLogicalName ?? "");
   const entitySet = entitySetMeta.entitySetName || entitySetGuess || "";
@@ -293,16 +297,17 @@ export default function Sql4Cds() {
   useEffect(() => {
     setMatchInfo(null);
     setMatchError(null);
-    if (result.kind !== "mutate" || !activeConnectionId || !entitySet || !entityLogicalName || mutateFilter === null) return;
+    if (result.kind !== "mutate" || !activeConnectionId || !entitySet || !entityLogicalName) return;
+    if (mutateFilter === null && mutateFetchXml === null) return;
     let cancelled = false;
     setMatchLoading(true);
     fetchEntityMeta(activeConnectionId, entityLogicalName)
-      .then((meta) =>
-        queryMatchingIds(activeConnectionId, entitySet, meta.primaryIdAttribute, mutateFilter).then((m) => ({
-          ...m,
-          primaryIdAttribute: meta.primaryIdAttribute,
-        })),
-      )
+      .then((meta) => {
+        const matching = mutateFetchXml
+          ? queryMatchingIdsViaFetchXml(activeConnectionId, entitySet, meta.primaryIdAttribute, mutateFetchXml)
+          : queryMatchingIds(activeConnectionId, entitySet, meta.primaryIdAttribute, mutateFilter!);
+        return matching.then((m) => ({ ...m, primaryIdAttribute: meta.primaryIdAttribute }));
+      })
       .then((m) => {
         if (!cancelled) setMatchInfo(m);
       })
@@ -315,7 +320,7 @@ export default function Sql4Cds() {
     return () => {
       cancelled = true;
     };
-  }, [result.kind, activeConnectionId, entitySet, entityLogicalName, mutateFilter]);
+  }, [result.kind, activeConnectionId, entitySet, entityLogicalName, mutateFilter, mutateFetchXml]);
 
   // A batch can span several tables with cross-statement (or, for one INSERT's own multiple
   // rows, intra-statement) GUID dependencies — auto-resolved the same way matchInfo is above, so
@@ -712,7 +717,7 @@ export default function Sql4Cds() {
     <div className="max-w-none space-y-6">
       <div className="max-w-4xl rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         支持 SELECT（含 DISTINCT / JOIN / GROUP BY / 聚合函数，翻译成 FetchXML 执行）、INSERT、UPDATE、DELETE。UPDATE/DELETE
-        必须带 WHERE 子句（不支持整表操作，请自己写恒真条件），执行前会弹窗二次确认，单次最多处理 5000 条匹配记录并自动下载执行日志。用 T-SQL
+        必须带 WHERE 子句（不支持整表操作，请自己写恒真条件）；DELETE 可以带 JOIN（先查出目标表的匹配主键、再逐条删除）。执行前会弹窗二次确认，单次最多处理 5000 条匹配记录并自动下载执行日志。用 T-SQL
         语法解析，翻译成 Dataverse Web API 查询后真实执行。支持用分号分隔粘贴多条 INSERT/UPDATE/DELETE 语句一次性批量执行（可以跨不同的表），
         执行日志会合并成一份文件；批量里暂不支持 SELECT。写入按并发数（默认 {DEFAULT_WRITE_CONCURRENCY}，可调）同时发多个请求，比逐条执行快；单个请求遇到
         Dataverse 限流（429）会自动退避重试。
@@ -850,6 +855,7 @@ export default function Sql4Cds() {
       {result.kind === "mutate" && (
         <>
           <OutputRow label="WHERE → $filter" value={result.filter} />
+          <OutputRow label="DELETE + JOIN → 匹配记录用的 FetchXML" value={result.fetchXml ?? null} />
 
           {matchLoading && <p className="text-xs text-gray-400">正在查询匹配的记录…</p>}
           {matchError && (

@@ -247,3 +247,37 @@ export async function queryMatchingIds(
   const ids = listRes.value.map((r) => String(r[primaryIdAttribute]));
   return { ids, totalCount: countRes["@odata.count"] ?? ids.length };
 }
+
+/** The FetchXML counterpart of queryMatchingIds — for a DELETE whose target rows are picked out by
+ *  a JOIN (Bugs/9.7.md #5, translate.ts's MutateResult.fetchXml). `fetchXml` already selects just
+ *  the target entity's primary key; this caps the run at 5000 rows and asks Dataverse for the real
+ *  match count via `returntotalrecordcount`. When the true total is past the count cap it's
+ *  reported as `ids.length + 1` — the exact number isn't available, and the `+1` is enough to make
+ *  the caller's "narrow the WHERE and re-run" hint fire. `page`/`count` paging is used rather than
+ *  `top` because FetchXML 400s on `top` + `returntotalrecordcount` together (confirmed live). */
+export async function queryMatchingIdsViaFetchXml(
+  connectionId: string,
+  entitySetName: string,
+  primaryIdAttribute: string,
+  fetchXml: string,
+): Promise<MatchingIds> {
+  const capped = fetchXml.replace(/^<fetch(?=[\s>])/, '<fetch page="1" count="5000" returntotalrecordcount="true"');
+  const res = await callNative<{
+    value: Record<string, unknown>[];
+    "@Microsoft.Dynamics.CRM.totalrecordcount"?: number;
+    "@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded"?: boolean;
+  }>("dataverse.request", {
+    connectionId,
+    method: "GET",
+    path: `${entitySetName}?fetchXml=${encodeURIComponent(capped)}`,
+  });
+  const ids = res.value.map((r) => String(r[primaryIdAttribute]));
+  const reported = res["@Microsoft.Dynamics.CRM.totalrecordcount"];
+  const totalCount =
+    res["@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded"] === true
+      ? ids.length + 1
+      : typeof reported === "number" && reported >= 0
+        ? reported
+        : ids.length;
+  return { ids, totalCount };
+}

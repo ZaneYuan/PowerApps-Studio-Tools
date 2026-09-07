@@ -12,7 +12,7 @@ import { dataverseTestRequest, hasTestCredentials, testRunSuffix } from "../../t
 import { installMockNativeBridge, uninstallMockNativeBridge } from "../../testSupport/mockNativeBridge";
 import { fetchEntityMeta } from "../../native/metadataService";
 import { createColumn, createLookupColumn, createTable } from "../solution-editor/dataverseOps";
-import { insertRow } from "./writeOps";
+import { insertRow, queryMatchingIdsViaFetchXml } from "./writeOps";
 import { buildSelectPath, parseSql, resolveLookupColumns, resolveSqlSubqueries } from "./translate";
 
 const FAKE_CONNECTION_ID = "integration-test";
@@ -345,6 +345,28 @@ describe.skipIf(!hasTestCredentials())("SQL4CDS SELECT path — real Dataverse i
     expect(names.filter((n) => n === "Alpha Corp")).toHaveLength(2);
     expect(names).toContain("Gamma LLC");
     expect(names).toContain("Delta NullCo");
+  }, 30_000);
+
+  it("DELETE ... JOIN ... WHERE resolves the target table's matching ids via FetchXML (Bugs/9.7.md #5)", async () => {
+    // "delete the child rows whose parent is Alpha Corp" — Child1 + Child2 both point at P1.
+    const parsed = parseSql(
+      `DELETE FROM ${childLogical} c INNER JOIN ${parentLogical} p ON c.${childLookupField} = p.${parentIdAttr} ` +
+        `WHERE p.${nameField} = 'Alpha Corp'`,
+    );
+    if (parsed.kind !== "mutate" || !parsed.fetchXml) {
+      throw new Error(`expected a delete mutate with fetchXml, got ${parsed.kind === "error" ? parsed.error : parsed.kind}`);
+    }
+    const match = await queryMatchingIdsViaFetchXml(FAKE_CONNECTION_ID, childEntitySet, `${childLogical}id`, parsed.fetchXml);
+    expect(match.totalCount).toBe(2);
+    expect(match.ids).toHaveLength(2);
+    // every id really is a child of P1
+    for (const id of match.ids) {
+      const row = await dataverseTestRequest<Record<string, unknown>>(
+        "GET",
+        `${childEntitySet}(${id})?$select=_${childLookupField}_value`,
+      );
+      expect(row.body[`_${childLookupField}_value`]).toBe(p1);
+    }
   }, 30_000);
 
   it("RIGHT JOIN and FULL JOIN are rejected at parse time, before any network call", () => {

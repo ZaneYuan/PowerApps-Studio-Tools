@@ -296,6 +296,62 @@ describe("UPDATE / DELETE require WHERE", () => {
   });
 });
 
+describe("DELETE with JOIN (Bugs/9.7.md #5 — resolve target ids via FetchXML, then delete each)", () => {
+  const joinDelete =
+    "delete from bupa_agebasedratetableitem abi " +
+    "left join bupa_agebasedratetable ab on abi.bupa_agedbasedratetableid = ab.bupa_agedbasedratetableid " +
+    "left join product p on p.productid = ab.bupa_productid " +
+    "where p.productnumber in ('IBA3','IBB2')";
+
+  it("produces a delete mutate carrying a FetchXML (not an OData $filter)", () => {
+    const r = parseSql(joinDelete);
+    if (r.kind !== "mutate") throw new Error(`expected mutate, got ${r.kind === "error" ? r.error : r.kind}`);
+    expect(r.action).toBe("delete");
+    expect(r.entityLogicalName).toBe("bupa_agebasedratetableitem");
+    expect(r.filter).toBe("");
+    expect(r.fetchXml).toBeDefined();
+    expect(r.fetchXml).toContain('<attribute name="bupa_agebasedratetableitemid" />');
+    expect(r.fetchXml).toContain('<link-entity name="bupa_agebasedratetable" from="bupa_agedbasedratetableid" to="bupa_agedbasedratetableid" alias="ab" link-type="outer">');
+    expect(r.fetchXml).toContain('<link-entity name="product" from="productid" to="bupa_productid" alias="p" link-type="outer" />');
+    expect(r.fetchXml).toContain('<condition attribute="productnumber" entityname="p" operator="in">');
+    expect(r.fetchXml).toContain("<value>IBA3</value>");
+    expect(r.warnings.some((w) => w.includes("bupa_agebasedratetableitemid"))).toBe(true);
+  });
+
+  it("INNER JOIN form, and `DELETE <alias> FROM ...` targeting the root table, both work", () => {
+    const r = parseSql("delete abi from bupa_rate abi inner join product p on p.productid = abi.bupa_productid where p.productnumber = 'X'");
+    if (r.kind !== "mutate") throw new Error(`expected mutate, got ${r.kind === "error" ? r.error : r.kind}`);
+    expect(r.fetchXml).toContain('<attribute name="bupa_rateid" />');
+    expect(r.fetchXml).not.toContain('link-type="outer"'); // inner is FetchXML's implicit default
+    expect(r.fetchXml).toContain('<condition attribute="productnumber" entityname="p" operator="eq" value="X" />');
+  });
+
+  it("rejects `DELETE <joined alias> FROM ...` — can only delete the first table in FROM", () => {
+    const r = parseSql("delete p from bupa_rate abi inner join product p on p.productid = abi.bupa_productid where abi.bupa_name = 'X'");
+    expect(r.kind).toBe("error");
+    if (r.kind === "error") expect(r.error).toContain("第一张表");
+  });
+
+  it("DELETE + JOIN with no WHERE is still rejected", () => {
+    const r = parseSql("delete from a x join b y on x.bid = y.bid");
+    expect(r.kind).toBe("error");
+    if (r.kind === "error") expect(r.error).toContain("WHERE");
+  });
+
+  it("DELETE + JOIN inside a ;-batch is rejected (run it on its own)", () => {
+    const r = parseSql("delete from a x join b y on x.bid = y.bid where y.name = 'z'; delete from c where cid = 1");
+    expect(r.kind).toBe("error");
+    if (r.kind === "error") expect(r.error).toContain("DELETE + JOIN");
+  });
+
+  it("plain single-table DELETE is unchanged (still an OData $filter, no fetchXml)", () => {
+    const r = parseSql("DELETE FROM account WHERE statecode = 1");
+    if (r.kind !== "mutate") throw new Error(`expected mutate, got ${r.kind}`);
+    expect(r.filter).toBe("statecode eq 1");
+    expect(r.fetchXml).toBeUndefined();
+  });
+});
+
 describe("batch (multiple ;-separated statements)", () => {
   it("a batch of INSERT/UPDATE/DELETE parses to kind=batch", () => {
     const r = parseSql("INSERT INTO account (name) VALUES ('a'); UPDATE account SET name='b' WHERE accountid=1;");
