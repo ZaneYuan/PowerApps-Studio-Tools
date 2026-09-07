@@ -6,6 +6,29 @@ export function escapeODataString(v: string): string {
   return v.replace(/'/g, "''");
 }
 
+/** Column keys for a result grid: the columns the query explicitly asked for (`seed`), then every
+ *  other key seen across *all* `rows`, in first-seen order. Dataverse's Web API — OData and
+ *  FetchXML alike — omits any attribute that's null in a given row from that row's JSON entirely,
+ *  so deriving the column set from `Object.keys(rows[0])` alone silently drops every column that's
+ *  null in the first row but set later, and (without `seed`) a selected column that's null across
+ *  the whole page (Bugs/9.7.md #3: a Data Migration JOIN query showed only 11 of 18 selected
+ *  columns). Pass `rows` already unwrapped (unwrapODataRow / unwrapODataRowWithFormatting(...).
+ *  fields) so `_x_value`/annotation keys are normalized; `seed` from translate.ts's
+ *  resultGridSeedColumns (or `[]` when there's no explicit column list). */
+export function mergeRowColumnKeys(seed: string[], rows: Record<string, unknown>[]): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  const add = (key: string) => {
+    if (!seen.has(key)) {
+      seen.add(key);
+      keys.push(key);
+    }
+  };
+  for (const key of seed) add(key);
+  for (const row of rows) for (const key of Object.keys(row)) add(key);
+  return keys;
+}
+
 /** Dataverse returns a Lookup/Customer/Owner column as `_logicalname_value` (plus `@...`
  *  annotation keys alongside it, e.g. `_x_value@OData.Community.Display.V1.FormattedValue`) —
  *  unwrap every row to plain attribute names so a result table shows the same field names a user

@@ -107,6 +107,13 @@ export interface SelectComplexResult {
   entityLogicalName: string;
   entitySetGuess: string;
   fetchXml: string;
+  /** Response-JSON keys expected for the *root* entity's selected columns (bare attribute names,
+   *  or the SELECT/aggregate alias where one was given) — used only to seed a result grid's column
+   *  list so a column the user explicitly selected still shows up even when it's null on every
+   *  returned row (Bugs/9.7.md #3). Root only: a `<link-entity>` column's response key depends on
+   *  FetchXML aliasing rules this layer doesn't model, so joined-table columns are left to be
+   *  discovered from the row data instead. */
+  outputColumns: string[];
   warnings: string[];
 }
 
@@ -175,6 +182,21 @@ export function buildSelectPath(result: SelectSimpleResult | SelectComplexResult
   if (result.orderby) parts.push(`$orderby=${result.orderby}`);
   if (result.top) parts.push(`$top=${result.top}`);
   return parts.length ? `${entitySetName}?${parts.join("&")}` : entitySetName;
+}
+
+/** The columns a result grid should show *regardless of the row data* — the ones the user named in
+ *  the SELECT list. Dataverse's Web API omits any attribute that's null in a given row from that
+ *  row's JSON, so a grid that derives its column set from the returned rows alone silently drops a
+ *  selected column that happens to be null everywhere on the page (Bugs/9.7.md #3). Bare names,
+ *  normalized the same way the response is unwrapped (a `_x_value` Lookup shadow property → its
+ *  bare logical name) so they line up with unwrapODataRow's output. Empty for `SELECT *`
+ *  (select-simple with `select === null`) and for a select-complex query's joined-table columns
+ *  (see SelectComplexResult.outputColumns) — those still fall back to row-data discovery. Callers
+ *  union this with the keys seen across every returned row (see mergeRowColumnKeys). */
+export function resultGridSeedColumns(result: SelectSimpleResult | SelectComplexResult): string[] {
+  if (result.kind === "select-complex") return result.outputColumns;
+  if (!result.select) return [];
+  return result.select.split(",").map((c) => stripValueWrapper(c.trim()));
 }
 
 const ODATA_COMPARISON_KEYWORDS = new Set(["eq", "ne", "gt", "ge", "lt", "le"]);
@@ -694,7 +716,12 @@ function translateFetchXmlFilter(node: SqlNode, knownAliases: Set<string>, rootA
  *  conditions. `<link-entity from="" to="">` is purely syntactic (just the ON clause's two
  *  attribute names) — no relationship metadata lookup needed, confirmed against FetchXML Builder's
  *  own LinkEntity type (also plain free-text from/to fields). */
-function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fetchXml: string; warnings: string[] } {
+function translateComplexSelect(ast: SelectAst): {
+  entityLogicalName: string;
+  fetchXml: string;
+  outputColumns: string[];
+  warnings: string[];
+} {
   const warnings: string[] = [];
   if (!ast.from || ast.from.length === 0 || !ast.from[0].table) {
     throw new Error("无法识别 FROM 子句中的表名。");
@@ -776,6 +803,10 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
   const needsGrouping = hasAggregate || !!ast.groupby;
 
   const selectedKeys = new Set<string>();
+  // Response-JSON keys for the root entity's selected columns, in SELECT order — seeds the result
+  // grid so a selected-but-all-null column still shows (Bugs/9.7.md #3). Joined-table columns are
+  // deliberately left out (see SelectComplexResult.outputColumns).
+  const outputColumns: string[] = [];
   for (const c of ast.columns) {
     const expr = c.expr;
 
@@ -810,6 +841,7 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
 
       const alias = c.as ?? `${aggFunc}_${attrName}`;
       target.push({ name: attrName, aggregate: aggFunc, alias });
+      if (target === rootAttributes) outputColumns.push(alias);
       continue;
     }
 
@@ -830,8 +862,10 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
     // "An alias must be specified for every attribute in an aggregate query." (FxAttribute's own
     // doc comment already said alias is "Required ... when aggregate or groupby is set", but this
     // branch never actually supplied one before this fix.)
-    target.push({ name: ref.column, groupby: isGrouped || undefined, alias: isGrouped ? (c.as ?? ref.column) : undefined });
+    const attrAlias = isGrouped ? (c.as ?? ref.column) : undefined;
+    target.push({ name: ref.column, groupby: isGrouped || undefined, alias: attrAlias });
     selectedKeys.add(key);
+    if (target === rootAttributes) outputColumns.push(attrAlias ?? ref.column);
   }
 
   for (const key of groupBySet) {
@@ -868,7 +902,7 @@ function translateComplexSelect(ast: SelectAst): { entityLogicalName: string; fe
     orders,
   };
 
-  return { entityLogicalName: rootEntity, fetchXml: serializeFetchXml(query), warnings };
+  return { entityLogicalName: rootEntity, fetchXml: serializeFetchXml(query), outputColumns, warnings };
 }
 
 function parseSelect(ast: SelectAst): ParsedStatement {
@@ -887,8 +921,8 @@ function parseSelect(ast: SelectAst): ParsedStatement {
 
   if (isComplex) {
     try {
-      const { entityLogicalName, fetchXml, warnings } = translateComplexSelect(ast);
-      return { kind: "select-complex", entityLogicalName, entitySetGuess: naivePluralize(entityLogicalName), fetchXml, warnings };
+      const { entityLogicalName, fetchXml, outputColumns, warnings } = translateComplexSelect(ast);
+      return { kind: "select-complex", entityLogicalName, entitySetGuess: naivePluralize(entityLogicalName), fetchXml, outputColumns, warnings };
     } catch (err) {
       return { kind: "error", error: err instanceof Error ? err.message : String(err) };
     }

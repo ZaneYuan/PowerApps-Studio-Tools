@@ -1,5 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { escapeODataString, unwrapODataRow, unwrapODataRowWithFormatting } from "./odata";
+import { escapeODataString, mergeRowColumnKeys, unwrapODataRow, unwrapODataRowWithFormatting } from "./odata";
+
+describe("mergeRowColumnKeys", () => {
+  it("unions keys across every row, not just the first (Dataverse omits null attributes per row)", () => {
+    const rows = [
+      { id: "1", name: "A", reimbursementid: "r1" },
+      { id: "2", name: "B", deductibleid: "d1" },
+      { id: "3", name: "C", lumpsumid: "l1" },
+    ];
+    expect(mergeRowColumnKeys([], rows)).toEqual(["id", "name", "reimbursementid", "deductibleid", "lumpsumid"]);
+  });
+
+  it("puts the seed columns first, in order, then the rest of the discovered keys", () => {
+    const rows = [{ name: "A", extra: 1 }];
+    expect(mergeRowColumnKeys(["id", "name", "deductibleid"], rows)).toEqual(["id", "name", "deductibleid", "extra"]);
+  });
+
+  it("keeps a selected column that's null on every returned row (only reachable via the seed)", () => {
+    const rows = [{ name: "A" }, { name: "B" }];
+    expect(mergeRowColumnKeys(["name", "deductibleid"], rows)).toEqual(["name", "deductibleid"]);
+  });
+
+  it("returns the seed unchanged when there are no rows", () => {
+    expect(mergeRowColumnKeys(["a", "b"], [])).toEqual(["a", "b"]);
+  });
+
+  it("de-duplicates a key that appears in both the seed and the rows", () => {
+    expect(mergeRowColumnKeys(["name"], [{ name: "A" }])).toEqual(["name"]);
+  });
+});
 
 describe("escapeODataString", () => {
   it("doubles a single quote", () => {

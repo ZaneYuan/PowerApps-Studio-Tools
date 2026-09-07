@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
-import { unwrapODataRow } from "../../native/odata";
+import { mergeRowColumnKeys, unwrapODataRow } from "../../native/odata";
 import EntityNameInput from "./EntityNameInput";
 import FieldNameInput from "./FieldNameInput";
 import FilterGroupEditor from "./FilterGroupEditor";
@@ -65,7 +65,10 @@ export default function FetchXmlBuilder() {
       // Migration already do (see native/odata.ts), which this tool had never picked up.
       const unwrapped = res.value.map(unwrapODataRow);
       setRows(unwrapped);
-      setResultColumns(unwrapped.length > 0 ? Object.keys(unwrapped[0]).map((key) => ({ key, checked: true })) : []);
+      // Union the keys across every row, not just row 0's — Dataverse omits null attributes per
+      // row, so a column that's null in the first returned row would otherwise vanish (Bugs/9.7.md
+      // #3). No SQL column list here to seed from, so an all-null column still won't show.
+      setResultColumns(mergeRowColumnKeys([], unwrapped).map((key) => ({ key, checked: true })));
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
     } finally {

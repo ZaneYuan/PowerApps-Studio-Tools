@@ -3,10 +3,10 @@ import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
-import { unwrapODataRowWithFormatting } from "../../native/odata";
+import { mergeRowColumnKeys, unwrapODataRowWithFormatting } from "../../native/odata";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
-import { buildSelectPath, parseSql, resolveLookupColumns, resolveSqlSubqueries } from "../sql4cds/translate";
+import { buildSelectPath, parseSql, resolveLookupColumns, resolveSqlSubqueries, resultGridSeedColumns } from "../sql4cds/translate";
 import { deleteRow, insertRow, updateRow } from "../sql4cds/writeOps";
 import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry } from "../sql4cds/executionLog";
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
@@ -119,8 +119,9 @@ export default function DataEdit() {
         includeFormattedValues: true,
       });
       const unwrapped = res.value.map(unwrapODataRowWithFormatting);
-      const rawColumnNames =
-        unwrapped.length > 0 ? Object.keys(unwrapped[0].fields) : parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
+      // Union of the selected columns and every key across all rows — not just row 0's keys, which
+      // would drop any column that's null in the first returned row (Bugs/9.7.md #3).
+      const rawColumnNames = mergeRowColumnKeys(resultGridSeedColumns(parsed), unwrapped.map((u) => u.fields));
 
       const [attrs, viewOrder] = await Promise.all([
         fetchAttributes(activeConnectionId, parsed.entityLogicalName),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyLookupColumnRenames, buildSelectPath, guessEditingTable, literalToJsValue, parseSql, previewSql, rewriteODataFilterFields, type SelectSimpleResult } from "./translate";
+import { applyLookupColumnRenames, buildSelectPath, guessEditingTable, literalToJsValue, parseSql, previewSql, resultGridSeedColumns, rewriteODataFilterFields, type SelectSimpleResult } from "./translate";
 
 describe("parseSql — simple SELECT", () => {
   it("translates a basic filter/orderby/top", () => {
@@ -160,6 +160,33 @@ describe("parseSql — JOIN / GROUP BY (complex select -> FetchXML)", () => {
     if (r.kind === "error") expect(r.error).toContain("DISTINCT");
   });
 
+  it("outputColumns lists the root entity's selected columns in SELECT order (grid-column seed, Bugs/9.7.md #3)", () => {
+    const r = parseSql(
+      "select abi.bupa_name, abi.bupa_productbenefittypedeductibleid, abi.bupa_rate " +
+        "from bupa_agebasedratetableitem abi left join bupa_agebasedratetable ab on ab.bupa_agebasedratetableid = abi.bupa_agebasedratetableid",
+    );
+    if (r.kind !== "select-complex") throw new Error(`expected select-complex, got ${r.kind === "error" ? r.error : r.kind}`);
+    expect(r.outputColumns).toEqual(["bupa_name", "bupa_productbenefittypedeductibleid", "bupa_rate"]);
+  });
+
+  it("outputColumns omits joined-table columns (their FetchXML response key isn't modeled here) but keeps root ones", () => {
+    const r = parseSql("select p.name, u.name from product p JOIN uom u on p.uomid = u.uomid");
+    if (r.kind !== "select-complex") throw new Error(`expected select-complex, got ${r.kind}`);
+    expect(r.outputColumns).toEqual(["name"]);
+  });
+
+  it("outputColumns uses the alias for aggregates / group-by columns", () => {
+    const r = parseSql("select bupa_plantype, COUNT(*) AS cnt FROM bupa_rate GROUP BY bupa_plantype");
+    if (r.kind !== "select-complex") throw new Error(`expected select-complex, got ${r.kind}`);
+    expect(r.outputColumns).toEqual(["bupa_plantype", "cnt"]);
+  });
+
+  it("resultGridSeedColumns returns the complex select's outputColumns", () => {
+    const r = parseSql("select p.name, p.productnumber from product p JOIN uom u on p.uomid = u.uomid");
+    if (r.kind !== "select-complex") throw new Error(`expected select-complex, got ${r.kind}`);
+    expect(resultGridSeedColumns(r)).toEqual(["name", "productnumber"]);
+  });
+
   it("IN (SELECT ...) subquery not yet resolved gives a specific, actionable error — not the old generic crash", () => {
     const sql = "select name from product where productid in (select productid from uomschedule)";
     const r = parseSql(sql);
@@ -306,8 +333,28 @@ describe("buildSelectPath", () => {
   });
 
   it("builds a fetchXml= path for a complex select", () => {
-    const path = buildSelectPath({ kind: "select-complex", entityLogicalName: "account", entitySetGuess: "accounts", fetchXml: "<fetch/>", warnings: [] }, "accounts");
+    const path = buildSelectPath({ kind: "select-complex", entityLogicalName: "account", entitySetGuess: "accounts", fetchXml: "<fetch/>", outputColumns: [], warnings: [] }, "accounts");
     expect(path).toBe("accounts?fetchXml=%3Cfetch%2F%3E");
+  });
+});
+
+describe("resultGridSeedColumns", () => {
+  it("splits a select-simple's $select into a bare column list", () => {
+    const r = parseSql("SELECT name, statuscode, revenue FROM account");
+    if (r.kind !== "select-simple") throw new Error(`expected select-simple, got ${r.kind}`);
+    expect(resultGridSeedColumns(r)).toEqual(["name", "statuscode", "revenue"]);
+  });
+
+  it("normalizes an explicit _x_value Lookup shadow property back to its bare name (matches the unwrapped row keys)", () => {
+    const r = parseSql("SELECT name, _primarycontactid_value FROM account");
+    if (r.kind !== "select-simple") throw new Error(`expected select-simple, got ${r.kind}`);
+    expect(resultGridSeedColumns(r)).toEqual(["name", "primarycontactid"]);
+  });
+
+  it("is empty for SELECT * (no explicit column list to seed from)", () => {
+    const r = parseSql("SELECT * FROM account");
+    if (r.kind !== "select-simple") throw new Error(`expected select-simple, got ${r.kind}`);
+    expect(resultGridSeedColumns(r)).toEqual([]);
   });
 });
 

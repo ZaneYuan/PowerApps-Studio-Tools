@@ -3,10 +3,10 @@ import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
-import { unwrapODataRowWithFormatting } from "../../native/odata";
+import { mergeRowColumnKeys, unwrapODataRowWithFormatting } from "../../native/odata";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, fetchManyToManyInfo, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
-import { buildSelectPath, literalToJsValue, parseSql, resolveLookupColumns, resolveSqlSubqueries } from "../sql4cds/translate";
+import { buildSelectPath, literalToJsValue, parseSql, resolveLookupColumns, resolveSqlSubqueries, resultGridSeedColumns } from "../sql4cds/translate";
 import { insertIntersectRow, resolveIntersectRowValues, updateRow } from "../sql4cds/writeOps";
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
 import SqlEditor from "../../shared/SqlEditor";
@@ -191,7 +191,9 @@ export default function DataMigration() {
           includeFormattedValues: true,
         });
         const unwrapped = res.value.map(unwrapODataRowWithFormatting);
-        const columnNames = unwrapped.length > 0 ? Object.keys(unwrapped[0].fields) : parsed.kind === "select-simple" && parsed.select ? parsed.select.split(",").map((c) => c.trim()) : [];
+        // Union of the explicitly-selected columns and every key seen across all rows — not just
+        // row 0's keys, which would drop any column that's null in the first row (Bugs/9.7.md #3).
+        const columnNames = mergeRowColumnKeys(resultGridSeedColumns(parsed), unwrapped.map((u) => u.fields));
         const columns = await buildColumns(activeConnectionId, parsed.entityLogicalName, meta.primaryIdAttribute, columnNames);
         // originalValues/formattedValues (baseline for the modified-field marker/unsaved badge,
         // and the Lookup/OptionSet display name respectively) — same convention Data Edit/Data

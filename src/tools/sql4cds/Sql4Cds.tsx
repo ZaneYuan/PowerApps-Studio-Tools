@@ -4,13 +4,13 @@ import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
-import { unwrapODataRow } from "../../native/odata";
+import { mergeRowColumnKeys, unwrapODataRow } from "../../native/odata";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
 import { fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
-import { buildSelectPath, literalToJsValue, parseSql, previewSql, resolveLookupColumns, resolveSqlSubqueries, type InsertResult, type MutateResult, type ParsedStatement, type SqlNode } from "./translate";
+import { buildSelectPath, literalToJsValue, parseSql, previewSql, resolveLookupColumns, resolveSqlSubqueries, resultGridSeedColumns, type InsertResult, type MutateResult, type ParsedStatement, type SqlNode } from "./translate";
 import {
   deleteRow,
   insertIntersectRow,
@@ -233,7 +233,10 @@ export default function Sql4Cds() {
       });
       const unwrapped = res.value.map(unwrapODataRow);
       setRows(unwrapped);
-      setResultColumns(unwrapped.length > 0 ? Object.keys(unwrapped[0]).map((key) => ({ key, checked: true })) : []);
+      // Columns = the explicitly-selected list unioned with every key seen across all rows, not
+      // just row 0's keys — Dataverse omits null attributes per row, so a column that's null in the
+      // first row (or across the whole page) would otherwise silently vanish (Bugs/9.7.md #3).
+      setResultColumns(mergeRowColumnKeys(resultGridSeedColumns(resolvedResult), unwrapped).map((key) => ({ key, checked: true })));
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
     } finally {
