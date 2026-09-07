@@ -28,11 +28,11 @@ const CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d";
 export const TEST_ORG_URL = "https://org0475e5da.crm5.dynamics.com";
 const API_BASE = `${TEST_ORG_URL}/api/data/v9.2/`;
 
-// Absolute path on this machine only — not a secret itself (the file it points to is gitignored
-// in the Obsidian vault repo, see that repo's .gitignore). `existsSync` below makes this entirely
-// optional: a machine without this exact path just falls through to the interactive-cache flow.
+// Absolute path on this machine only — the file holds a real Dataverse client secret. `existsSync`
+// below makes this entirely optional: a machine without this exact path just falls through to the
+// interactive-cache flow. The note itself is parsed for "clientId"/"clientSecret"/"tenantId".
 const CREDENTIALS_MD_PATH =
-  "D:/Material/Documents/obsidian3/ObsidianLocal/01-Projects/MSD365-PP-Tools/Tests/ZaneYuan.md";
+  "D:/document/ObsidianLocal/01-Projects/MSD365-PP-Tools/Tests/ZaneYuan1.md";
 
 interface ClientCredentialsConfig {
   clientId: string;
