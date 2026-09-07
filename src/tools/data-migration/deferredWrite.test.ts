@@ -105,12 +105,13 @@ describe("planDeferredWrite — forward reference within one table", () => {
 
   it("never defers the row's own primary-id column, even though it's a checked GUID column", () => {
     const t = table({
-      columns: [col("contoso_thingid", true)],
-      rows: [{ id: G1, checked: true, values: { contoso_thingid: G1 } }],
+      columns: [col("contoso_thingid", true), col("contoso_name", true)],
+      rows: [{ id: G1, checked: true, values: { contoso_thingid: G1, contoso_name: "A" } }],
     });
     const plan = planDeferredWrite([t]);
     expect(plan.deferredRowCount).toBe(0);
-    expect(phase1Body(plan.rows[0]).contoso_thingid).toBe(G1);
+    // ...and it's never deferred *nor* written into the body — the id is the PATCH URL key only.
+    expect(phase1Body(plan.rows[0])).toEqual({ contoso_name: "A" });
   });
 
   it("an unchecked column referencing another row's id is never deferred or written in either phase", () => {
@@ -189,7 +190,7 @@ describe("planDeferredWrite — intersect tables are excluded entirely", () => {
 });
 
 describe("phase1Body / phase2Body", () => {
-  it("phase1Body includes only checked, non-deferred columns", () => {
+  it("phase1Body includes only checked, non-deferred columns — and never the primary key", () => {
     const t = table({
       columns: [
         col("contoso_thingid", true),
@@ -200,6 +201,27 @@ describe("phase1Body / phase2Body", () => {
     });
     const plan = planDeferredWrite([t]);
     const body = phase1Body(plan.rows[0]);
-    expect(body).toEqual({ contoso_thingid: G1, contoso_name: "A" });
+    expect(body).toEqual({ contoso_name: "A" });
+  });
+
+  it("the primary key is never in either write body even when its column is checked (it's the PATCH URL key — Bugs/9.7.md)", () => {
+    // The common .sql-dump case: INSERT lists its own id column, so the parsed row carries the pk
+    // value in `values` and the pk column is checked. It must still go only into updateRow's URL,
+    // never the body — otherwise Dataverse created each row under a server-generated id.
+    const t = table({
+      primaryIdAttribute: "contoso_thingid",
+      columns: [col("Contoso_ThingId", true), col("contoso_name", true), col("contoso_partnerid", true)],
+      rows: [
+        { id: G1, checked: true, values: { contoso_thingid: G1, contoso_name: "A", contoso_partnerid: G2 } },
+        { id: G2, checked: true, values: { contoso_thingid: G2, contoso_name: "B" } },
+      ],
+    });
+    const plan = planDeferredWrite([t]);
+    const row1 = plan.rows.find((r) => r.row.id === G1)!;
+    // contoso_partnerid points at G2 (a same-batch row) -> deferred to phase 2.
+    expect(phase1Body(row1)).toEqual({ contoso_name: "A" });
+    expect(phase2Body(row1)).toEqual({ contoso_partnerid: G2 });
+    expect(phase1Body(row1)).not.toHaveProperty("contoso_thingid");
+    expect(phase2Body(row1)).not.toHaveProperty("contoso_thingid");
   });
 });

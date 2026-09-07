@@ -65,25 +65,41 @@ export function planDeferredWrite(tables: ImportTable[]): DeferredWritePlan {
   return { rows, deferredRowCount };
 }
 
-/** The checked-column values to write for one row, minus whichever ones this plan deferred. */
+/** The primary key column never belongs in a write *body* — it's the PATCH URL key
+ *  (`updateRow(..., plan.row.id, ...)`), which is what Dataverse's upsert keys off to decide
+ *  create-vs-update and what id a created record gets. With the id also in the body, an imported
+ *  `.sql` dump that lists its own id column (the normal case) created every row under a
+ *  server-generated id instead of the one written in the INSERT (Bugs/9.7.md). Data Copy / Data
+ *  Edit's own write-body builders already exclude it (`c.key.toLowerCase() !== primaryIdAttribute`);
+ *  the multi-table rebuild of this tool dropped the guard commit 6d4a996 first added ("The row's
+ *  id is always the URL key now, never a payload field"). */
+function isPrimaryKeyColumn(plan: DeferredRowPlan, columnLower: string): boolean {
+  return columnLower === plan.table.primaryIdAttribute.toLowerCase();
+}
+
+/** The checked-column values to write for one row, minus the primary key (URL-only) and whichever
+ *  columns this plan deferred. */
 export function phase1Body(plan: DeferredRowPlan): Record<string, unknown> {
   const deferred = new Set(plan.deferredColumns.map((c) => c.toLowerCase()));
   const checkedColumns = new Set(plan.table.columns.filter((c) => c.checked).map((c) => c.key.toLowerCase()));
   const body: Record<string, unknown> = {};
   for (const [col, value] of Object.entries(plan.row.values)) {
     const lower = col.toLowerCase();
-    if (!checkedColumns.has(lower) || deferred.has(lower)) continue;
+    if (isPrimaryKeyColumn(plan, lower) || !checkedColumns.has(lower) || deferred.has(lower)) continue;
     body[col] = value;
   }
   return body;
 }
 
-/** Just the deferred columns' values — the phase-2 backfill body. */
+/** Just the deferred columns' values — the phase-2 backfill body. (The primary key is never
+ *  deferred — planDeferredWrite skips it — so the guard here is belt-and-braces.) */
 export function phase2Body(plan: DeferredRowPlan): Record<string, unknown> {
   const deferred = new Set(plan.deferredColumns.map((c) => c.toLowerCase()));
   const body: Record<string, unknown> = {};
   for (const [col, value] of Object.entries(plan.row.values)) {
-    if (deferred.has(col.toLowerCase())) body[col] = value;
+    const lower = col.toLowerCase();
+    if (isPrimaryKeyColumn(plan, lower) || !deferred.has(lower)) continue;
+    body[col] = value;
   }
   return body;
 }

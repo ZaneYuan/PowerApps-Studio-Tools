@@ -17,6 +17,8 @@ import { installMockNativeBridge, uninstallMockNativeBridge } from "../../testSu
 import { fetchEntityMeta } from "../../native/metadataService";
 import { createTable } from "../solution-editor/dataverseOps";
 import { updateRow } from "../sql4cds/writeOps";
+import { phase1Body, planDeferredWrite } from "./deferredWrite";
+import type { ImportTable } from "./types";
 
 const FAKE_CONNECTION_ID = "integration-test";
 const SOLUTION_UNIQUE_NAME = "ad_ClaudeSmokeTest";
@@ -89,6 +91,43 @@ describe.skipIf(!hasTestCredentials())("Data Migration — upsert-via-PATCH real
     );
     expect(readBack.body[`${PUBLISHER_PREFIX}_name`]).toBe(`Upserted ${suffix}`);
     expect(readBack.body[`${tableLogical}id`]).toBe(clientGeneratedId);
+  }, 30_000);
+
+  it("a .sql-dump row whose INSERT lists its own id column still lands at that id, not a server-generated one (Bugs/9.7.md)", async () => {
+    // Mirrors handleImport's real inputs for the SQL-import path: the pk column is checked and its
+    // value is in `row.values` (the INSERT named it). phase1Body must keep that out of the body so
+    // updateRow's URL key is the sole identity — otherwise Dataverse created the row under a fresh id.
+    const specifiedId = randomGuid();
+    const importTable: ImportTable = {
+      tabId: "t",
+      entityLogicalName: tableLogical,
+      entitySetName,
+      primaryIdAttribute: `${tableLogical}id`,
+      source: "sql-insert",
+      isIntersect: false,
+      columns: [
+        { key: `${tableLogical}id`, checked: true, attributeType: "Uniqueidentifier" },
+        { key: `${PUBLISHER_PREFIX}_name`, checked: true, attributeType: "String" },
+      ],
+      rows: [
+        {
+          id: specifiedId,
+          checked: true,
+          values: { [`${tableLogical}id`]: specifiedId, [`${PUBLISHER_PREFIX}_name`]: `SqlDump ${suffix}` },
+        },
+      ],
+    };
+    const plan = planDeferredWrite([importTable]);
+    const rowPlan = plan.rows[0];
+    expect(phase1Body(rowPlan)).not.toHaveProperty(`${tableLogical}id`);
+    await updateRow(FAKE_CONNECTION_ID, tableLogical, entitySetName, rowPlan.row.id, phase1Body(rowPlan));
+
+    const readBack = await dataverseTestRequest<Record<string, unknown>>(
+      "GET",
+      `${entitySetName}(${specifiedId})?$select=${PUBLISHER_PREFIX}_name`,
+    );
+    expect(readBack.body[`${tableLogical}id`]).toBe(specifiedId);
+    expect(readBack.body[`${PUBLISHER_PREFIX}_name`]).toBe(`SqlDump ${suffix}`);
   }, 30_000);
 
   it("a second PATCH to the same id updates the existing record instead of creating another one", async () => {
