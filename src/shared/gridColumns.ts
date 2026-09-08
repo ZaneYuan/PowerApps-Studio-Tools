@@ -1,4 +1,4 @@
-import { fetchDateTimeFormat, fetchOptionSetValuesForType, isLookupAttributeType, isSystemAuditField } from "../native/metadataService";
+import { fetchEntityDateTimeFormats, fetchEntityOptionSets, isLookupAttributeType, isSystemAuditField } from "../native/metadataService";
 import type { GridColumn } from "./CheckableGrid";
 
 const NUMBER_ATTRIBUTE_TYPES = new Set(["Integer", "BigInt", "Decimal", "Double", "Money"]);
@@ -28,6 +28,17 @@ export async function buildEditableGridColumns(
   typeByName: Map<string, string>,
   primaryIdAttribute: string,
 ): Promise<GridColumn[]> {
+  // Two bulk metadata reads up front (option lists for every OptionSet attribute, Format for every
+  // DateTime attribute) instead of one request per column while the loop below runs — see
+  // fetchEntityOptionSets' own comment. Only fired when a column of that kind is actually present.
+  const lowerTypes = columnNames.map((n) => typeByName.get(n.toLowerCase()));
+  const needsOptionSets = lowerTypes.some((t) => t === "Picklist" || t === "State" || t === "Status" || t === "MultiSelectPicklist");
+  const needsDateTime = lowerTypes.some((t) => t === "DateTime");
+  const [optionSetsByAttr, dateFormatsByAttr] = await Promise.all([
+    needsOptionSets ? fetchEntityOptionSets(connectionId, entityLogicalName) : Promise.resolve(new Map<string, { value: number; label: string }[]>()),
+    needsDateTime ? fetchEntityDateTimeFormats(connectionId, entityLogicalName) : Promise.resolve(new Map<string, "DateOnly" | "DateAndTime">()),
+  ]);
+
   const columns: GridColumn[] = [];
   for (const name of columnNames) {
     const attrType = typeByName.get(name.toLowerCase());
@@ -39,10 +50,10 @@ export async function buildEditableGridColumns(
     } else if (attrType === "String" || attrType === "Memo" || attrType === "Uniqueidentifier") {
       columns.push({ ...base, editable: true, editKind: "text" });
     } else if (attrType === "Picklist" || attrType === "State" || attrType === "Status") {
-      const options = await fetchOptionSetValuesForType(connectionId, entityLogicalName, name, attrType);
+      const options = optionSetsByAttr.get(name.toLowerCase()) ?? [];
       columns.push({ ...base, editable: true, editKind: "select", options: options.map((o) => ({ value: String(o.value), label: o.label })) });
     } else if (attrType === "MultiSelectPicklist") {
-      const options = await fetchOptionSetValuesForType(connectionId, entityLogicalName, name, attrType);
+      const options = optionSetsByAttr.get(name.toLowerCase()) ?? [];
       columns.push({ ...base, editable: true, editKind: "multiselect", options: options.map((o) => ({ value: String(o.value), label: o.label })) });
     } else if (attrType && isLookupAttributeType(attrType)) {
       // The row's value here is already the unwrapped plain GUID (unwrapODataRow strips the
@@ -54,12 +65,9 @@ export async function buildEditableGridColumns(
     } else if (attrType && NUMBER_ATTRIBUTE_TYPES.has(attrType)) {
       columns.push({ ...base, editable: true, editKind: "number" });
     } else if (attrType === "DateTime") {
-      // Best-effort: a Format lookup failure (e.g. a transient network error) shouldn't block the
-      // whole query from rendering — falls back to `undefined`, which convertEditedCellValue
-      // already treats as "assume DateAndTime" (its pre-existing behavior before Format was
-      // fetched at all).
-      const dateFormat = await fetchDateTimeFormat(connectionId, entityLogicalName, name).catch(() => undefined);
-      columns.push({ ...base, editable: true, editKind: "date", dateFormat });
+      // Missing from the bulk read (transient failure, or an odd metadata shape) falls back to
+      // `undefined`, which convertEditedCellValue treats as "assume DateAndTime".
+      columns.push({ ...base, editable: true, editKind: "date", dateFormat: dateFormatsByAttr.get(name.toLowerCase()) });
     } else {
       columns.push(base);
     }

@@ -380,6 +380,63 @@ export async function fetchOptionSetValuesForType(
   return fetchOptionSetValuesForCast(connectionId, entityLogicalName, attributeLogicalName, cast);
 }
 
+/** All of an entity's OptionSet-backed attributes' option lists in ONE round-trip per metadata
+ *  cast (4 total, fired in parallel) instead of one per column — building an editable grid for a
+ *  wide `SELECT *` (a product-class entity has 150-280 attributes, dozens of them OptionSets) was
+ *  doing dozens of sequential per-attribute requests, a multi-second freeze after the row data had
+ *  already arrived. Populates `optionSetCache` per attribute on the way through, so a later
+ *  `fetchOptionSetValuesForType` for the same attribute is a cache hit. Keyed lowercase by
+ *  attribute logical name. */
+export async function fetchEntityOptionSets(
+  connectionId: string,
+  entityLogicalName: string,
+): Promise<Map<string, OptionSetValue[]>> {
+  const trimmedEntity = entityLogicalName.trim();
+  const byAttr = new Map<string, OptionSetValue[]>();
+
+  await Promise.all(
+    Object.entries(OPTIONSET_ATTRIBUTE_CASTS).map(async ([, cast]) => {
+      const res = await callNative<{
+        value: { LogicalName: string; OptionSet: { Options: { Value: number; Label: { UserLocalizedLabel: { Label: string } | null } }[] } | null }[];
+      }>("dataverse.request", {
+        connectionId,
+        method: "GET",
+        path:
+          `EntityDefinitions(LogicalName='${trimmedEntity}')/Attributes/Microsoft.Dynamics.CRM.${cast}` +
+          `?$select=LogicalName&$expand=OptionSet($select=Options)`,
+      }).catch(() => ({ value: [] as never[] })); // a cast with no attributes / a transient failure — skip it
+      for (const a of res.value) {
+        if (!a.OptionSet) continue;
+        const options = a.OptionSet.Options.map((o) => ({ value: o.Value, label: o.Label.UserLocalizedLabel?.Label ?? String(o.Value) }));
+        byAttr.set(a.LogicalName.toLowerCase(), options);
+        optionSetCache.set(`${cacheKey(connectionId, trimmedEntity)}:${a.LogicalName.toLowerCase()}:${cast}`, options);
+      }
+    }),
+  );
+  return byAttr;
+}
+
+/** Every DateTime attribute's `Format` for one entity in a single request — same "bulk instead of
+ *  per-column" reasoning as fetchEntityOptionSets. Populates `dateTimeFormatCache`. */
+export async function fetchEntityDateTimeFormats(
+  connectionId: string,
+  entityLogicalName: string,
+): Promise<Map<string, "DateOnly" | "DateAndTime">> {
+  const trimmedEntity = entityLogicalName.trim();
+  const byAttr = new Map<string, "DateOnly" | "DateAndTime">();
+  const res = await callNative<{ value: { LogicalName: string; Format: "DateOnly" | "DateAndTime" | null }[] }>("dataverse.request", {
+    connectionId,
+    method: "GET",
+    path: `EntityDefinitions(LogicalName='${trimmedEntity}')/Attributes/Microsoft.Dynamics.CRM.DateTimeAttributeMetadata?$select=LogicalName,Format`,
+  }).catch(() => ({ value: [] as never[] }));
+  for (const a of res.value) {
+    const fmt = a.Format ?? "DateAndTime";
+    byAttr.set(a.LogicalName.toLowerCase(), fmt);
+    dateTimeFormatCache.set(`${cacheKey(connectionId, trimmedEntity)}:${a.LogicalName.toLowerCase()}`, Promise.resolve(fmt));
+  }
+  return byAttr;
+}
+
 /** Cached like the rest of this module, keyed by connection+entity+attribute. */
 const dateTimeFormatCache = new Map<string, Promise<"DateOnly" | "DateAndTime">>();
 
