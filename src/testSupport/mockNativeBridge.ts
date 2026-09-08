@@ -27,6 +27,9 @@ interface DataverseRequestParams {
 }
 
 async function handleCall(method: string, params: Record<string, unknown>): Promise<unknown> {
+  // callNative posts this fire-and-forget when an AbortSignal fires; there's nothing to abort in a
+  // test (no real in-flight HTTP to cancel) and no listener waits on its id — just no-op.
+  if (method === "bridge.cancel") return undefined;
   if (method !== "dataverse.request") {
     throw new Error(`mock native bridge 没有实现 "${method}"（这个测试套件只处理 dataverse.request）。`);
   }

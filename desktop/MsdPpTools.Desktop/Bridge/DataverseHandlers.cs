@@ -18,13 +18,13 @@ public static class DataverseHandlers
 
     public static void Register(NativeBridge bridge, DataverseApiClient client)
     {
-        bridge.Register("dataverse.request", async @params =>
+        bridge.Register("dataverse.request", async (@params, cancellationToken) =>
         {
             var input = @params.Deserialize<RequestParams>(NativeBridge.JsonOptions)
                 ?? throw new ArgumentException("缺少请求参数");
             var result = await client.RequestAsync(
                 input.ConnectionId, input.Method, input.Path, input.Body, input.IncludeFormattedValues,
-                input.SolutionUniqueName);
+                input.SolutionUniqueName, cancellationToken);
             return result;
         });
     }

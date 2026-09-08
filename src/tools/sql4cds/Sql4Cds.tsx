@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
+import { isNativeBridgeAvailable } from "../../native/bridge";
+import { runPagedQuery } from "../../native/dataverseQuery";
+import { RowLimitInput, CancelQueryButton, QueryProgressNote, DEFAULT_QUERY_ROW_LIMIT } from "../../shared/QueryRunControls";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
@@ -170,6 +172,10 @@ export default function Sql4Cds() {
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [rowLimit, setRowLimit] = useState(DEFAULT_QUERY_ROW_LIMIT);
+  const [loadProgress, setLoadProgress] = useState<number | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const queryAbortRef = useRef<AbortController | null>(null);
 
   // previewSql placeholders out any `IN (SELECT ...)` before this parse — a raw, unresolved
   // subquery used to make parseSql return `{kind: "error"}` for a JOIN'd query (hiding the
@@ -213,9 +219,14 @@ export default function Sql4Cds() {
 
   async function handleRun() {
     if (!activeConnectionId) return;
+    if (rowLimit === 0 && !(await confirmDialog("结果上限设为「不限」——会分页拉取所有匹配行，数据量大时可能很慢、占用较多内存。确定吗？"))) return;
     setRunning(true);
     setRunError(null);
     setRows(null);
+    setLoadProgress(null);
+    setTruncated(false);
+    const abort = new AbortController();
+    queryAbortRef.current = abort;
     try {
       const resolvedSql = await resolveSqlSubqueries(activeConnectionId, sql);
       const resolvedResult = parseSql(resolvedSql);
@@ -230,20 +241,24 @@ export default function Sql4Cds() {
       const meta = await fetchEntityMeta(activeConnectionId, resolvedResult.entityLogicalName);
       const entitySetName = meta.entitySetName || resolvedResult.entitySetGuess;
       const withLookups = await resolveLookupColumns(activeConnectionId, resolvedResult);
-      const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
-        connectionId: activeConnectionId,
-        method: "GET",
-        path: buildSelectPath(withLookups, entitySetName),
+      const res = await runPagedQuery(activeConnectionId, buildSelectPath(withLookups, entitySetName), {
+        maxRows: rowLimit,
+        signal: abort.signal,
+        onProgress: setLoadProgress,
       });
       const unwrapped = res.value.map(unwrapODataRow);
       setRows(unwrapped);
+      setTruncated(res.truncated);
       // Columns = the explicitly-selected list unioned with every key seen across all rows, not
       // just row 0's keys — Dataverse omits null attributes per row, so a column that's null in the
       // first row (or across the whole page) would otherwise silently vanish (Bugs/9.7.md #3).
       setResultColumns(mergeRowColumnKeys(resultGridSeedColumns(resolvedResult), unwrapped).map((key) => ({ key, checked: true })));
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return; // user hit 取消查询
       setRunError(err instanceof Error ? err.message : String(err));
     } finally {
+      queryAbortRef.current = null;
+      setLoadProgress(null);
       setRunning(false);
     }
   }
@@ -717,7 +732,8 @@ export default function Sql4Cds() {
     <div className="max-w-none space-y-6">
       <div className="max-w-4xl rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         支持 SELECT（含 DISTINCT / JOIN / GROUP BY / 聚合函数，翻译成 FetchXML 执行）、INSERT、UPDATE、DELETE。UPDATE/DELETE
-        必须带 WHERE 子句（不支持整表操作，请自己写恒真条件）；DELETE 可以带 JOIN（先查出目标表的匹配主键、再逐条删除）。执行前会弹窗二次确认，单次最多处理 5000 条匹配记录并自动下载执行日志。用 T-SQL
+        必须带 WHERE 子句（不支持整表操作，请自己写恒真条件）；DELETE 可以带 JOIN（先查出目标表的匹配主键、再逐条删除），写入单次最多处理 5000 条匹配记录并自动下载执行日志。
+        SELECT 结果会自动分页拉取到「结果上限」行（默认 1 万、可调，设 0 = 不限）；查询较慢时可点「取消查询」中止。用 T-SQL
         语法解析，翻译成 Dataverse Web API 查询后真实执行。支持用分号分隔粘贴多条 INSERT/UPDATE/DELETE 语句一次性批量执行（可以跨不同的表），
         执行日志会合并成一份文件；批量里暂不支持 SELECT。写入按并发数（默认 {DEFAULT_WRITE_CONCURRENCY}，可调）同时发多个请求，比逐条执行快；单个请求遇到
         Dataverse 限流（429）会自动退避重试。
@@ -764,7 +780,7 @@ export default function Sql4Cds() {
        *  out for that kind's own dedicated UI below, same as before. */}
       {(result.kind === "select-simple" || result.kind === "select-complex" || (result.kind === "error" && rows !== null)) && (
         <>
-          <div>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={handleRun}
               disabled={!activeConnectionId || running}
@@ -772,8 +788,12 @@ export default function Sql4Cds() {
             >
               {running ? "执行中…" : "执行查询"}
             </button>
-            {!activeConnectionId && <span className="ml-2 text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+            {running && <CancelQueryButton onCancel={() => queryAbortRef.current?.abort()} />}
+            <RowLimitInput value={rowLimit} onChange={setRowLimit} disabled={running} />
+            {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
+
+          <QueryProgressNote running={running} loaded={loadProgress} truncated={truncated} rowLimit={rowLimit} />
 
           {runError && <ErrorMessage error={runError} />}
 

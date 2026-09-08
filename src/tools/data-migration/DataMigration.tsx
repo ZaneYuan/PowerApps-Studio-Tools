@@ -1,9 +1,11 @@
 import { useRef, useState } from "react";
-import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
+import { isNativeBridgeAvailable } from "../../native/bridge";
+import { runPagedQuery, mapWithYield } from "../../native/dataverseQuery";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
 import { mergeRowColumnKeys, unwrapODataRowWithFormatting } from "../../native/odata";
+import { RowLimitInput, CancelQueryButton, QueryProgressNote, DEFAULT_QUERY_ROW_LIMIT } from "../../shared/QueryRunControls";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, fetchManyToManyInfo, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { buildSelectPath, literalToJsValue, parseSql, resolveLookupColumns, resolveSqlSubqueries, resultGridSeedColumns } from "../sql4cds/translate";
@@ -141,6 +143,10 @@ export default function DataMigration() {
   const [fileImporting, setFileImporting] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
   const [fileNote, setFileNote] = useState<string | null>(null);
+  const [rowLimit, setRowLimit] = useState(DEFAULT_QUERY_ROW_LIMIT);
+  const [loadProgress, setLoadProgress] = useState<number | null>(null);
+  const [queryTruncated, setQueryTruncated] = useState(false);
+  const queryAbortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [tables, setTables] = useState<ImportTable[]>([]);
@@ -163,14 +169,21 @@ export default function DataMigration() {
 
   async function handleRunQuery() {
     if (!activeConnectionId) return;
+    if (rowLimit === 0 && !(await confirmDialog("结果上限设为「不限」——会分页拉取所有匹配行，数据量大时可能很慢、占用较多内存。确定吗？"))) return;
     setQueryRunning(true);
     setQueryError(null);
     setFileNote(null);
+    setLoadProgress(null);
+    setQueryTruncated(false);
+    const abort = new AbortController();
+    queryAbortRef.current = abort;
     resetWriteState(); // a previous run's results/log are about to describe a different set of tables
     try {
       const statements = splitStatements(sql);
       const newTables: ImportTable[] = [];
       const skipped: string[] = [];
+      let anyTruncated = false;
+      let loadedSoFar = 0;
 
       for (let i = 0; i < statements.length; i++) {
         const resolvedStatement = await resolveSqlSubqueries(activeConnectionId, statements[i]);
@@ -184,13 +197,18 @@ export default function DataMigration() {
           fetchManyToManyInfo(activeConnectionId, parsed.entityLogicalName),
         ]);
         const path = buildSelectPath(await resolveLookupColumns(activeConnectionId, parsed), meta.entitySetName);
-        const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
-          connectionId: activeConnectionId,
-          method: "GET",
-          path,
+        const res = await runPagedQuery(activeConnectionId, path, {
+          maxRows: rowLimit,
           includeFormattedValues: true,
+          signal: abort.signal,
+          onProgress: (n) => setLoadProgress(loadedSoFar + n),
         });
-        const unwrapped = res.value.map(unwrapODataRowWithFormatting);
+        if (res.truncated) anyTruncated = true;
+        const unwrapped = await mapWithYield(res.value, unwrapODataRowWithFormatting, {
+          onProgress: (n) => setLoadProgress(loadedSoFar + n),
+          signal: abort.signal,
+        });
+        loadedSoFar += res.value.length;
         // Union of the explicitly-selected columns and every key seen across all rows — not just
         // row 0's keys, which would drop any column that's null in the first row (Bugs/9.7.md #3).
         const columnNames = mergeRowColumnKeys(resultGridSeedColumns(parsed), unwrapped.map((u) => u.fields));
@@ -219,10 +237,14 @@ export default function DataMigration() {
       }
 
       addTables(newTables);
+      setQueryTruncated(anyTruncated);
       if (skipped.length > 0) setFileNote(`${skipped.join("、")}不是 SELECT 查询，已跳过。`);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setQueryError(err instanceof Error ? err.message : String(err));
     } finally {
+      queryAbortRef.current = null;
+      setLoadProgress(null);
       setQueryRunning(false);
     }
   }
@@ -616,6 +638,7 @@ export default function DataMigration() {
         语句会被忽略并提示。表格里文本、选项集（Picklist）、查找（Lookup/Customer/Owner，显示的是名称而非
         GUID）字段可直接编辑，被改过的字段会标一个 ❗，列宽可拖拽。两种来源的 Tab
         共存，配置好勾选后选一个目标连接点导入——自动识别这批数据里"一张表引用了另一张表还没创建的记录"这种依赖，先创建所有行（引用的字段先留空），再统一回填，不需要手动排好表的导入顺序。
+        查询结果会自动分页拉取到「结果上限」行（默认 1 万、可调，设 0 = 不限）；较慢时可点「取消查询」中止。
       </div>
 
       <div className="space-y-2">
@@ -640,6 +663,7 @@ export default function DataMigration() {
           >
             {queryRunning ? "查询中…" : "执行查询"}
           </button>
+          {queryRunning && <CancelQueryButton onCancel={() => queryAbortRef.current?.abort()} />}
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={!activeConnectionId || fileImporting}
@@ -647,6 +671,7 @@ export default function DataMigration() {
           >
             {fileImporting ? "导入中…" : "以 SQL 导入…"}
           </button>
+          <RowLimitInput value={rowLimit} onChange={setRowLimit} disabled={queryRunning} />
           <input
             ref={fileInputRef}
             type="file"
@@ -660,6 +685,7 @@ export default function DataMigration() {
           />
           {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个本页连接。</span>}
         </div>
+        <QueryProgressNote running={queryRunning} loaded={loadProgress} truncated={queryTruncated} rowLimit={rowLimit} />
         {queryError && <ErrorMessage error={queryError} />}
         {fileNote && (
           <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">

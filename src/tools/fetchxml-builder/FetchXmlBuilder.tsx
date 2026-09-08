@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
-import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
+import { useMemo, useRef, useState } from "react";
+import { isNativeBridgeAvailable } from "../../native/bridge";
+import { runPagedQuery } from "../../native/dataverseQuery";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
 import { mergeRowColumnKeys, unwrapODataRow } from "../../native/odata";
+import { RowLimitInput, CancelQueryButton, QueryProgressNote, DEFAULT_QUERY_ROW_LIMIT } from "../../shared/QueryRunControls";
 import EntityNameInput from "./EntityNameInput";
 import FieldNameInput from "./FieldNameInput";
 import FilterGroupEditor from "./FilterGroupEditor";
@@ -21,6 +23,10 @@ export default function FetchXmlBuilder() {
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [rowLimit, setRowLimit] = useState(DEFAULT_QUERY_ROW_LIMIT);
+  const [loadProgress, setLoadProgress] = useState<number | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const queryAbortRef = useRef<AbortController | null>(null);
 
   const { xml, error } = useMemo(() => serializeFetchXml(query), [query]);
   const entitySetMeta = useEntitySetName(activeConnectionId, query.entityName);
@@ -53,25 +59,32 @@ export default function FetchXmlBuilder() {
     setRunning(true);
     setRunError(null);
     setRows(null);
+    setLoadProgress(null);
+    setTruncated(false);
+    const abort = new AbortController();
+    queryAbortRef.current = abort;
     try {
-      const path = `${entitySet}?fetchXml=${encodeURIComponent(xml)}`;
-      const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
-        connectionId: activeConnectionId,
-        method: "GET",
-        path,
+      const res = await runPagedQuery(activeConnectionId, `${entitySet}?fetchXml=${encodeURIComponent(xml)}`, {
+        maxRows: rowLimit,
+        signal: abort.signal,
+        onProgress: setLoadProgress,
       });
       // Real field names, not OData JSON property names — a Lookup column comes back from the
       // Web API as `_field_value`; unwrap it the same way SQL4CDS/Data Copy/Data Edit/Data
       // Migration already do (see native/odata.ts), which this tool had never picked up.
       const unwrapped = res.value.map(unwrapODataRow);
       setRows(unwrapped);
+      setTruncated(res.truncated);
       // Union the keys across every row, not just row 0's — Dataverse omits null attributes per
       // row, so a column that's null in the first returned row would otherwise vanish (Bugs/9.7.md
       // #3). No SQL column list here to seed from, so an all-null column still won't show.
       setResultColumns(mergeRowColumnKeys([], unwrapped).map((key) => ({ key, checked: true })));
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setRunError(err instanceof Error ? err.message : String(err));
     } finally {
+      queryAbortRef.current = null;
+      setLoadProgress(null);
       setRunning(false);
     }
   }
@@ -93,7 +106,7 @@ export default function FetchXmlBuilder() {
   return (
     <div className="max-w-5xl space-y-6">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        可视化拼 FetchXML（含嵌套过滤分组、嵌套 link-entity），生成后直接对当前连接真实执行。
+        可视化拼 FetchXML（含嵌套过滤分组、嵌套 link-entity），生成后直接对当前连接真实执行。结果自动分页拉到「结果上限」行（默认 1 万、可调，设 0 = 不限），较慢时可「取消查询」。
       </div>
 
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
@@ -247,6 +260,8 @@ export default function FetchXmlBuilder() {
           >
             {running ? "执行中…" : "执行查询"}
           </button>
+          {running && <CancelQueryButton onCancel={() => queryAbortRef.current?.abort()} />}
+          <RowLimitInput value={rowLimit} onChange={setRowLimit} disabled={running} />
           {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           {activeConnectionId && query.entityName.trim() && entitySetMeta.loading && (
             <span className="text-xs text-gray-400">解析实体元数据中…</span>
@@ -258,6 +273,8 @@ export default function FetchXmlBuilder() {
           )}
         </div>
       )}
+
+      <QueryProgressNote running={running} loaded={loadProgress} truncated={truncated} rowLimit={rowLimit} />
 
       {runError && <ErrorMessage error={runError} />}
 

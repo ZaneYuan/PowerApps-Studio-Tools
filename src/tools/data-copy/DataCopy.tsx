@@ -1,9 +1,11 @@
 import { useRef, useState } from "react";
-import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
+import { isNativeBridgeAvailable } from "../../native/bridge";
+import { runPagedQuery, mapWithYield } from "../../native/dataverseQuery";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
 import { mergeRowColumnKeys, unwrapODataRowWithFormatting } from "../../native/odata";
+import { RowLimitInput, CancelQueryButton, QueryProgressNote, DEFAULT_QUERY_ROW_LIMIT } from "../../shared/QueryRunControls";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, sortColumnsForDisplay } from "../../native/metadataService";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { buildSelectPath, parseSql, resolveLookupColumns, resolveSqlSubqueries, resultGridSeedColumns } from "../sql4cds/translate";
@@ -43,6 +45,10 @@ export default function DataCopy() {
   const { schema: editorSchema, defaultTable: editingTable } = useSqlEditorSchema(activeConnectionId, sql);
   const [queryRunning, setQueryRunning] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
+  const [rowLimit, setRowLimit] = useState(DEFAULT_QUERY_ROW_LIMIT);
+  const [loadProgress, setLoadProgress] = useState<number | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const queryAbortRef = useRef<AbortController | null>(null);
 
   const [entityLogicalName, setEntityLogicalName] = useState<string | null>(null);
   const [entitySetName, setEntitySetName] = useState("");
@@ -64,10 +70,15 @@ export default function DataCopy() {
 
   async function handleRunQuery() {
     if (!activeConnectionId) return;
+    if (rowLimit === 0 && !(await confirmDialog("结果上限设为「不限」——会分页拉取所有匹配行，数据量大时可能很慢、占用较多内存。确定吗？"))) return;
     setQueryRunning(true);
     setQueryError(null);
     setWriteResults(null);
     setWriteError(null);
+    setLoadProgress(null);
+    setTruncated(false);
+    const abort = new AbortController();
+    queryAbortRef.current = abort;
     try {
       const resolvedSql = sql.trim() ? await resolveSqlSubqueries(activeConnectionId, sql) : sql;
       const parsed = parseSql(resolvedSql);
@@ -87,13 +98,14 @@ export default function DataCopy() {
 
       const meta = await fetchEntityMeta(activeConnectionId, parsed.entityLogicalName);
       const path = buildSelectPath(await resolveLookupColumns(activeConnectionId, parsed), meta.entitySetName);
-      const res = await callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
-        connectionId: activeConnectionId,
-        method: "GET",
-        path,
+      const res = await runPagedQuery(activeConnectionId, path, {
+        maxRows: rowLimit,
         includeFormattedValues: true,
+        signal: abort.signal,
+        onProgress: setLoadProgress,
       });
-      const unwrapped = res.value.map(unwrapODataRowWithFormatting);
+      setTruncated(res.truncated);
+      const unwrapped = await mapWithYield(res.value, unwrapODataRowWithFormatting, { onProgress: setLoadProgress, signal: abort.signal });
       // Union of the selected columns and every key across all rows — not just row 0's keys, which
       // would drop any column that's null in the first returned row (Bugs/9.7.md #3).
       const rawColumnNames = mergeRowColumnKeys(resultGridSeedColumns(parsed), unwrapped.map((u) => u.fields));
@@ -129,8 +141,11 @@ export default function DataCopy() {
       const checkedNames = newColumns.filter((c) => c.checked).map((c) => c.key);
       setSql((prev) => replaceSelectColumns(prev, checkedNames));
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setQueryError(err instanceof Error ? err.message : String(err));
     } finally {
+      queryAbortRef.current = null;
+      setLoadProgress(null);
       setQueryRunning(false);
     }
   }
@@ -267,7 +282,7 @@ export default function DataCopy() {
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         写一条单表 SELECT 查出要复制的数据（对本页连接执行），结果表格可以直接编辑——支持文本、选项集（Picklist）、查找（Lookup/Customer/Owner，点 🔍
         搜索选择目标记录，表格里显示的是名称而非 GUID）三种类型的字段编辑，其余类型只读展示；被改过的字段会标一个 ❗；列标题右边缘可拖拽调整宽度。行、列默认全部勾选，改好之后点"创建"，会把勾选的行按当前（编辑后的）值创建成全新记录——主键
-        ID 列不会被带上，由 Dataverse 自动生成新的。只支持单表，不支持 JOIN / 聚合。
+        ID 列不会被带上，由 Dataverse 自动生成新的。只支持单表，不支持 JOIN / 聚合。查询结果自动分页拉到「结果上限」行（默认 1 万、可调，设 0 = 不限），较慢时可「取消查询」。
       </div>
 
       <div className="space-y-2">
@@ -284,7 +299,7 @@ export default function DataCopy() {
           defaultTable={editingTable}
           placeholder="SELECT name, description FROM account WHERE statecode = 0"
         />
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={handleRunQuery}
             disabled={!activeConnectionId || queryRunning}
@@ -292,8 +307,11 @@ export default function DataCopy() {
           >
             {queryRunning ? "查询中…" : "执行查询"}
           </button>
+          {queryRunning && <CancelQueryButton onCancel={() => queryAbortRef.current?.abort()} />}
+          <RowLimitInput value={rowLimit} onChange={setRowLimit} disabled={queryRunning} />
           {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个本页连接。</span>}
         </div>
+        <QueryProgressNote running={queryRunning} loaded={loadProgress} truncated={truncated} rowLimit={rowLimit} />
         {queryError && <ErrorMessage error={queryError} />}
         {!entityLogicalName && !queryError && !queryRunning && (
           <p className="text-xs text-gray-400">输入并执行查询后，结果会显示在这里。</p>

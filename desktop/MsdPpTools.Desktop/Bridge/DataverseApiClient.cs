@@ -36,7 +36,7 @@ public sealed class DataverseApiClient
 
     public async Task<JsonElement?> RequestAsync(
         string connectionId, string method, string path, JsonElement? body, bool includeFormattedValues = false,
-        string? solutionUniqueName = null)
+        string? solutionUniqueName = null, CancellationToken cancellationToken = default)
     {
         var connection = _store.FindById(connectionId)
             ?? throw new InvalidOperationException("找不到该连接，可能已被删除。");
@@ -83,8 +83,8 @@ public sealed class DataverseApiClient
             request.Content = new StringContent(body.Value.GetRawText(), Encoding.UTF8, "application/json");
         }
 
-        using var response = await Http.SendAsync(request);
-        var responseText = await response.Content.ReadAsStringAsync();
+        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {

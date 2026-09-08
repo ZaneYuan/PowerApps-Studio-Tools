@@ -1,4 +1,4 @@
-import { callNative } from "../../native/bridge";
+import { callNative, QUERY_TIMEOUT_MS } from "../../native/bridge";
 import { fetchAttributes, fetchEntityMeta, isLookupAttributeType, type ManyToManyInfo } from "../../native/metadataService";
 import { buildLookupRelationshipMap } from "../../native/navProperty";
 
@@ -233,16 +233,16 @@ export async function queryMatchingIds(
   filter: string,
 ): Promise<MatchingIds> {
   const [listRes, countRes] = await Promise.all([
-    callNative<{ value: Record<string, unknown>[] }>("dataverse.request", {
-      connectionId,
-      method: "GET",
-      path: `${entitySetName}?$select=${primaryIdAttribute}&$filter=${filter}&$top=5000`,
-    }),
-    callNative<{ "@odata.count"?: number }>("dataverse.request", {
-      connectionId,
-      method: "GET",
-      path: `${entitySetName}?$filter=${filter}&$count=true&$top=1`,
-    }),
+    callNative<{ value: Record<string, unknown>[] }>(
+      "dataverse.request",
+      { connectionId, method: "GET", path: `${entitySetName}?$select=${primaryIdAttribute}&$filter=${filter}&$top=5000` },
+      { timeoutMs: QUERY_TIMEOUT_MS },
+    ),
+    callNative<{ "@odata.count"?: number }>(
+      "dataverse.request",
+      { connectionId, method: "GET", path: `${entitySetName}?$filter=${filter}&$count=true&$top=1` },
+      { timeoutMs: QUERY_TIMEOUT_MS },
+    ),
   ]);
   const ids = listRes.value.map((r) => String(r[primaryIdAttribute]));
   return { ids, totalCount: countRes["@odata.count"] ?? ids.length };
@@ -266,11 +266,11 @@ export async function queryMatchingIdsViaFetchXml(
     value: Record<string, unknown>[];
     "@Microsoft.Dynamics.CRM.totalrecordcount"?: number;
     "@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded"?: boolean;
-  }>("dataverse.request", {
-    connectionId,
-    method: "GET",
-    path: `${entitySetName}?fetchXml=${encodeURIComponent(capped)}`,
-  });
+  }>(
+    "dataverse.request",
+    { connectionId, method: "GET", path: `${entitySetName}?fetchXml=${encodeURIComponent(capped)}` },
+    { timeoutMs: QUERY_TIMEOUT_MS },
+  );
   const ids = res.value.map((r) => String(r[primaryIdAttribute]));
   const reported = res["@Microsoft.Dynamics.CRM.totalrecordcount"];
   const totalCount =
