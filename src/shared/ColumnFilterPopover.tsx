@@ -4,7 +4,7 @@ import { operatorsForKind, type ColumnKind, type FilterOperator, type GridColumn
 import type { GridColumn } from "./CheckableGrid";
 
 const inputCls =
-  "w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
+  "block w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 
 /** CheckableGrid's "Filter by" popover — a condition dropdown (options depend on the column's
  *  `kind`, see gridFilter.ts) plus a value widget that changes shape by (kind, operator): plain
@@ -77,19 +77,20 @@ export default function ColumnFilterPopover({
       tabIndex={-1}
       onBlur={handleBlur}
       style={{ position: "fixed", top: anchor.top, left: anchor.left }}
-      className="z-50 w-64 rounded-md border border-gray-200 bg-white p-3 text-left text-sm font-normal normal-case text-gray-900 shadow-xl dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
+      className="z-50 flex w-64 flex-col gap-2 rounded-md border border-gray-200 bg-white p-3 text-left text-sm font-normal normal-case text-gray-900 shadow-xl dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
     >
-      <div className="mb-2 flex items-center justify-between">
+      <div className="flex items-center justify-between">
         <span className="text-sm font-semibold">Filter by</span>
         <button type="button" onClick={onClose} className="text-xs text-gray-400 hover:text-red-500">
           ✕
         </button>
       </div>
 
+      {/* operator dropdown, then the value widget directly under it — one per line, full width */}
       <select
         value={operator}
         onChange={(e) => setOperator(e.target.value as FilterOperator)}
-        className={`${inputCls} mb-2`}
+        className={inputCls}
       >
         {operators.map((o) => (
           <option key={o.value} value={o.value}>
@@ -99,19 +100,19 @@ export default function ColumnFilterPopover({
       </select>
 
       {needsValue && kind === "string" && (
-        <input type="text" value={value} onChange={(e) => setValue(e.target.value)} className={`${inputCls} mb-3`} autoFocus />
+        <input type="text" value={value} onChange={(e) => setValue(e.target.value)} className={inputCls} autoFocus />
       )}
 
       {needsValue && kind === "number" && (
-        <input type="number" value={value} onChange={(e) => setValue(e.target.value)} className={`${inputCls} mb-3`} autoFocus />
+        <input type="number" value={value} onChange={(e) => setValue(e.target.value)} className={inputCls} autoFocus />
       )}
 
       {needsValue && kind === "date" && (
-        <input type="date" value={value} onChange={(e) => setValue(e.target.value)} className={`${inputCls} mb-3`} autoFocus />
+        <input type="date" value={value} onChange={(e) => setValue(e.target.value)} className={inputCls} autoFocus />
       )}
 
       {needsValue && kind === "boolean" && (
-        <select value={value} onChange={(e) => setValue(e.target.value)} className={`${inputCls} mb-3`}>
+        <select value={value} onChange={(e) => setValue(e.target.value)} className={inputCls}>
           <option value="">（选择一个值）</option>
           <option value="true">True</option>
           <option value="false">False</option>
@@ -120,7 +121,7 @@ export default function ColumnFilterPopover({
 
       {needsValue && kind === "lookup" && (
         <>
-          <div className="mb-3 flex items-center gap-1">
+          <div className="flex items-center gap-1">
             <input
               type="text"
               value={label || value}
@@ -157,7 +158,7 @@ export default function ColumnFilterPopover({
       )}
 
       {needsValue && kind === "optionset" && (
-        <div className="mb-3">
+        <div>
           {(column.options?.length ?? 0) > 8 && (
             <input
               type="text"

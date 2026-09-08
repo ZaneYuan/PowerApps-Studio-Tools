@@ -6,7 +6,7 @@ export interface ColumnFilter {
 }
 
 const inputCls =
-  "w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
+  "block w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
 
 /** D365-grid-style "Filter by" popover (Equals gets a dropdown of values actually present in the
  *  column, matching D365's own choice-column filter; Contains gets a free-text substring box).
@@ -91,26 +91,27 @@ export default function ColumnFilterPopover({
       {open && (
         <div
           style={{ position: "fixed", top: pos.top, left: pos.left }}
-          className="z-50 w-56 rounded-md border border-gray-200 bg-white p-3 text-left font-normal normal-case shadow-xl dark:border-gray-700 dark:bg-gray-900"
+          className="z-50 flex w-56 flex-col gap-2 rounded-md border border-gray-200 bg-white p-3 text-left font-normal normal-case shadow-xl dark:border-gray-700 dark:bg-gray-900"
         >
-          <div className="mb-2 flex items-center justify-between">
+          <div className="flex items-center justify-between">
             <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">Filter by {label}</span>
             <button onClick={() => setOpen(false)} className="text-xs text-gray-400 hover:text-red-500">
               ✕
             </button>
           </div>
 
+          {/* operator dropdown, then the value widget directly under it — one per line, full width */}
           <select
             value={operator}
             onChange={(e) => handleOperatorChange(e.target.value as ColumnFilter["operator"])}
-            className={`${inputCls} mb-2`}
+            className={inputCls}
           >
             <option value="equals">Equals</option>
             <option value="contains">Contains</option>
           </select>
 
           {operator === "equals" ? (
-            <select value={value} onChange={(e) => setValue(e.target.value)} className={`${inputCls} mb-3`}>
+            <select value={value} onChange={(e) => setValue(e.target.value)} className={inputCls}>
               <option value="">（选择一个值）</option>
               {distinctValues.map((v) => (
                 <option key={v} value={v}>
@@ -124,7 +125,7 @@ export default function ColumnFilterPopover({
               value={value}
               onChange={(e) => setValue(e.target.value)}
               placeholder="包含…"
-              className={`${inputCls} mb-3`}
+              className={inputCls}
             />
           )}
 
