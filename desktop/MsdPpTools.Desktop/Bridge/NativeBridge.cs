@@ -117,9 +117,27 @@ public sealed class NativeBridge
             error = $"未知的桥接方法: {request.Method}";
         }
 
-        var response = new BridgeResponse(request.Id, result, error);
-        _webView.PostWebMessageAsJson(JsonSerializer.Serialize(response, JsonOptions));
+        // Build the outgoing message off the UI thread — a query result handed back as RawJson can
+        // be tens of MB, and both the raw-splice string concat and (for other handlers) the
+        // JsonSerializer.Serialize are CPU-bound. Doing them here on the dispatcher would freeze
+        // the window for seconds per response once the paged-query loop fires several in a row.
+        var idJson = JsonSerializer.Serialize(request.Id, JsonOptions);
+        var payload = await Task.Run(() =>
+        {
+            if (error is null && result is RawJson raw)
+            {
+                // raw.Json is already valid JSON — splice it in verbatim rather than parse+reserialize.
+                return $"{{\"id\":{idJson},\"result\":{raw.Json},\"error\":null}}";
+            }
+            return JsonSerializer.Serialize(new BridgeResponse(request.Id, error is null ? result : null, error), JsonOptions);
+        });
+
+        _webView.PostWebMessageAsJson(payload);
     }
 
     private sealed record BridgeResponse(string Id, object? Result, string? Error);
 }
+
+/// <summary>A handler result that is already a JSON string — the bridge splices it into the
+/// outgoing message without a parse/re-serialize round-trip (see DataverseApiClient.RequestAsync).</summary>
+public sealed record RawJson(string Json);

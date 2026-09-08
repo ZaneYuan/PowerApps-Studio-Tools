@@ -146,6 +146,8 @@ export default function DataMigration() {
   const [rowLimit, setRowLimit] = useState(DEFAULT_QUERY_ROW_LIMIT);
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [queryTruncated, setQueryTruncated] = useState(false);
+  const [queryStoppedForSize, setQueryStoppedForSize] = useState(false);
+  const [queryRowCount, setQueryRowCount] = useState(0);
   const queryAbortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -174,6 +176,7 @@ export default function DataMigration() {
     setFileNote(null);
     setLoadProgress(null);
     setQueryTruncated(false);
+    setQueryStoppedForSize(false);
     const abort = new AbortController();
     queryAbortRef.current = abort;
     resetWriteState(); // a previous run's results/log are about to describe a different set of tables
@@ -182,6 +185,7 @@ export default function DataMigration() {
       const newTables: ImportTable[] = [];
       const skipped: string[] = [];
       let anyTruncated = false;
+      let anyStoppedForSize = false;
       let loadedSoFar = 0;
 
       for (let i = 0; i < statements.length; i++) {
@@ -203,6 +207,7 @@ export default function DataMigration() {
           onProgress: (n) => setLoadProgress(loadedSoFar + n),
         });
         if (res.truncated) anyTruncated = true;
+        if (res.stoppedForSize) anyStoppedForSize = true;
         const unwrapped = await mapWithYield(res.value, unwrapODataRowWithFormatting, {
           onProgress: (n) => setLoadProgress(loadedSoFar + n),
           signal: abort.signal,
@@ -237,6 +242,8 @@ export default function DataMigration() {
 
       addTables(newTables);
       setQueryTruncated(anyTruncated);
+      setQueryStoppedForSize(anyStoppedForSize);
+      setQueryRowCount(loadedSoFar);
       if (skipped.length > 0) setFileNote(`${skipped.join("、")}不是 SELECT 查询，已跳过。`);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -684,7 +691,7 @@ export default function DataMigration() {
           />
           {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个本页连接。</span>}
         </div>
-        <QueryProgressNote running={queryRunning} loaded={loadProgress} truncated={queryTruncated} rowLimit={rowLimit} />
+        <QueryProgressNote running={queryRunning} loaded={loadProgress} truncated={queryTruncated} stoppedForSize={queryStoppedForSize} loadedRows={queryRowCount} rowLimit={rowLimit} />
         {queryError && <ErrorMessage error={queryError} />}
         {fileNote && (
           <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">

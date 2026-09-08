@@ -20,10 +20,29 @@ export interface PagedQueryOptions {
 export interface PagedQueryResult {
   /** All rows across every page, concatenated. Still raw OData shape — caller unwraps. */
   value: Record<string, unknown>[];
-  /** True when `maxRows` was hit and Dataverse still had more rows past it. */
+  /** True when the run stopped short of everything Dataverse had — either `maxRows` was hit, or
+   *  the payload-size ceiling below was (see `stoppedForSize`). */
   truncated: boolean;
+  /** Set when the byte ceiling stopped it rather than `maxRows` — the caller shows a "rows are
+   *  wide, SELECT fewer columns" hint instead of "raise the row limit". */
+  stoppedForSize: boolean;
   /** Total pages fetched (1 for the common under-5000 case). */
   pages: number;
+}
+
+/** Rough cap on how much row data to pull into the tab regardless of the row limit — a
+ *  `SELECT *` over a wide entity is ~4-5 KB/row, so an un-capped run of a 50k-row table is
+ *  hundreds of MB of JS objects (plus the same again after unwrap + the grid's own copy). Past
+ *  this the tab gets sluggish and the WebView message for each page gets unwieldy, so stop and
+ *  tell the user to narrow the SELECT list. */
+const MAX_RESULT_BYTES = 60_000_000;
+
+/** Cheap byte estimate for a page of rows — `JSON.stringify` once (the raw text isn't available
+ *  on this side, the bridge already parsed it) to learn the per-row weight, then extrapolate. */
+function estimateBytesPerRow(rows: Record<string, unknown>[]): number {
+  if (rows.length === 0) return 0;
+  const sample = rows.slice(0, Math.min(rows.length, 200));
+  return JSON.stringify(sample).length / sample.length;
 }
 
 interface RawPage {
@@ -87,6 +106,8 @@ export async function runPagedQuery(
   let path: string | null = initialPath;
   let pageCount = 0;
   let truncated = false;
+  let stoppedForSize = false;
+  let bytesPerRow = 0;
 
   while (path) {
     pageCount += 1;
@@ -96,8 +117,10 @@ export async function runPagedQuery(
       { timeoutMs: QUERY_TIMEOUT_MS, signal },
     );
 
-    all.push(...(page.value ?? []));
+    const pageRows = page.value ?? [];
+    all.push(...pageRows);
     onProgress?.(all.length);
+    if (bytesPerRow === 0) bytesPerRow = estimateBytesPerRow(pageRows);
 
     const hasMore = isFetchXml
       ? page["@Microsoft.Dynamics.CRM.morerecords"] === true
@@ -106,6 +129,14 @@ export async function runPagedQuery(
     if (maxRows > 0 && all.length >= maxRows) {
       truncated = hasMore || all.length > maxRows;
       all.length = maxRows;
+      break;
+    }
+
+    // Payload-size guard — independent of maxRows. Stop before the next page if the running total
+    // plus another ~5000-row page would blow past the byte ceiling.
+    if (hasMore && bytesPerRow > 0 && (all.length + 5000) * bytesPerRow > MAX_RESULT_BYTES) {
+      truncated = true;
+      stoppedForSize = true;
       break;
     }
 
@@ -120,7 +151,7 @@ export async function runPagedQuery(
     }
   }
 
-  return { value: all, truncated, pages: pageCount };
+  return { value: all, truncated, stoppedForSize, pages: pageCount };
 }
 
 /** `Array.map`, but yields to the event loop every `chunkSize` items so a large result set

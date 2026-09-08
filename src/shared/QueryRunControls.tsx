@@ -47,15 +47,28 @@ export function QueryProgressNote({
   running,
   loaded,
   truncated,
+  stoppedForSize,
+  loadedRows,
   rowLimit,
 }: {
   running: boolean;
   loaded: number | null;
   truncated: boolean;
+  /** True when the byte ceiling stopped it (wide rows), not the row limit. */
+  stoppedForSize?: boolean;
+  /** Rows actually loaded — shown in the size-stop message. */
+  loadedRows?: number;
   rowLimit: number;
 }) {
   if (running && loaded !== null) {
     return <p className="text-xs text-gray-500 dark:text-gray-400">已加载 {loaded.toLocaleString()} 行…</p>;
+  }
+  if (!running && truncated && stoppedForSize) {
+    return (
+      <p className="text-xs text-amber-600 dark:text-amber-400">
+        ⚠ 结果数据量过大，已停在 {(loadedRows ?? 0).toLocaleString()} 行——请只 SELECT 需要的列（避免 <code>SELECT *</code>），或缩小查询条件。
+      </p>
+    );
   }
   if (!running && truncated) {
     return (

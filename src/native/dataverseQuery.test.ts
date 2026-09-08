@@ -85,6 +85,20 @@ describe("runPagedQuery", () => {
     expect(decodeURIComponent(callNative.mock.calls[1][1].path)).toContain('<fetch page="2"');
   });
 
+  it("stops on the payload-size ceiling (wide rows) and flags stoppedForSize, independent of maxRows", async () => {
+    // ~12 KB per row → (5000 + 5000) * 12000 ≈ 120 MB, over the 60 MB ceiling, so it stops after page 1.
+    const fatRow = () => ({ id: 1, blob: "x".repeat(12_000) });
+    callNative.mockResolvedValue({
+      value: Array.from({ length: 5000 }, fatRow),
+      "@odata.nextLink": "https://x/api/data/v9.2/things?$skiptoken=more",
+    });
+    const res = await runPagedQuery("conn", "things", { maxRows: 0 });
+    expect(res.value.length).toBe(5000);
+    expect(res.truncated).toBe(true);
+    expect(res.stoppedForSize).toBe(true);
+    expect(callNative).toHaveBeenCalledTimes(1);
+  });
+
   it("calls onProgress with the running total after each page", async () => {
     callNative
       .mockResolvedValueOnce({ value: [{}, {}], "@odata.nextLink": "https://x/api/data/v9.2/accounts?$skiptoken=t" })

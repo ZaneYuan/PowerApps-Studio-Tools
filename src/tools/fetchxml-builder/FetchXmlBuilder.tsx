@@ -26,6 +26,7 @@ export default function FetchXmlBuilder() {
   const [rowLimit, setRowLimit] = useState(DEFAULT_QUERY_ROW_LIMIT);
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [truncated, setTruncated] = useState(false);
+  const [stoppedForSize, setStoppedForSize] = useState(false);
   const queryAbortRef = useRef<AbortController | null>(null);
 
   const { xml, error } = useMemo(() => serializeFetchXml(query), [query]);
@@ -61,6 +62,7 @@ export default function FetchXmlBuilder() {
     setRows(null);
     setLoadProgress(null);
     setTruncated(false);
+    setStoppedForSize(false);
     const abort = new AbortController();
     queryAbortRef.current = abort;
     try {
@@ -75,6 +77,7 @@ export default function FetchXmlBuilder() {
       const unwrapped = res.value.map(unwrapODataRow);
       setRows(unwrapped);
       setTruncated(res.truncated);
+      setStoppedForSize(res.stoppedForSize);
       // Union the keys across every row, not just row 0's — Dataverse omits null attributes per
       // row, so a column that's null in the first returned row would otherwise vanish (Bugs/9.7.md
       // #3). No SQL column list here to seed from, so an all-null column still won't show.
@@ -274,7 +277,7 @@ export default function FetchXmlBuilder() {
         </div>
       )}
 
-      <QueryProgressNote running={running} loaded={loadProgress} truncated={truncated} rowLimit={rowLimit} />
+      <QueryProgressNote running={running} loaded={loadProgress} truncated={truncated} stoppedForSize={stoppedForSize} loadedRows={rows?.length} rowLimit={rowLimit} />
 
       {runError && <ErrorMessage error={runError} />}
 

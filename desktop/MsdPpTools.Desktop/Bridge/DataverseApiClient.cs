@@ -34,7 +34,13 @@ public sealed class DataverseApiClient
     // key style (MetadataId vs LogicalName=' ') precedes it.
     private static readonly Regex EntityIdGuidPattern = new(@"\(([0-9a-fA-F-]{36})\)(?!.*\()", RegexOptions.Compiled);
 
-    public async Task<JsonElement?> RequestAsync(
+    /// <summary>Returns a <see cref="RawJson"/> wrapping the response body verbatim (or a small
+    /// synthesized object for a 204 metadata write, or null). The bridge splices RawJson straight
+    /// into its outgoing message without re-parsing — a query result can be tens of MB, and
+    /// deserializing it to a JsonElement here just to re-serialize it in NativeBridge was a
+    /// multi-second UI-thread stall per page once the paged-query loop started firing several such
+    /// responses in a row.</summary>
+    public async Task<object?> RequestAsync(
         string connectionId, string method, string path, JsonElement? body, bool includeFormattedValues = false,
         string? solutionUniqueName = null, CancellationToken cancellationToken = default)
     {
@@ -51,7 +57,7 @@ public sealed class DataverseApiClient
                 $"连接 \"{connection.Name}\" 已关闭\"允许写入\"，当前为只读模式，无法执行 {method} 操作。");
         }
 
-        var token = await _authService.GetTokenAsync(connectionId);
+        var token = await _authService.GetTokenAsync(connectionId).ConfigureAwait(false);
 
         var url = $"{connection.EnvironmentUrl}/api/data/v9.2/{path.TrimStart('/')}";
         using var request = new HttpRequestMessage(new HttpMethod(method), url);
@@ -83,8 +89,12 @@ public sealed class DataverseApiClient
             request.Content = new StringContent(body.Value.GetRawText(), Encoding.UTF8, "application/json");
         }
 
-        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+        // Default completion option (ResponseContentRead): the whole body is buffered before this
+        // returns, so HttpClient.Timeout covers the full download. ResponseHeadersRead would stop
+        // the timeout applying once headers arrive, letting a stalled body transfer hang until the
+        // JS-side timeout — only worth it for streaming, which this isn't.
+        using var response = await Http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var responseText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -93,7 +103,7 @@ public sealed class DataverseApiClient
 
         if (!string.IsNullOrWhiteSpace(responseText))
         {
-            return JsonSerializer.Deserialize<JsonElement>(responseText);
+            return new RawJson(responseText);
         }
 
         // Metadata writes (POST EntityDefinitions / its Attributes nav property) don't honor
@@ -108,7 +118,7 @@ public sealed class DataverseApiClient
             var match = EntityIdGuidPattern.Match(entityIdHeaderValues.FirstOrDefault() ?? "");
             if (match.Success)
             {
-                return JsonSerializer.SerializeToElement(new { odataEntityId = match.Groups[1].Value });
+                return new { odataEntityId = match.Groups[1].Value };
             }
         }
 

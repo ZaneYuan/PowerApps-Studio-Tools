@@ -175,6 +175,7 @@ export default function Sql4Cds() {
   const [rowLimit, setRowLimit] = useState(DEFAULT_QUERY_ROW_LIMIT);
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [truncated, setTruncated] = useState(false);
+  const [stoppedForSize, setStoppedForSize] = useState(false);
   const queryAbortRef = useRef<AbortController | null>(null);
 
   // previewSql placeholders out any `IN (SELECT ...)` before this parse — a raw, unresolved
@@ -225,6 +226,7 @@ export default function Sql4Cds() {
     setRows(null);
     setLoadProgress(null);
     setTruncated(false);
+    setStoppedForSize(false);
     const abort = new AbortController();
     queryAbortRef.current = abort;
     try {
@@ -249,6 +251,7 @@ export default function Sql4Cds() {
       const unwrapped = res.value.map(unwrapODataRow);
       setRows(unwrapped);
       setTruncated(res.truncated);
+      setStoppedForSize(res.stoppedForSize);
       // Columns = the explicitly-selected list unioned with every key seen across all rows, not
       // just row 0's keys — Dataverse omits null attributes per row, so a column that's null in the
       // first row (or across the whole page) would otherwise silently vanish (Bugs/9.7.md #3).
@@ -793,7 +796,7 @@ export default function Sql4Cds() {
             {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
           </div>
 
-          <QueryProgressNote running={running} loaded={loadProgress} truncated={truncated} rowLimit={rowLimit} />
+          <QueryProgressNote running={running} loaded={loadProgress} truncated={truncated} stoppedForSize={stoppedForSize} loadedRows={rows?.length} rowLimit={rowLimit} />
 
           {runError && <ErrorMessage error={runError} />}
 

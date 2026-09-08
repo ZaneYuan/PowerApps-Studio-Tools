@@ -48,6 +48,7 @@ export default function DataCopy() {
   const [rowLimit, setRowLimit] = useState(DEFAULT_QUERY_ROW_LIMIT);
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [truncated, setTruncated] = useState(false);
+  const [stoppedForSize, setStoppedForSize] = useState(false);
   const queryAbortRef = useRef<AbortController | null>(null);
 
   const [entityLogicalName, setEntityLogicalName] = useState<string | null>(null);
@@ -77,6 +78,7 @@ export default function DataCopy() {
     setWriteError(null);
     setLoadProgress(null);
     setTruncated(false);
+    setStoppedForSize(false);
     const abort = new AbortController();
     queryAbortRef.current = abort;
     try {
@@ -105,6 +107,7 @@ export default function DataCopy() {
         onProgress: setLoadProgress,
       });
       setTruncated(res.truncated);
+      setStoppedForSize(res.stoppedForSize);
       const unwrapped = await mapWithYield(res.value, unwrapODataRowWithFormatting, { onProgress: setLoadProgress, signal: abort.signal });
       // Union of the selected columns and every key across all rows — not just row 0's keys, which
       // would drop any column that's null in the first returned row (Bugs/9.7.md #3).
@@ -311,7 +314,7 @@ export default function DataCopy() {
           <RowLimitInput value={rowLimit} onChange={setRowLimit} disabled={queryRunning} />
           {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个本页连接。</span>}
         </div>
-        <QueryProgressNote running={queryRunning} loaded={loadProgress} truncated={truncated} rowLimit={rowLimit} />
+        <QueryProgressNote running={queryRunning} loaded={loadProgress} truncated={truncated} stoppedForSize={stoppedForSize} loadedRows={rows.length} rowLimit={rowLimit} />
         {queryError && <ErrorMessage error={queryError} />}
         {!entityLogicalName && !queryError && !queryRunning && (
           <p className="text-xs text-gray-400">输入并执行查询后，结果会显示在这里。</p>
