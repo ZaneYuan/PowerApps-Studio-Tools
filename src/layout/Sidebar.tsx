@@ -5,8 +5,10 @@ import { useTabManager } from "../native/tabs";
 import type { ToolDefinition } from "../tools/types";
 import ConnectionSwitcher from "./ConnectionSwitcher";
 import SvgIcon from "../shared/SvgIcon";
+import { getToolIconTone } from "../tools/toolVisuals";
 
 function ToolButton({ tool, active, onOpen }: { tool: ToolDefinition; active: boolean; onOpen: () => void }) {
+  const tone = getToolIconTone(tool.category);
   return (
     <button
       onClick={onOpen}
@@ -16,7 +18,9 @@ function ToolButton({ tool, active, onOpen }: { tool: ToolDefinition; active: bo
           : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
       }`}
     >
-      <SvgIcon name={tool.icon} className="h-4 w-4" />
+      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${tone.surface}`}>
+        <SvgIcon name={tool.icon} className={`h-4 w-4 ${tone.icon}`} />
+      </span>
       <span>{tool.name}</span>
     </button>
   );
@@ -48,9 +52,7 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <nav className="flex h-full flex-col overflow-y-auto">
       <button onClick={handleHome} className="flex items-center gap-2 px-4 pb-1 pt-4 text-left">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
-          <SvgIcon name="app-tools" className="h-5 w-5" />
-        </span>
+        <SvgIcon name="app-tools" className="h-9 w-9 drop-shadow-sm" />
         <span className="text-base font-semibold text-gray-900 dark:text-gray-100">
           Power Apps Studio & Tools
         </span>

@@ -7,6 +7,7 @@ import type { ToolDefinition } from "../tools/types";
 import { isBetaCategory } from "../tools/registry";
 import ToolErrorBoundary from "./ToolErrorBoundary";
 import SvgIcon from "../shared/SvgIcon";
+import { getToolIconTone } from "../tools/toolVisuals";
 
 const selectCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -38,6 +39,7 @@ export default function ToolPanel({
   const activeConnection = connections.find((c) => c.id === connectionId);
   const reportDirty = useCallback((dirty: boolean) => setTabDirty(tabKey, dirty), [tabKey, setTabDirty]);
   const connectionHealth = useConnectionHealth(tool.connectionScoped !== false ? connectionId : null);
+  const iconTone = getToolIconTone(tool.category);
 
   return (
     <TabConnectionContext.Provider value={connectionId}>
@@ -45,8 +47,8 @@ export default function ToolPanel({
         <div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
-                <SvgIcon name={tool.icon} className="h-5 w-5" />
+              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${iconTone.surface}`}>
+                <SvgIcon name={tool.icon} className={`h-5 w-5 ${iconTone.icon}`} />
               </span>
               <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{tool.name}</h1>
               {isBetaCategory(tool.category) && (

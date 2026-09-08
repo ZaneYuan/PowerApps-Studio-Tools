@@ -4,6 +4,7 @@ import { useTabManager, type TabInstance } from "../native/tabs";
 import { getToolById } from "../tools/registry";
 import { useConfirmDialog } from "../shared/ConfirmDialog";
 import SvgIcon from "../shared/SvgIcon";
+import { getToolIconTone } from "../tools/toolVisuals";
 
 const tabCls = (active: boolean) =>
   `flex h-10 shrink-0 items-center gap-1.5 border-b-2 px-3 text-sm ${
@@ -79,10 +80,11 @@ export default function TabBar({ onToggleSidebar }: { onToggleSidebar: () => voi
           if (!tool) return null;
           const scopedConnectionName = connectionName(tab);
           const isDirty = dirtyTabKeys.has(tab.tabKey);
+          const iconTone = getToolIconTone(tool.category);
           return (
             <div key={tab.tabKey} data-tab-key={tab.tabKey} className={tabCls(activeTabKey === tab.tabKey)}>
               <button onClick={() => activateTab(tab.tabKey)} className="flex min-w-0 items-center gap-1.5">
-                <SvgIcon name={tool.icon} className="h-4 w-4" />
+                <SvgIcon name={tool.icon} className={`h-4 w-4 ${iconTone.icon}`} />
                 {isDirty && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" title="有未提交的改动" />}
                 <span className="max-w-40 truncate">{tool.name}</span>
                 {scopedConnectionName && (
@@ -128,6 +130,7 @@ export default function TabBar({ onToggleSidebar }: { onToggleSidebar: () => voi
               {openTabs.map((tab) => {
                 const tool = getToolById(tab.toolId);
                 if (!tool) return null;
+                const iconTone = getToolIconTone(tool.category);
                 return (
                   <button
                     key={tab.tabKey}
@@ -141,7 +144,7 @@ export default function TabBar({ onToggleSidebar }: { onToggleSidebar: () => voi
                         : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
                     }`}
                   >
-                    <SvgIcon name={tool.icon} className="h-4 w-4" />
+                    <SvgIcon name={tool.icon} className={`h-4 w-4 ${iconTone.icon}`} />
                     <span className="min-w-0 flex-1 truncate">{tabLabel(tab)}</span>
                     {dirtyTabKeys.has(tab.tabKey) && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" title="有未提交的改动" />}
                   </button>

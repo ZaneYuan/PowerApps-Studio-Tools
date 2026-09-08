@@ -33,6 +33,8 @@ export type SvgIconName =
 
 export default function SvgIcon({ name, className = "h-4 w-4" }: { name: SvgIconName; className?: string }) {
   const url = `/icons/${name}.svg`;
+  if (name === "app-tools") return <img src={url} alt="" aria-hidden="true" className={`inline-block shrink-0 ${className}`} />;
+
   const style: CSSProperties = {
     WebkitMaskImage: `url("${url}")`,
     maskImage: `url("${url}")`,
