@@ -1,4 +1,5 @@
-import { callNative, QUERY_TIMEOUT_MS } from "../../native/bridge";
+import { callNative } from "../../native/bridge";
+import { runPagedQuery } from "../../native/dataverseQuery";
 import { fetchAttributes, fetchEntityMeta, isLookupAttributeType, type ManyToManyInfo } from "../../native/metadataService";
 import { buildLookupRelationshipMap } from "../../native/navProperty";
 
@@ -214,70 +215,49 @@ export async function deleteIntersectRow(connectionId: string, rel: ManyToManyIn
 }
 
 export interface MatchingIds {
-  /** Capped at 5000 — the actual set of ids UPDATE/DELETE will process this run. */
+  /** Every matching record's id — the full set UPDATE/DELETE processes this run. Paged through in
+   *  full (the id-only rows are tiny); a confirm dialog shows the count before any write happens. */
   ids: string[];
-  /** The real total match count (via a separate $count=true&$top=1 call — never
-   *  `/$count?$filter=`, per this project's documented OData conventions), which can be larger
-   *  than `ids.length` when the WHERE clause matches more than the 5000-row execution cap. */
+  /** Same as `ids.length` now that the whole set is paged in — kept so callers don't have to change. */
   totalCount: number;
+  /** True only in the extreme case that even id-only rows hit runPagedQuery's byte ceiling
+   *  (~850k matches) — the caller warns that not every match will be processed. */
+  truncated: boolean;
 }
 
 /** Resolves which records an UPDATE/DELETE's WHERE clause matches — Dataverse's Web API has no
- *  bulk "UPDATE/DELETE ... WHERE" endpoint, so every mutate statement must first find the target
- *  ids and then write them one at a time (see updateRow/deleteRow). Capped at 5000 per run to
- *  bound a single execution. */
+ *  bulk "UPDATE/DELETE ... WHERE" endpoint, so every mutate statement first finds the target ids
+ *  (id column only, paged in full) and then writes them one at a time (see updateRow/deleteRow). */
 export async function queryMatchingIds(
   connectionId: string,
   entitySetName: string,
   primaryIdAttribute: string,
   filter: string,
+  signal?: AbortSignal,
 ): Promise<MatchingIds> {
-  const [listRes, countRes] = await Promise.all([
-    callNative<{ value: Record<string, unknown>[] }>(
-      "dataverse.request",
-      { connectionId, method: "GET", path: `${entitySetName}?$select=${primaryIdAttribute}&$filter=${filter}&$top=5000` },
-      { timeoutMs: QUERY_TIMEOUT_MS },
-    ),
-    callNative<{ "@odata.count"?: number }>(
-      "dataverse.request",
-      { connectionId, method: "GET", path: `${entitySetName}?$filter=${filter}&$count=true&$top=1` },
-      { timeoutMs: QUERY_TIMEOUT_MS },
-    ),
-  ]);
-  const ids = listRes.value.map((r) => String(r[primaryIdAttribute]));
-  return { ids, totalCount: countRes["@odata.count"] ?? ids.length };
+  const res = await runPagedQuery(connectionId, `${entitySetName}?$select=${primaryIdAttribute}&$filter=${filter}`, {
+    maxRows: 0,
+    signal,
+  });
+  const ids = res.value.map((r) => String(r[primaryIdAttribute]));
+  return { ids, totalCount: ids.length, truncated: res.truncated || res.stoppedForSize };
 }
 
 /** The FetchXML counterpart of queryMatchingIds — for a DELETE whose target rows are picked out by
  *  a JOIN (Bugs/9.7.md #5, translate.ts's MutateResult.fetchXml). `fetchXml` already selects just
- *  the target entity's primary key; this caps the run at 5000 rows and asks Dataverse for the real
- *  match count via `returntotalrecordcount`. When the true total is past the count cap it's
- *  reported as `ids.length + 1` — the exact number isn't available, and the `+1` is enough to make
- *  the caller's "narrow the WHERE and re-run" hint fire. `page`/`count` paging is used rather than
- *  `top` because FetchXML 400s on `top` + `returntotalrecordcount` together (confirmed live). */
+ *  the target entity's primary key; runPagedQuery follows the fetch paging cookie through every
+ *  page. */
 export async function queryMatchingIdsViaFetchXml(
   connectionId: string,
   entitySetName: string,
   primaryIdAttribute: string,
   fetchXml: string,
+  signal?: AbortSignal,
 ): Promise<MatchingIds> {
-  const capped = fetchXml.replace(/^<fetch(?=[\s>])/, '<fetch page="1" count="5000" returntotalrecordcount="true"');
-  const res = await callNative<{
-    value: Record<string, unknown>[];
-    "@Microsoft.Dynamics.CRM.totalrecordcount"?: number;
-    "@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded"?: boolean;
-  }>(
-    "dataverse.request",
-    { connectionId, method: "GET", path: `${entitySetName}?fetchXml=${encodeURIComponent(capped)}` },
-    { timeoutMs: QUERY_TIMEOUT_MS },
-  );
+  const res = await runPagedQuery(connectionId, `${entitySetName}?fetchXml=${encodeURIComponent(fetchXml)}`, {
+    maxRows: 0,
+    signal,
+  });
   const ids = res.value.map((r) => String(r[primaryIdAttribute]));
-  const reported = res["@Microsoft.Dynamics.CRM.totalrecordcount"];
-  const totalCount =
-    res["@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded"] === true
-      ? ids.length + 1
-      : typeof reported === "number" && reported >= 0
-        ? reported
-        : ids.length;
-  return { ids, totalCount };
+  return { ids, totalCount: ids.length, truncated: res.truncated || res.stoppedForSize };
 }
