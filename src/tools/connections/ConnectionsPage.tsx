@@ -318,6 +318,15 @@ export default function ConnectionsPage() {
     }
   }
 
+  async function handleSignOut(id: string) {
+    try {
+      await callNative("auth.signOut", { connectionId: id });
+      setStatus((s) => ({ ...s, [id]: { message: "已注销，下次测试连接会重新登录" } }));
+    } catch (err) {
+      setStatus((s) => ({ ...s, [id]: { error: err instanceof Error ? err.message : String(err) } }));
+    }
+  }
+
   function togglePasswordLogin(id: string) {
     setPasswordLogin((p) => {
       const current = p[id] ?? emptyPasswordLogin;
@@ -373,12 +382,21 @@ export default function ConnectionsPage() {
                       {status[c.id]?.loading ? "测试中…" : "测试连接"}
                     </button>
                     {c.authType === "Interactive" && (
-                      <button
-                        onClick={() => togglePasswordLogin(c.id)}
-                        className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-                      >
-                        用密码登录
-                      </button>
+                      <>
+                        <button
+                          onClick={() => togglePasswordLogin(c.id)}
+                          className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+                        >
+                          用密码登录
+                        </button>
+                        <button
+                          onClick={() => handleSignOut(c.id)}
+                          title="清除已缓存的登录账号，下次测试连接会重新弹浏览器登录"
+                          className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+                        >
+                          注销
+                        </button>
+                      </>
                     )}
                     <button
                       onClick={() => (editingId === c.id ? setEditingId(null) : handleStartEdit(c))}

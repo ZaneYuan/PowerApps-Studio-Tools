@@ -17,6 +17,11 @@ public static class AuthHandlers
         public string? Password { get; set; }
     }
 
+    private sealed class ConnectionIdParams
+    {
+        public string ConnectionId { get; set; } = "";
+    }
+
     public static void Register(NativeBridge bridge, AuthService authService)
     {
         bridge.Register("auth.login", async @params =>
@@ -27,6 +32,14 @@ public static class AuthHandlers
                 ? await authService.LoginWithUsernamePasswordAsync(input.ConnectionId, input.Username, input.Password)
                 : await authService.GetTokenAsync(input.ConnectionId);
             return new { success = true, expiresOn = token.ExpiresOn };
+        });
+
+        bridge.Register("auth.signOut", async @params =>
+        {
+            var input = @params.Deserialize<ConnectionIdParams>(NativeBridge.JsonOptions)
+                ?? throw new ArgumentException("缺少 connectionId");
+            await authService.SignOutAsync(input.ConnectionId);
+            return new { success = true };
         });
     }
 }

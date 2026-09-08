@@ -86,12 +86,37 @@ public sealed class AuthService
         catch (MsalUiRequiredException ex)
         {
             throw new InvalidOperationException(
-                "这个账号需要 MFA / 条件访问，用户名密码直接登录不支持——请改用普通的\"登录 + WhoAmI\"（会弹出浏览器完成 MFA）。", ex);
+                "这个账号需要 MFA / 条件访问，用户名密码直接登录不支持——请改用\"测试连接\"（会弹出浏览器完成 MFA）。", ex);
         }
 
         var token = new TokenResult { AccessToken = result.AccessToken, ExpiresOn = result.ExpiresOn };
         _tokenCache[connectionId] = token;
         return token;
+    }
+
+    /// <summary>Forgets the interactive sign-in for a connection: drops its in-memory token and
+    /// removes the cached account(s) from the persisted MSAL cache, so the next "测试连接" shows the
+    /// browser prompt again. Use to switch accounts or recover from a stale session. Because the
+    /// on-disk cache is partitioned only by client id + authority (not per connection), this also
+    /// signs out every other interactive connection pointing at the same tenant — in practice
+    /// they all share the one account you signed in with. No-op if nothing is cached.</summary>
+    public async Task SignOutAsync(string connectionId)
+    {
+        var connection = _store.FindById(connectionId)
+            ?? throw new InvalidOperationException("找不到该连接，可能已被删除。");
+        if (connection.AuthType != ConnectionAuthType.Interactive)
+        {
+            throw new InvalidOperationException("只有交互式登录类型的连接需要注销。");
+        }
+
+        _tokenCache.Remove(connectionId);
+
+        var (clientId, authority) = await ResolveInteractiveClientAndAuthorityAsync(connection);
+        var app = await GetPublicClientAppAsync(clientId, authority);
+        foreach (var account in await app.GetAccountsAsync())
+        {
+            await app.RemoveAsync(account);
+        }
     }
 
     // Microsoft's first-party, multi-tenant public-client app ("Microsoft Dynamics CRM") — the
