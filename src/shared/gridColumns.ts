@@ -75,6 +75,37 @@ export async function buildEditableGridColumns(
   return columns;
 }
 
+/** Read-only sibling of buildEditableGridColumns for query-result grids that only *display* rows
+ *  (SQL4CDS). Assigns each column its `attributeType` — so CheckableGrid classifies it for
+ *  sort/filter and, for OptionSet/Lookup columns, shows the FormattedValue label instead of the
+ *  raw GUID/option code — plus the option list for OptionSet columns (lets the grid sort by label
+ *  and still resolve a label when a row carries no FormattedValue annotation). No `editable` flag:
+ *  cells stay plain, non-interactive text. Filtering is unaffected — CheckableGrid always matches
+ *  against the raw `row.values[key]`, never the formatted label. */
+export async function buildDisplayGridColumns(
+  connectionId: string,
+  entityLogicalName: string,
+  columnNames: string[],
+  typeByName: Map<string, string>,
+): Promise<GridColumn[]> {
+  const isOptionSet = (t: string | undefined) =>
+    t === "Picklist" || t === "State" || t === "Status" || t === "MultiSelectPicklist";
+  const needsOptionSets = columnNames.some((n) => isOptionSet(typeByName.get(n.toLowerCase())));
+  const optionSetsByAttr = needsOptionSets
+    ? await fetchEntityOptionSets(connectionId, entityLogicalName)
+    : new Map<string, { value: number; label: string }[]>();
+
+  return columnNames.map((name) => {
+    const attributeType = typeByName.get(name.toLowerCase());
+    const base: GridColumn = { key: name, attributeType, checked: true };
+    if (isOptionSet(attributeType)) {
+      const options = optionSetsByAttr.get(name.toLowerCase()) ?? [];
+      return { ...base, options: options.map((o) => ({ value: String(o.value), label: o.label })) };
+    }
+    return base;
+  });
+}
+
 /** The inverse of buildEditableGridColumns' type decisions — CheckableGrid's cell editors only
  *  ever hand back a raw string (a native `<input>`/`<select>` produced), so every non-text/lookup/
  *  multiselect editKind needs converting back to the JS value type Dataverse's Web API actually

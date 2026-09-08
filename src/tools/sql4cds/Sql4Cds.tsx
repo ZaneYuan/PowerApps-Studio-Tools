@@ -6,11 +6,12 @@ import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
-import { mergeRowColumnKeys, unwrapODataRow } from "../../native/odata";
+import { mergeRowColumnKeys, unwrapODataRowWithFormatting } from "../../native/odata";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
 import SvgIcon from "../../shared/SvgIcon";
-import { fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
+import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, fetchManyToManyInfo, sortColumnsForDisplay } from "../../native/metadataService";
+import { buildDisplayGridColumns } from "../../shared/gridColumns";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
 import { buildSelectPath, literalToJsValue, parseSql, previewSql, resolveLookupColumns, resolveSqlSubqueries, resultGridSeedColumns, type InsertResult, type MutateResult, type ParsedStatement, type SqlNode } from "./translate";
@@ -170,7 +171,7 @@ export default function Sql4Cds() {
   const { activeConnectionId, connections } = useActiveConnection();
   const confirmDialog = useConfirmDialog();
   const [sql, setSql] = useState("");
-  const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
+  const [rows, setRows] = useState<{ fields: Record<string, unknown>; formattedFields: Record<string, string> }[] | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [rowLimit, setRowLimit] = useState(DEFAULT_QUERY_ROW_LIMIT);
@@ -246,17 +247,40 @@ export default function Sql4Cds() {
       const withLookups = await resolveLookupColumns(activeConnectionId, resolvedResult);
       const res = await runPagedQuery(activeConnectionId, buildSelectPath(withLookups, entitySetName), {
         maxRows: rowLimit,
+        includeFormattedValues: true,
         signal: abort.signal,
         onProgress: setLoadProgress,
       });
-      const unwrapped = res.value.map(unwrapODataRow);
+      const unwrapped = res.value.map(unwrapODataRowWithFormatting);
       setRows(unwrapped);
       setTruncated(res.truncated);
       setStoppedForSize(res.stoppedForSize);
-      // Columns = the explicitly-selected list unioned with every key seen across all rows, not
+      // Column set = the explicitly-selected list unioned with every key seen across all rows, not
       // just row 0's keys — Dataverse omits null attributes per row, so a column that's null in the
       // first row (or across the whole page) would otherwise silently vanish (Bugs/9.7.md #3).
-      setResultColumns(mergeRowColumnKeys(resultGridSeedColumns(resolvedResult), unwrapped).map((key) => ({ key, checked: true })));
+      const baseKeys = mergeRowColumnKeys(resultGridSeedColumns(resolvedResult), unwrapped.map((u) => u.fields));
+      // Bugs/9.8.md #1: order the columns like the entity's default view and show OptionSet/Lookup
+      // values as their name/label (not the raw GUID/code). Best-effort — a metadata hiccup falls
+      // back to plain, SELECT-order columns. Grid filtering is unaffected: CheckableGrid always
+      // matches the raw value in row.values, never the formatted label.
+      let columns: GridColumn[];
+      try {
+        const attrs = await fetchAttributes(activeConnectionId, resolvedResult.entityLogicalName);
+        const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
+        if (resolvedResult.kind === "select-simple") {
+          const viewOrder = await fetchDefaultViewColumnOrder(activeConnectionId, resolvedResult.entityLogicalName);
+          const ordered = sortColumnsForDisplay(baseKeys, meta.primaryIdAttribute, viewOrder);
+          columns = await buildDisplayGridColumns(activeConnectionId, resolvedResult.entityLogicalName, ordered, typeByName);
+        } else {
+          // JOIN / GROUP BY / aggregate: keep the SELECT/seen order (default-view order doesn't map
+          // onto joined-in or aggregated columns), but still tag root-entity columns with their
+          // type so their OptionSet/Lookup values render as labels.
+          columns = baseKeys.map((key) => ({ key, checked: true, attributeType: typeByName.get(key.toLowerCase()) }));
+        }
+      } catch {
+        columns = baseKeys.map((key) => ({ key, checked: true }));
+      }
+      setResultColumns(columns);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return; // user hit 取消查询
       setRunError(err instanceof Error ? err.message : String(err));
@@ -274,7 +298,7 @@ export default function Sql4Cds() {
   // Row checkboxes are hidden here (showRowCheckbox={false} — a SELECT result has no "select rows
   // for a bulk action" concept), so `checked`/`id` are unused placeholders; only `values` matters.
   const resultGridRows: GridRow[] = useMemo(
-    () => (rows ?? []).map((row, i) => ({ id: String(i), checked: true, values: row })),
+    () => (rows ?? []).map((u, i) => ({ id: String(i), checked: true, values: u.fields, formattedValues: u.formattedFields })),
     [rows],
   );
 
