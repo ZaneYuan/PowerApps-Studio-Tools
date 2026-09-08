@@ -89,13 +89,26 @@ public static class GitHubReleaseUpdateChecker
             if (string.IsNullOrEmpty(downloadUrl))
                 return false; // release exists but has no zip asset attached (yet)
 
+            // The release's *tag* is ahead of us, but that doesn't guarantee the release *zip* is —
+            // the zip is built and uploaded by hand, and GitHub auto-creates the tag at main's tip
+            // when a release is published (target_commitish "main"), so a zip built from an earlier
+            // commit routinely ends up attached to a tag that points somewhere newer. If we've
+            // already downloaded this exact asset (identified by its sha256 digest) once and found
+            // its build-commit.txt wasn't actually newer, don't re-download + re-prompt every
+            // launch — that's the "怎么还是提示更新" loop.
+            var assetDigest = asset.TryGetProperty("digest", out var digestProp) ? digestProp.GetString() : null;
+            var skipMarkerPath = Path.Combine(exeDir, "update-skip.txt");
+            if (!string.IsNullOrEmpty(assetDigest)
+                && File.Exists(skipMarkerPath)
+                && File.ReadAllText(skipMarkerPath).Trim() == assetDigest)
+                return false; // already checked this exact zip — its contents weren't newer
+
             // version.txt is `git describe` output (publish-desktop.ps1) — purely for display. It
-            // can read identical for two different builds when the release tag was moved onto a
-            // later commit after this exe was built (the ancestry check above already confirmed
-            // there really is newer code). Show the short commit SHAs so "新版本 X（当前 X）" isn't
-            // a mystery — the SHAs are what actually differ.
+            // can read identical for two different builds when the release tag sits on a later
+            // commit than the one this exe was built from. Show the short commit SHAs so
+            // "新版本 X（当前 X）" isn't a mystery — the SHAs are what actually differ.
             var versionLine = string.Equals(latestTag, currentVersion, StringComparison.Ordinal)
-                ? $"检测到新版本 {latestTag}（提交 {Short(releaseCommit)}），当前 {currentVersion}（提交 {Short(localCommit)}）。\n版本号相同是因为发布标签被移动过，但代码确实有更新。"
+                ? $"检测到新版本 {latestTag}（提交 {Short(releaseCommit)}），当前 {currentVersion}（提交 {Short(localCommit)}）。\n版本号相同是因为发布标签指向的提交比当前构建新。"
                 : $"检测到新版本 {latestTag}（提交 {Short(releaseCommit)}），当前 {currentVersion}（提交 {Short(localCommit)}）。";
 
             var choice = MessageBox.Show(
@@ -106,7 +119,7 @@ public static class GitHubReleaseUpdateChecker
             if (choice != MessageBoxResult.Yes)
                 return false;
 
-            return DownloadAndSwap(http, downloadUrl, exeDir);
+            return DownloadAndSwap(http, downloadUrl, exeDir, localCommit, assetDigest, skipMarkerPath);
         }
         catch
         {
@@ -174,7 +187,7 @@ public static class GitHubReleaseUpdateChecker
         }
     }
 
-    private static bool DownloadAndSwap(HttpClient http, string downloadUrl, string exeDir)
+    private static bool DownloadAndSwap(HttpClient http, string downloadUrl, string exeDir, string localCommit, string? assetDigest, string skipMarkerPath)
     {
         var tempZip = Path.Combine(Path.GetTempPath(), $"PowerAppsStudioTools-update-{Guid.NewGuid():N}.zip");
         var tempExtractDir = Path.Combine(Path.GetTempPath(), $"PowerAppsStudioTools-update-{Guid.NewGuid():N}");
@@ -194,6 +207,28 @@ public static class GitHubReleaseUpdateChecker
             var newWwwroot = Path.Combine(tempExtractDir, "wwwroot");
             if (!File.Exists(newExe) || !Directory.Exists(newWwwroot))
                 return false; // malformed/unexpected zip layout — bail instead of half-applying
+
+            // The tag was ahead, but is the actual zip? Its stamped build commit is the real answer.
+            // If it's not genuinely newer than what's running, applying it changes nothing and the
+            // check fires again next launch — remember this exact asset so we stop nagging, and say
+            // why (so whoever cut the release can re-package it against the right commit).
+            var newBuildCommitPath = Path.Combine(tempExtractDir, "build-commit.txt");
+            var newBuildCommit = File.Exists(newBuildCommitPath) ? File.ReadAllText(newBuildCommitPath).Trim() : null;
+            if (!string.IsNullOrEmpty(newBuildCommit)
+                && (newBuildCommit == localCommit || !IsAhead(http, baseSha: localCommit, headSha: newBuildCommit)))
+            {
+                if (!string.IsNullOrEmpty(assetDigest))
+                {
+                    try { File.WriteAllText(skipMarkerPath, assetDigest); } catch { /* best-effort */ }
+                }
+                MessageBox.Show(
+                    "这个 GitHub 发布包实际构建的提交并不比当前版本新——发布时标签指向了更靠后的提交，但压缩包没跟着更新。\n\n" +
+                    "已跳过，本次起不再为这个发布包提示更新。请让开发者用正确的提交重新打包发布。",
+                    "Power Apps Studio & Tools",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return false;
+            }
 
             var currentExe = Path.Combine(exeDir, ExeName);
             var oldExe = Path.Combine(exeDir, "PowerAppsStudioTools.old.exe");
