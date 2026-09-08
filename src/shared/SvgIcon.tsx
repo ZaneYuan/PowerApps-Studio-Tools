@@ -27,7 +27,9 @@ export type SvgIconName =
   | "table"
   | "close"
   | "check"
-  | "error";
+  | "error"
+  | "menu"
+  | "tabs";
 
 export default function SvgIcon({ name, className = "h-4 w-4" }: { name: SvgIconName; className?: string }) {
   const url = `/icons/${name}.svg`;

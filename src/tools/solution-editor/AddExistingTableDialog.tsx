@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { addExistingTableComponent, fetchAllEntitiesForPicker, type PickableEntity } from "./dataverseOps";
 import ErrorMessage from "../../shared/ErrorMessage";
+import Dialog from "../../shared/Dialog";
 
 export default function AddExistingTableDialog({
   connectionId,
@@ -49,8 +50,7 @@ export default function AddExistingTableDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-lg bg-white shadow-xl dark:bg-gray-900">
+    <Dialog ariaLabel="添加现有表" onClose={onClose} panelClassName="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-lg bg-white shadow-xl dark:bg-gray-900">
         <h3 className="border-b border-gray-200 p-4 text-sm font-semibold text-gray-900 dark:border-gray-800 dark:text-gray-100">添加现有表</h3>
 
         <div className="p-4 pb-2">
@@ -98,7 +98,6 @@ export default function AddExistingTableDialog({
             {submitting ? "添加中…" : "添加"}
           </button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }

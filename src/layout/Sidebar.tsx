@@ -22,7 +22,7 @@ function ToolButton({ tool, active, onOpen }: { tool: ToolDefinition; active: bo
   );
 }
 
-export default function Sidebar() {
+export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const categories = getCategories();
   const { activeConnectionId } = useActiveConnection();
   const { openTabs, activeTabKey, openTab, activateHome, recentToolIds } = useTabManager();
@@ -31,6 +31,12 @@ export default function Sidebar() {
 
   function handleOpen(tool: ToolDefinition) {
     openTab(tool.id, tool.connectionScoped === false ? null : activeConnectionId);
+    onNavigate?.();
+  }
+
+  function handleHome() {
+    activateHome();
+    onNavigate?.();
   }
 
   const trimmedSearch = search.trim().toLowerCase();
@@ -41,7 +47,7 @@ export default function Sidebar() {
 
   return (
     <nav className="flex h-full flex-col overflow-y-auto">
-      <button onClick={activateHome} className="flex items-center gap-2 px-4 pb-1 pt-4 text-left">
+      <button onClick={handleHome} className="flex items-center gap-2 px-4 pb-1 pt-4 text-left">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
           <SvgIcon name="app-tools" className="h-5 w-5" />
         </span>

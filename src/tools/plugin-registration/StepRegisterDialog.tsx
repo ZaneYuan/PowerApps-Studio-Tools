@@ -13,6 +13,7 @@ import {
 } from "./dataverseOps";
 import { DEPLOYMENT_LABELS, MODE_LABELS, STAGE_LABELS } from "./types";
 import SvgIcon from "../../shared/SvgIcon";
+import Dialog from "../../shared/Dialog";
 
 const inputCls =
   "w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -213,8 +214,7 @@ export default function StepRegisterDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
+    <Dialog ariaLabel={isEdit ? "编辑 Step" : `注册 Step ${pluginTypeName}`} onClose={onClose} panelClassName="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
         <h3 className="mb-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
           {isEdit ? "编辑 Step" : `注册 Step — ${pluginTypeName}`}
         </h3>
@@ -392,7 +392,6 @@ export default function StepRegisterDialog({
             {submitting ? "保存中…" : isEdit ? "保存" : "注册 Step"}
           </button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }

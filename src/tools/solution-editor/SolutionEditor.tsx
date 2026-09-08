@@ -217,7 +217,7 @@ export default function SolutionEditor() {
     );
   }
   if (!activeConnectionId) {
-    return <p className="text-sm text-gray-400">请先在侧边栏选择一个本页连接。</p>;
+    return <p className="text-sm text-gray-400">请在上方“当前标签连接”中选择连接。</p>;
   }
 
   // ---- List view ----

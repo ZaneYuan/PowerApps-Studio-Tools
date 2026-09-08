@@ -57,7 +57,7 @@ export default function ToolPanel({
             </div>
             {isNativeBridgeAvailable() && tool.connectionScoped !== false && (
               <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                本页连接
+                当前标签连接
                 <select
                   value={connectionId ?? ""}
                   onChange={(e) => setTabConnection(tabKey, e.target.value || null)}

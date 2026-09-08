@@ -265,7 +265,7 @@ export default function FetchXmlBuilder() {
           </button>
           {running && <CancelQueryButton onCancel={() => queryAbortRef.current?.abort()} />}
           <RowLimitInput value={rowLimit} onChange={setRowLimit} disabled={running} />
-          {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+          {!activeConnectionId && <span className="text-xs text-gray-400">请在上方“当前标签连接”中选择连接。</span>}
           {activeConnectionId && query.entityName.trim() && entitySetMeta.loading && (
             <span className="text-xs text-gray-400">解析实体元数据中…</span>
           )}

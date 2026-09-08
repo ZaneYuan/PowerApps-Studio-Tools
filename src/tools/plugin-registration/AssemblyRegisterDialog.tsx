@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import ErrorMessage from "../../shared/ErrorMessage";
+import Dialog from "../../shared/Dialog";
 import {
   inspectAssembly,
   pickPluginDll,
@@ -88,8 +89,7 @@ export default function AssemblyRegisterDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
+    <Dialog ariaLabel={isUpdate ? "更新程序集" : "注册新程序集"} onClose={onClose} panelClassName="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
         <h3 className="mb-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
           {isUpdate ? "更新程序集" : "注册新程序集"}
         </h3>
@@ -171,8 +171,7 @@ export default function AssemblyRegisterDialog({
             {submitting ? "提交中…" : isUpdate ? "更新程序集" : "注册程序集"}
           </button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 

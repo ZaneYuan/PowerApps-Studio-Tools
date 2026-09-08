@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
 import type { ReactNode } from "react";
+import Dialog from "./Dialog";
 
 export interface ConfirmOptions {
   title?: string;
@@ -41,7 +42,6 @@ const cancelButtonCls =
  *  every existing call site just adds `await` and swaps the string for an options object. */
 export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<PendingDialog | null>(null);
-  const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const confirm = useCallback((options: ConfirmOptions | string): Promise<boolean> => {
     const resolved = typeof options === "string" ? { message: options } : options;
@@ -63,67 +63,51 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     setPending(null);
   }
 
-  useEffect(() => {
-    if (!pending) return;
-    confirmBtnRef.current?.focus();
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") close(false);
-      else if (e.key === "Enter") close(true);
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending]);
-
   return (
     <ConfirmDialogContext.Provider value={{ confirm, alertMsg }}>
       {children}
       {pending && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => close(false)}
+        <Dialog
+          ariaLabel={pending.kind === "confirm" ? (pending.options.title ?? "确认操作") : "消息"}
+          onClose={() => close(false)}
+          panelClassName="w-full max-w-md rounded-lg border border-gray-200 bg-white p-4 shadow-xl dark:border-gray-700 dark:bg-gray-900"
+          role="alertdialog"
+          closeOnBackdrop
         >
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-4 shadow-xl dark:border-gray-700 dark:bg-gray-900"
-          >
-            {pending.kind === "confirm" && pending.options.title && (
-              <h2 className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">{pending.options.title}</h2>
-            )}
-            <p className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">
-              {pending.kind === "confirm" ? pending.options.message : pending.message}
-            </p>
-            {pending.kind === "confirm" && pending.options.detail && pending.options.detail.length > 0 && (
-              <div className="mt-2 max-h-48 overflow-auto rounded-md border border-gray-200 bg-gray-50 p-2 font-mono text-xs text-gray-600 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
-                {pending.options.detail.map((line, i) => (
-                  <div key={i} className="whitespace-pre-wrap">
-                    {line}
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="mt-4 flex justify-end gap-2">
-              {pending.kind === "confirm" && (
-                <button onClick={() => close(false)} className={cancelButtonCls}>
-                  {pending.options.cancelLabel ?? "取消"}
-                </button>
-              )}
-              <button
-                ref={confirmBtnRef}
-                onClick={() => close(true)}
-                className={`${dialogButtonCls} text-white ${
-                  pending.kind === "confirm" && pending.options.danger
-                    ? "bg-red-600 hover:bg-red-700"
-                    : "bg-blue-600 hover:bg-blue-700"
-                }`}
-              >
-                {pending.kind === "confirm" ? (pending.options.confirmLabel ?? "确定") : "确定"}
-              </button>
+          {pending.kind === "confirm" && pending.options.title && (
+            <h2 className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">{pending.options.title}</h2>
+          )}
+          <p className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">
+            {pending.kind === "confirm" ? pending.options.message : pending.message}
+          </p>
+          {pending.kind === "confirm" && pending.options.detail && pending.options.detail.length > 0 && (
+            <div className="mt-2 max-h-48 overflow-auto rounded-md border border-gray-200 bg-gray-50 p-2 font-mono text-xs text-gray-600 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+              {pending.options.detail.map((line, i) => (
+                <div key={i} className="whitespace-pre-wrap">
+                  {line}
+                </div>
+              ))}
             </div>
+          )}
+          <div className="mt-4 flex justify-end gap-2">
+            {pending.kind === "confirm" && (
+              <button onClick={() => close(false)} className={cancelButtonCls}>
+                {pending.options.cancelLabel ?? "取消"}
+              </button>
+            )}
+            <button
+              autoFocus
+              onClick={() => close(true)}
+              className={`${dialogButtonCls} text-white ${
+                pending.kind === "confirm" && pending.options.danger
+                  ? "bg-red-600 hover:bg-red-700"
+                  : "bg-blue-600 hover:bg-blue-700"
+              }`}
+            >
+              {pending.kind === "confirm" ? (pending.options.confirmLabel ?? "确定") : "确定"}
+            </button>
           </div>
-        </div>
+        </Dialog>
       )}
     </ConfirmDialogContext.Provider>
   );

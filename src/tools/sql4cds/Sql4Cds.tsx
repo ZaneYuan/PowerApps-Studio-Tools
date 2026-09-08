@@ -793,7 +793,7 @@ export default function Sql4Cds() {
             </button>
             {running && <CancelQueryButton onCancel={() => queryAbortRef.current?.abort()} />}
             <RowLimitInput value={rowLimit} onChange={setRowLimit} disabled={running} />
-            {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+            {!activeConnectionId && <span className="text-xs text-gray-400">请在上方“当前标签连接”中选择连接。</span>}
           </div>
 
           <QueryProgressNote running={running} loaded={loadProgress} truncated={truncated} stoppedForSize={stoppedForSize} loadedRows={rows?.length} rowLimit={rowLimit} />
@@ -866,7 +866,7 @@ export default function Sql4Cds() {
               </button>
             )}
             <ConcurrencyInput value={writeConcurrency} onChange={setWriteConcurrency} disabled={writeRunning} />
-            {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+            {!activeConnectionId && <span className="text-xs text-gray-400">请在上方“当前标签连接”中选择连接。</span>}
           </div>
 
           {writeError && <ErrorMessage error={writeError} />}
@@ -909,7 +909,7 @@ export default function Sql4Cds() {
               </button>
             )}
             <ConcurrencyInput value={writeConcurrency} onChange={setWriteConcurrency} disabled={writeRunning} />
-            {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+            {!activeConnectionId && <span className="text-xs text-gray-400">请在上方“当前标签连接”中选择连接。</span>}
           </div>
 
           {writeError && <ErrorMessage error={writeError} />}
@@ -971,7 +971,7 @@ export default function Sql4Cds() {
                 </button>
               )}
               <ConcurrencyInput value={writeConcurrency} onChange={setWriteConcurrency} disabled={writeRunning} />
-              {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+              {!activeConnectionId && <span className="text-xs text-gray-400">请在上方“当前标签连接”中选择连接。</span>}
             </div>
 
             {writeError && <ErrorMessage error={writeError} />}

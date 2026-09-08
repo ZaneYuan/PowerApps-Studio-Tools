@@ -346,7 +346,7 @@ export default function RecordMerge() {
         <button onClick={handleScan} disabled={!canScan} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
           {scanning ? "查询中…" : "查询引用"}
         </button>
-        {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个我的连接。</span>}
+        {!activeConnectionId && <span className="text-xs text-gray-400">请在上方“当前标签连接”中选择连接。</span>}
       </div>
 
       {scanError && <ErrorMessage error={scanError} />}

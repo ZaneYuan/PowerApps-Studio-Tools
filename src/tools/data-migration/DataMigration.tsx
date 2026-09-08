@@ -686,7 +686,7 @@ export default function DataMigration() {
               if (f) void handleSqlFileChange(f);
             }}
           />
-          {!activeConnectionId && <span className="text-xs text-gray-400">请先在侧边栏选择一个本页连接。</span>}
+          {!activeConnectionId && <span className="text-xs text-gray-400">请在上方“当前标签连接”中选择连接。</span>}
         </div>
         <QueryProgressNote running={queryRunning} loaded={loadProgress} truncated={queryTruncated} stoppedForSize={queryStoppedForSize} loadedRows={queryRowCount} rowLimit={rowLimit} />
         {queryError && <ErrorMessage error={queryError} />}

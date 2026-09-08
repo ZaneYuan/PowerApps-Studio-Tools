@@ -362,7 +362,7 @@ export default function MetadataBrowser() {
   if (!activeConnectionId) {
     return (
       <div className="max-w-xl rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-        请先在左侧侧边栏顶部选择一个"我的连接"（没有连接的话先去"我的连接"里添加）。
+        请在上方“当前标签连接”中选择连接；如果还没有连接，请先到“我的连接”中添加。
       </div>
     );
   }

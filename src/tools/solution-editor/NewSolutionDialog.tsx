@@ -3,6 +3,7 @@ import { createSolution, fetchPublishers, suggestSchemaName } from "./dataverseO
 import NewPublisherDialog from "./NewPublisherDialog";
 import type { Publisher } from "./types";
 import ErrorMessage from "../../shared/ErrorMessage";
+import Dialog from "../../shared/Dialog";
 
 const inputCls =
   "w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -69,8 +70,8 @@ export default function NewSolutionDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
+    <>
+      <Dialog ariaLabel="新建 Solution" onClose={onClose} panelClassName="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
         <h3 className="mb-4 text-sm font-semibold text-gray-900 dark:text-gray-100">新建 Solution</h3>
 
         <div className="space-y-3">
@@ -137,7 +138,7 @@ export default function NewSolutionDialog({
             {submitting ? "创建中…" : "创建"}
           </button>
         </div>
-      </div>
+      </Dialog>
 
       {showNewPublisher && (
         <NewPublisherDialog
@@ -149,6 +150,6 @@ export default function NewSolutionDialog({
           }}
         />
       )}
-    </div>
+    </>
   );
 }

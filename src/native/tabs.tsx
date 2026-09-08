@@ -22,6 +22,7 @@ interface TabManagerContextValue {
   /** Switches to an already-open tab by its key (what clicking a tab in the bar itself does). */
   activateTab: (tabKey: string) => void;
   closeTab: (tabKey: string) => void;
+  closeTabs: (tabKeys: string[]) => void;
   activateHome: () => void;
   /** Rebinds an open tab to a different connection without closing/reopening it — used when the
    *  sidebar's connection switcher changes value while that tab is focused. The tool inside
@@ -42,13 +43,13 @@ interface TabManagerContextValue {
 const TabManagerContext = createContext<TabManagerContextValue | null>(null);
 
 const RECENT_TOOLS_STORAGE_KEY = "msdpptools.recentToolIds";
-const RECENT_TOOL_LIMIT = 5;
+const RECENT_TOOL_LIMIT = 3;
 
 function loadRecentToolIds(): string[] {
   try {
     const raw = localStorage.getItem(RECENT_TOOLS_STORAGE_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string").slice(0, RECENT_TOOL_LIMIT) : [];
   } catch {
     return [];
   }
@@ -99,23 +100,29 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
     setActiveTabKey(tabKey);
   }
 
-  function closeTab(tabKey: string) {
+  function closeTabs(tabKeys: string[]) {
+    const closingKeys = new Set(tabKeys);
+    if (closingKeys.size === 0) return;
     setOpenTabs((tabs) => {
-      const idx = tabs.findIndex((t) => t.tabKey === tabKey);
-      const next = tabs.filter((t) => t.tabKey !== tabKey);
-      if (activeTabKey === tabKey) {
-        setActiveTabKey(next.length === 0 ? null : next[Math.max(0, idx - 1)].tabKey);
+      const activeIndex = tabs.findIndex((t) => t.tabKey === activeTabKey);
+      const next = tabs.filter((t) => !closingKeys.has(t.tabKey));
+      if (activeTabKey !== null && closingKeys.has(activeTabKey)) {
+        const preceding = tabs.slice(0, Math.max(0, activeIndex)).reverse().find((t) => !closingKeys.has(t.tabKey));
+        const following = tabs.slice(activeIndex + 1).find((t) => !closingKeys.has(t.tabKey));
+        setActiveTabKey(preceding?.tabKey ?? following?.tabKey ?? null);
       }
       return next;
     });
-    // The closed tab's tool unmounts along with it — nothing left to ever report this tabKey
-    // clean again, so drop it here rather than leaving a stale entry in dirtyTabKeys forever.
     setDirtyTabKeys((prev) => {
-      if (!prev.has(tabKey)) return prev;
+      if (![...closingKeys].some((key) => prev.has(key))) return prev;
       const next = new Set(prev);
-      next.delete(tabKey);
+      closingKeys.forEach((key) => next.delete(key));
       return next;
     });
+  }
+
+  function closeTab(tabKey: string) {
+    closeTabs([tabKey]);
   }
 
   function setTabDirty(tabKey: string, dirty: boolean) {
@@ -138,7 +145,7 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
 
   return (
     <TabManagerContext.Provider
-      value={{ openTabs, activeTabKey, openTab, activateTab, closeTab, activateHome, setTabConnection, dirtyTabKeys, setTabDirty, recentToolIds }}
+      value={{ openTabs, activeTabKey, openTab, activateTab, closeTab, closeTabs, activateHome, setTabConnection, dirtyTabKeys, setTabDirty, recentToolIds }}
     >
       {children}
     </TabManagerContext.Provider>

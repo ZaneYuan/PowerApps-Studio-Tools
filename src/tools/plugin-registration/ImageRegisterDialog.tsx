@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import AttributePicker from "../../shared/AttributePicker";
 import ErrorMessage from "../../shared/ErrorMessage";
+import Dialog from "../../shared/Dialog";
 import { fetchEntityAttributes, fetchImageDetail, fetchStepDetail, registerImage, updateImage } from "./dataverseOps";
 import { IMAGE_TYPE_LABELS } from "./types";
 
@@ -136,8 +137,7 @@ export default function ImageRegisterDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
+    <Dialog ariaLabel={isEdit ? "编辑 Image" : "注册 Image"} onClose={onClose} panelClassName="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
         <h3 className="mb-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
           {isEdit ? "编辑 Image" : "注册 Image"}
         </h3>
@@ -202,7 +202,6 @@ export default function ImageRegisterDialog({
             {submitting ? "保存中…" : isEdit ? "保存" : "注册 Image"}
           </button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
