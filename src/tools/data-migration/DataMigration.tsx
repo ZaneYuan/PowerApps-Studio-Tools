@@ -156,14 +156,13 @@ export default function DataMigration() {
   function updateTable(tabId: string, next: ImportTable) {
     setTables((ts) => ts.map((t) => (t.tabId === tabId ? next : t)));
   }
-  /** Replaces the previous batch from the same source (query vs. SQL-import) instead of piling
-   *  on top of it — re-running "执行查询" with the same entity still in the SQL box used to leave
-   *  the stale tab from the last run sitting next to the fresh one. The two sources still coexist
-   *  (per the tool's own help text), so a SQL-import run never touches query tabs and vice versa. */
+  /** Every "执行查询" / "以 SQL 导入" run starts a fresh batch — it replaces *all* the previous
+   *  tabs, not just the ones from the same source. (Query results and SQL-import tabs used to
+   *  coexist, so re-querying after an import left the import's rows still counted in — a user ran
+   *  a 4000-row query, imported an 8000-row .sql, and got a 12000-row total; Bugs/9.7.md #1.) */
   function addTables(newTables: ImportTable[]) {
     if (newTables.length === 0) return;
-    const source = newTables[0].source;
-    setTables((ts) => [...ts.filter((t) => t.source !== source), ...newTables]);
+    setTables(newTables);
     setActiveTabId(newTables[0].tabId);
   }
 
@@ -636,8 +635,8 @@ export default function DataMigration() {
         默认模式：写一条或多条 `;` 分隔的 SELECT（可以查不同的表），对本页连接执行，每条查询结果各开一个 Tab，行默认不勾选、列默认全选。也可以点"以
         SQL 导入"上传一个 `.sql` 文件——文件里的 INSERT 语句按表分组同样落进 Tab（行、列都默认全选），非 INSERT
         语句会被忽略并提示。表格里文本、选项集（Picklist）、查找（Lookup/Customer/Owner，显示的是名称而非
-        GUID）字段可直接编辑，被改过的字段会标一个 ❗，列宽可拖拽。两种来源的 Tab
-        共存，配置好勾选后选一个目标连接点导入——自动识别这批数据里"一张表引用了另一张表还没创建的记录"这种依赖，先创建所有行（引用的字段先留空），再统一回填，不需要手动排好表的导入顺序。
+        GUID）字段可直接编辑，被改过的字段会标一个 ❗，列宽可拖拽。每次"执行查询"或"以 SQL 导入"都是一批新数据，会替换掉之前所有的 Tab。
+        配置好勾选后选一个目标连接点导入——自动识别这批数据里"一张表引用了另一张表还没创建的记录"这种依赖，先创建所有行（引用的字段先留空），再统一回填，不需要手动排好表的导入顺序。
         查询结果会自动分页拉取到「结果上限」行（默认 1 万、可调，设 0 = 不限）；较慢时可点「取消查询」中止。
       </div>
 

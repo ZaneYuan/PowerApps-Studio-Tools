@@ -89,8 +89,17 @@ public static class GitHubReleaseUpdateChecker
             if (string.IsNullOrEmpty(downloadUrl))
                 return false; // release exists but has no zip asset attached (yet)
 
+            // version.txt is `git describe` output (publish-desktop.ps1) — purely for display. It
+            // can read identical for two different builds when the release tag was moved onto a
+            // later commit after this exe was built (the ancestry check above already confirmed
+            // there really is newer code). Show the short commit SHAs so "新版本 X（当前 X）" isn't
+            // a mystery — the SHAs are what actually differ.
+            var versionLine = string.Equals(latestTag, currentVersion, StringComparison.Ordinal)
+                ? $"检测到新版本 {latestTag}（提交 {Short(releaseCommit)}），当前 {currentVersion}（提交 {Short(localCommit)}）。\n版本号相同是因为发布标签被移动过，但代码确实有更新。"
+                : $"检测到新版本 {latestTag}（提交 {Short(releaseCommit)}），当前 {currentVersion}（提交 {Short(localCommit)}）。";
+
             var choice = MessageBox.Show(
-                $"检测到新版本 {latestTag}（当前 {currentVersion}）。\n\n下载更新会关闭并重启应用，当前未保存的内容会丢失。是否现在更新？",
+                $"{versionLine}\n\n下载更新会关闭并重启应用，当前未保存的内容会丢失。是否现在更新？",
                 "Power Apps Studio & Tools",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Information);
@@ -104,6 +113,9 @@ public static class GitHubReleaseUpdateChecker
             return false; // update checking is best-effort — never block a normal launch
         }
     }
+
+    /// <summary>First 7 chars of a commit SHA, or the whole thing if somehow shorter.</summary>
+    private static string Short(string sha) => sha.Length >= 7 ? sha[..7] : sha;
 
     /// <summary>Resolves a tag name to the commit SHA it points at. A lightweight tag's ref
     /// object IS the commit (one hop); an annotated tag's ref object is a tag object that itself
