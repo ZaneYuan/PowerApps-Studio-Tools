@@ -46,14 +46,6 @@ interface ConnectionStatus {
   error?: string;
 }
 
-interface PasswordLoginState {
-  open: boolean;
-  username: string;
-  password: string;
-}
-
-const emptyPasswordLogin: PasswordLoginState = { open: false, username: "", password: "" };
-
 function authTypeToInput(authType: ConnectionDto["authType"]): AuthTypeInput {
   if (authType === "ClientSecret") return "clientSecret";
   if (authType === "Certificate") return "certificate";
@@ -188,7 +180,6 @@ export default function ConnectionsPage() {
   const [status, setStatus] = useState<Record<string, ConnectionStatus>>({});
   const [connectionString, setConnectionString] = useState("");
   const [connectionStringWarnings, setConnectionStringWarnings] = useState<string[]>([]);
-  const [passwordLogin, setPasswordLogin] = useState<Record<string, PasswordLoginState>>({});
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<FormState>(emptyForm);
@@ -250,8 +241,19 @@ export default function ConnectionsPage() {
     if (filePath) setEditForm((f) => ({ ...f, certificateFilePath: filePath }));
   }
 
-  async function handleRemove(id: string) {
-    await callNative("connections.remove", { id });
+  async function handleRemove(c: ConnectionDto) {
+    // Interactive logins leave an account in the shared MSAL cache (keyed by client id + authority,
+    // not by connection) — clear it on delete too, otherwise re-adding a connection to the same
+    // tenant would silently reuse the old sign-in. Best-effort: a signout failure shouldn't block
+    // the delete.
+    if (c.authType === "Interactive") {
+      try {
+        await callNative("auth.signOut", { connectionId: c.id });
+      } catch {
+        /* ignore — proceed with the delete */
+      }
+    }
+    await callNative("connections.remove", { id: c.id });
     await refreshConnections();
   }
 
@@ -297,15 +299,15 @@ export default function ConnectionsPage() {
     }
   }
 
-  async function handleWhoAmI(id: string, credentials?: { username: string; password: string }) {
+  async function handleWhoAmI(id: string) {
     setStatus((s) => ({ ...s, [id]: { loading: true } }));
     try {
-      // Interactive login needs a human to type credentials / approve MFA in the popup, which
+      // Interactive login needs a human to sign in / approve MFA in the browser popup, which
       // routinely takes longer than the default 30s — that default is sized for ordinary API
       // calls. Without this override, the bridge call times out client-side while the WPF side
       // is still legitimately waiting on the browser window, and the UI reports a misleading
       // "timed out" instead of whatever the real outcome ends up being.
-      await callNative("auth.login", { connectionId: id, ...credentials }, { timeoutMs: 5 * 60_000 });
+      await callNative("auth.login", { connectionId: id }, { timeoutMs: 5 * 60_000 });
       const result = await callNative<Record<string, unknown>>("dataverse.request", {
         connectionId: id,
         method: "GET",
@@ -316,26 +318,6 @@ export default function ConnectionsPage() {
     } catch (err) {
       setStatus((s) => ({ ...s, [id]: { error: err instanceof Error ? err.message : String(err) } }));
     }
-  }
-
-  async function handleSignOut(id: string) {
-    try {
-      await callNative("auth.signOut", { connectionId: id });
-      setStatus((s) => ({ ...s, [id]: { message: "已注销，下次测试连接会重新登录" } }));
-    } catch (err) {
-      setStatus((s) => ({ ...s, [id]: { error: err instanceof Error ? err.message : String(err) } }));
-    }
-  }
-
-  function togglePasswordLogin(id: string) {
-    setPasswordLogin((p) => {
-      const current = p[id] ?? emptyPasswordLogin;
-      return { ...p, [id]: { ...current, open: !current.open } };
-    });
-  }
-
-  function updatePasswordLogin(id: string, patch: Partial<PasswordLoginState>) {
-    setPasswordLogin((p) => ({ ...p, [id]: { ...(p[id] ?? emptyPasswordLogin), ...patch } }));
   }
 
   if (!available) {
@@ -381,23 +363,6 @@ export default function ConnectionsPage() {
                     >
                       {status[c.id]?.loading ? "测试中…" : "测试连接"}
                     </button>
-                    {c.authType === "Interactive" && (
-                      <>
-                        <button
-                          onClick={() => togglePasswordLogin(c.id)}
-                          className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-                        >
-                          用密码登录
-                        </button>
-                        <button
-                          onClick={() => handleSignOut(c.id)}
-                          title="清除已缓存的登录账号，下次测试连接会重新弹浏览器登录"
-                          className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-                        >
-                          注销
-                        </button>
-                      </>
-                    )}
                     <button
                       onClick={() => (editingId === c.id ? setEditingId(null) : handleStartEdit(c))}
                       className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
@@ -405,8 +370,9 @@ export default function ConnectionsPage() {
                       {editingId === c.id ? "取消编辑" : "编辑"}
                     </button>
                     <button
-                      onClick={() => handleRemove(c.id)}
-                      className="text-xs text-gray-400 hover:text-red-500"
+                      onClick={() => handleRemove(c)}
+                      title={c.authType === "Interactive" ? "删除连接，并清除已缓存的登录账号" : "删除连接"}
+                      className="rounded-md border border-red-300 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20"
                     >
                       删除
                     </button>
@@ -442,40 +408,6 @@ export default function ConnectionsPage() {
                       </button>
                     </div>
                   </form>
-                )}
-
-                {c.authType === "Interactive" && passwordLogin[c.id]?.open && (
-                  <div className="mt-2 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2 dark:border-gray-800 dark:bg-gray-950">
-                    <p className="text-xs text-amber-600 dark:text-amber-400">
-                      不弹浏览器直接登录，仅适用于未启用 MFA 的账号。密码不会保存。
-                    </p>
-                    <input
-                      type="text"
-                      placeholder="用户名 (user@tenant.onmicrosoft.com)"
-                      value={passwordLogin[c.id]?.username ?? ""}
-                      onChange={(e) => updatePasswordLogin(c.id, { username: e.target.value })}
-                      className={inputCls}
-                    />
-                    <input
-                      type="password"
-                      placeholder="密码"
-                      value={passwordLogin[c.id]?.password ?? ""}
-                      onChange={(e) => updatePasswordLogin(c.id, { password: e.target.value })}
-                      className={inputCls}
-                    />
-                    <button
-                      onClick={() => {
-                        const cred = passwordLogin[c.id];
-                        if (cred?.username && cred.password) {
-                          void handleWhoAmI(c.id, { username: cred.username, password: cred.password });
-                        }
-                      }}
-                      disabled={status[c.id]?.loading || !passwordLogin[c.id]?.username || !passwordLogin[c.id]?.password}
-                      className="rounded-md bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      {status[c.id]?.loading ? "测试中…" : "用密码测试连接"}
-                    </button>
-                  </div>
                 )}
 
                 {status[c.id]?.error && <ErrorMessage error={status[c.id].error} className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400" />}

@@ -60,53 +60,20 @@ public sealed class AuthService
         return token;
     }
 
-    /// <summary>Direct username/password sign-in (no browser popup) — mirrors the classic XRM
-    /// "Microsoft Login Control" username/password fields. Only works for accounts *without*
-    /// MFA/Conditional Access; those throw MsalUiRequiredException from MSAL, which is
-    /// translated into a message pointing back at the normal interactive login. Credentials are
-    /// used for this one token acquisition only and never persisted anywhere.</summary>
-    public async Task<TokenResult> LoginWithUsernamePasswordAsync(string connectionId, string username, string password)
-    {
-        var connection = _store.FindById(connectionId)
-            ?? throw new InvalidOperationException("找不到该连接，可能已被删除。");
-        if (connection.AuthType != ConnectionAuthType.Interactive)
-        {
-            throw new InvalidOperationException("只有交互式登录类型的连接支持用户名密码直接登录。");
-        }
-
-        var (clientId, authority) = await ResolveInteractiveClientAndAuthorityAsync(connection);
-        var app = await GetPublicClientAppAsync(clientId, authority);
-        var scopes = new[] { $"{connection.EnvironmentUrl.TrimEnd('/')}/.default" };
-
-        AuthenticationResult result;
-        try
-        {
-            result = await app.AcquireTokenByUsernamePassword(scopes, username, password).ExecuteAsync();
-        }
-        catch (MsalUiRequiredException ex)
-        {
-            throw new InvalidOperationException(
-                "这个账号需要 MFA / 条件访问，用户名密码直接登录不支持——请改用\"测试连接\"（会弹出浏览器完成 MFA）。", ex);
-        }
-
-        var token = new TokenResult { AccessToken = result.AccessToken, ExpiresOn = result.ExpiresOn };
-        _tokenCache[connectionId] = token;
-        return token;
-    }
-
     /// <summary>Forgets the interactive sign-in for a connection: drops its in-memory token and
     /// removes the cached account(s) from the persisted MSAL cache, so the next "测试连接" shows the
-    /// browser prompt again. Use to switch accounts or recover from a stale session. Because the
-    /// on-disk cache is partitioned only by client id + authority (not per connection), this also
-    /// signs out every other interactive connection pointing at the same tenant — in practice
-    /// they all share the one account you signed in with. No-op if nothing is cached.</summary>
+    /// browser prompt again. Called when a connection is deleted (a leftover account in the shared
+    /// cache would otherwise be silently reused by a future connection to the same tenant). Because
+    /// the on-disk cache is partitioned only by client id + authority (not per connection), this
+    /// also affects every other interactive connection pointing at the same tenant — in practice
+    /// they all share the one account you signed in with. No-op for non-interactive connections
+    /// and when nothing is cached.</summary>
     public async Task SignOutAsync(string connectionId)
     {
-        var connection = _store.FindById(connectionId)
-            ?? throw new InvalidOperationException("找不到该连接，可能已被删除。");
-        if (connection.AuthType != ConnectionAuthType.Interactive)
+        var connection = _store.FindById(connectionId);
+        if (connection is null || connection.AuthType != ConnectionAuthType.Interactive)
         {
-            throw new InvalidOperationException("只有交互式登录类型的连接需要注销。");
+            return;
         }
 
         _tokenCache.Remove(connectionId);
