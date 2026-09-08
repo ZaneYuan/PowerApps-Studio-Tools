@@ -4,6 +4,7 @@ import { callNative, isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection, type ConnectionDto } from "../../native/activeConnection";
 import { parseConnectionString } from "./connectionString";
 import ErrorMessage from "../../shared/ErrorMessage";
+import { useConfirmDialog } from "../../shared/ConfirmDialog";
 
 type AuthTypeInput = "interactive" | "clientSecret" | "certificate";
 
@@ -175,6 +176,7 @@ function ConnectionFormFields({
 export default function ConnectionsPage() {
   const available = isNativeBridgeAvailable();
   const { connections, refreshConnections } = useActiveConnection();
+  const confirmDialog = useConfirmDialog();
   const [form, setForm] = useState<FormState>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [status, setStatus] = useState<Record<string, ConnectionStatus>>({});
@@ -242,6 +244,7 @@ export default function ConnectionsPage() {
   }
 
   async function handleRemove(c: ConnectionDto) {
+    if (!(await confirmDialog({ message: `确定删除连接“${c.name}”吗？`, danger: true, confirmLabel: "删除" }))) return;
     // Interactive logins leave an account in the shared MSAL cache (keyed by client id + authority,
     // not by connection) — clear it on delete too, otherwise re-adding a connection to the same
     // tenant would silently reuse the old sign-in. Best-effort: a signout failure shouldn't block
@@ -271,6 +274,12 @@ export default function ConnectionsPage() {
     });
     setEditError(null);
     setEditingId(c.id);
+  }
+
+  /** Clicking a connection card toggles its inline edit form (there's no separate 编辑 button). */
+  function handleToggleEdit(c: ConnectionDto) {
+    if (editingId === c.id) setEditingId(null);
+    else handleStartEdit(c);
   }
 
   async function handleSaveEdit(e: FormEvent, id: string) {
@@ -341,8 +350,21 @@ export default function ConnectionsPage() {
                 key={c.id}
                 className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900"
               >
-                <div className="flex items-center justify-between">
-                  <div>
+                <div
+                  onClick={() => handleToggleEdit(c)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleToggleEdit(c);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={editingId === c.id}
+                  title={editingId === c.id ? "收起" : "点击编辑"}
+                  className="-m-2 flex cursor-pointer items-center justify-between gap-2 rounded-md p-2 hover:bg-gray-50 dark:hover:bg-gray-800/40"
+                >
+                  <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="font-medium text-gray-900 dark:text-gray-100">{c.name}</span>
                       {!c.allowWrite && (
@@ -351,26 +373,26 @@ export default function ConnectionsPage() {
                         </span>
                       )}
                     </div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                    <div className="truncate text-xs text-gray-500 dark:text-gray-400">
                       {c.environmentUrl} · {AUTH_TYPE_LABELS[c.authType] ?? c.authType}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 items-center gap-2">
                     <button
-                      onClick={() => handleWhoAmI(c.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleWhoAmI(c.id);
+                      }}
                       disabled={status[c.id]?.loading}
                       className="rounded-md border border-blue-300 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
                     >
                       {status[c.id]?.loading ? "测试中…" : "测试连接"}
                     </button>
                     <button
-                      onClick={() => (editingId === c.id ? setEditingId(null) : handleStartEdit(c))}
-                      className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-                    >
-                      {editingId === c.id ? "取消编辑" : "编辑"}
-                    </button>
-                    <button
-                      onClick={() => handleRemove(c)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleRemove(c);
+                      }}
                       title={c.authType === "Interactive" ? "删除连接，并清除已缓存的登录账号" : "删除连接"}
                       className="rounded-md border border-red-300 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20"
                     >
