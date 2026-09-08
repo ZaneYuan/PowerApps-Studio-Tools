@@ -19,6 +19,7 @@ import { isRowDirty } from "../../shared/dirtyTracking";
 import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
+import SvgIcon from "../../shared/SvgIcon";
 
 const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
 
@@ -283,9 +284,7 @@ export default function DataCopy() {
     <div className="max-w-5xl space-y-4">
       <UnsavedChangesBadge dirty={isDirty} />
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        写一条单表 SELECT 查出要复制的数据（对本页连接执行），结果表格可以直接编辑——支持文本、选项集（Picklist）、查找（Lookup/Customer/Owner，点 🔍
-        搜索选择目标记录，表格里显示的是名称而非 GUID）三种类型的字段编辑，其余类型只读展示；被改过的字段会标一个 ❗；列标题右边缘可拖拽调整宽度。行、列默认全部勾选，改好之后点"创建"，会把勾选的行按当前（编辑后的）值创建成全新记录——主键
-        ID 列不会被带上，由 Dataverse 自动生成新的。只支持单表，不支持 JOIN / 聚合。查询结果自动分页拉到「结果上限」行（默认 1 万、可调，设 0 = 不限），较慢时可「取消查询」。
+        用一条单表 SELECT 查出数据，在表格里编辑后把勾选的行创建为全新记录（主键由 Dataverse 生成）。不支持 JOIN / 聚合。
       </div>
 
       <div className="space-y-2">
@@ -388,7 +387,7 @@ export default function DataCopy() {
             <div className="flex max-h-[40vh] flex-col overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
               <div className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
                 <span>
-                  {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+                  {writeStopped && <span className="mr-1 inline-flex items-center gap-1 font-medium text-amber-600 dark:text-amber-400"><SvgIcon name="warning" className="h-3.5 w-3.5" />已手动停止 —</span>}
                   共 {writeResults.length} 条，成功 {writeResults.filter((r) => r.state === "success").length}，失败{" "}
                   {writeResults.filter((r) => r.state === "error").length}
                 </span>

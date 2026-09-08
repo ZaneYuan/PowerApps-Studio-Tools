@@ -1,4 +1,5 @@
 import type { ComponentType, LazyExoticComponent } from "react";
+import type { SvgIconName } from "../shared/SvgIcon";
 
 export interface ToolMeta {
   /** Unique slug, used in the URL as /tools/:id */
@@ -9,8 +10,8 @@ export interface ToolMeta {
   description: string;
   /** Grouping label used in the sidebar (e.g. "Dataverse", "Power Automate") */
   category: string;
-  /** A single emoji used as the tool's icon */
-  icon: string;
+  /** Local SVG icon name used consistently in cards, navigation, tabs, and tool headers. */
+  icon: SvgIconName;
   /** Set false for tools that aren't bound to one Dataverse connection (e.g. the connections
    *  manager itself) — opens as a single un-suffixed tab and hides the per-tab connection
    *  selector, instead of the default per-connection tab identity. Defaults to true. */

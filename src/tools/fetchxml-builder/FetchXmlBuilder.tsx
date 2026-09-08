@@ -109,7 +109,7 @@ export default function FetchXmlBuilder() {
   return (
     <div className="max-w-5xl space-y-6">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        可视化拼 FetchXML（含嵌套过滤分组、嵌套 link-entity），生成后直接对当前连接真实执行。结果自动分页拉到「结果上限」行（默认 1 万、可调，设 0 = 不限），较慢时可「取消查询」。
+        可视化构建 FetchXML（支持嵌套过滤分组和 link-entity），生成后直接执行。
       </div>
 
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 p-3 dark:border-gray-800">

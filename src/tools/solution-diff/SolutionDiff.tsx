@@ -156,7 +156,7 @@ export default function SolutionDiff() {
   return (
     <div className="max-w-3xl space-y-6">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        上传两个通过"导出解决方案"得到的 solution.zip（未托管或托管均可）。所有解析都在浏览器本地完成，文件不会上传到任何服务器。
+        上传两个解决方案包（.zip）对比组件差异。解析在本地完成，文件不会上传。
       </div>
 
       <div className="flex flex-col gap-4 sm:flex-row">

@@ -3,6 +3,7 @@ import { fetchOptionSetValues, type OptionSetValue } from "../../native/metadata
 import { useEntityAttributes } from "../../native/useEntityAttributes";
 import LookupPickerModal from "../../shared/LookupPickerModal";
 import { MULTI_VALUE_OPERATORS, type ConditionOperator } from "./types";
+import SvgIcon from "../../shared/SvgIcon";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -92,7 +93,7 @@ export default function ConditionValueInput({
             disabled={!connectionId}
             className="shrink-0 rounded border border-gray-300 px-1.5 py-1 text-xs hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700"
           >
-            🔍
+            <SvgIcon name="search" className="h-3.5 w-3.5" />
           </button>
         </div>
         {modalOpen && connectionId && (

@@ -19,13 +19,13 @@ const AUTH_TYPE_MAP: Record<string, ParsedAuthType> = {
 // Known XRM Tooling connection-string fields this app intentionally doesn't carry over
 // (different auth model, e.g. thumbprint-based certs, or not applicable to this app).
 const IGNORED_FIELDS: Record<string, string> = {
-  thumbprint: "证书按指纹选择本项目不支持，本项目走 .pfx 文件选择，请在表单里手动选择证书文件",
-  username: "本项目的交互式登录走系统登录界面，不支持预填用户名",
-  "integrated security": "本项目不支持 Integrated Security，会走标准交互式登录",
-  loginprompt: "本项目不支持 LoginPrompt，登录提示行为由 MSAL 自动决定",
-  redirecturi: "本项目使用固定的 redirect URI，忽略此字段",
-  tokencachestorepath: "本项目使用自己的 token 缓存路径，忽略此字段",
-  requirenewinstance: "本项目不支持此字段，已忽略",
+  thumbprint: "不支持按指纹选证书，请在表单里手动选择 .pfx 文件",
+  username: "不支持预填用户名",
+  "integrated security": "不支持 Integrated Security",
+  loginprompt: "不支持 LoginPrompt",
+  redirecturi: "使用固定的 redirect URI",
+  tokencachestorepath: "使用内置的 token 缓存路径",
+  requirenewinstance: "不支持此字段",
 };
 
 /** Parses an XRM Tooling / Dataverse-style connection string (e.g.
@@ -76,7 +76,7 @@ export function parseConnectionString(raw: string): ParsedConnectionString {
         // Kept only as an optional override — the app normally auto-detects the tenant from the
         // environment URL at sign-in time, and there's no Tenant ID field on the form anymore.
         result.tenantId = value;
-        result.warnings.push(`Tenant ID 已作为可选覆盖记录（${value}）；一般无需，登录时会按环境 URL 自动识别`);
+        result.warnings.push(`Tenant ID 已记录为覆盖值（${value}），通常无需设置`);
         break;
       default: {
         const reason = IGNORED_FIELDS[key];

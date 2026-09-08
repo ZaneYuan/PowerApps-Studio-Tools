@@ -7,6 +7,7 @@ import NewColumnDialog from "./NewColumnDialog";
 import NewSolutionDialog from "./NewSolutionDialog";
 import NewTableDialog from "./NewTableDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
+import SvgIcon from "../../shared/SvgIcon";
 import {
   ATTRIBUTE_COMPONENT_TYPE,
   COMPONENT_TYPE_LABELS,
@@ -224,9 +225,7 @@ export default function SolutionEditor() {
     return (
       <div className="max-w-5xl space-y-4">
         <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-          查看/新建 solution，进入一个 unmanaged solution 后可以浏览组件、添加已有表、新建表、新建字段（单行/多行文本、整数、小数、货币、是否、日期时间、本地/全局选项集、多选选项集、长整数、查找）、新建/编辑
-          Publisher、发布。查找字段的级联行为固定为安全默认值（删除目标记录只清空查找，不级联删除）。不支持拖拽式画布——参考 UI 取的是
-          make.powerapps 的"列表 → 详情 → 组件树"结构，不是像素级复刻。Managed solution 只能查看，不能编辑。
+          查看或新建解决方案。进入一个非托管解决方案后可以浏览组件、添加已有表、新建表和字段、管理发布者并发布。托管解决方案只能查看。
         </div>
 
         <div className="flex items-center gap-2">
@@ -395,8 +394,9 @@ export default function SolutionEditor() {
                             <button onClick={() => toggleEntity(c.solutioncomponentid)}>
                               <span className="inline-block w-3 shrink-0 text-gray-400">{eOpen ? "▾" : "▸"}</span>
                             </button>
-                            <button className="flex-1 truncate text-left" onClick={() => selectEntity(c)} title={c.name ?? c.objectid}>
-                              🗄️ {c.name ?? c.objectid}
+                            <button className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-left" onClick={() => selectEntity(c)} title={c.name ?? c.objectid}>
+                              <SvgIcon name="table" className="h-3.5 w-3.5" />
+                              <span className="truncate">{c.name ?? c.objectid}</span>
                             </button>
                           </div>
                           {eOpen && (
@@ -417,7 +417,8 @@ export default function SolutionEditor() {
                                       title={f.name ?? f.objectid}
                                     >
                                       <span className="inline-block w-3 shrink-0" />
-                                      📄 {f.name ?? f.objectid}
+                                      <SvgIcon name="file" className="h-3.5 w-3.5" />
+                                      <span className="truncate">{f.name ?? f.objectid}</span>
                                     </button>
                                   </li>
                                 );
@@ -479,8 +480,9 @@ export default function SolutionEditor() {
 
           {selectedNode?.kind === "entity" && (
             <div>
-              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                🗄️ {selectedNode.component.name} <span className="font-mono text-xs text-gray-400">({selectedNode.component.logicalName})</span>
+              <h3 className="flex items-center gap-1.5 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                <SvgIcon name="table" className="h-4 w-4" />
+                {selectedNode.component.name} <span className="font-mono text-xs text-gray-400">({selectedNode.component.logicalName})</span>
               </h3>
               {entityBasicInfoError && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{entityBasicInfoError}</p>}
               {!entityBasicInfo && !entityBasicInfoError && <p className="mt-2 text-xs text-gray-400">加载中…</p>}

@@ -1,4 +1,5 @@
 import { DEFAULT_QUERY_ROW_LIMIT } from "../native/dataverseQuery";
+import SvgIcon from "./SvgIcon";
 
 /** Row-cap input shared by every query tool (SQL4CDS / Data Migration / Data Copy / Data Edit /
  *  FetchXML Builder). `0` means "no limit" — the query pages until Dataverse runs out, which the
@@ -65,15 +66,17 @@ export function QueryProgressNote({
   }
   if (!running && truncated && stoppedForSize) {
     return (
-      <p className="text-xs text-amber-600 dark:text-amber-400">
-        ⚠ 结果数据量过大，已停在 {(loadedRows ?? 0).toLocaleString()} 行——请只 SELECT 需要的列（避免 <code>SELECT *</code>），或缩小查询条件。
+      <p className="flex items-start gap-1 text-xs text-amber-600 dark:text-amber-400">
+        <SvgIcon name="warning" className="mt-0.5 h-3.5 w-3.5" />
+        <span>结果数据量过大，已停在 {(loadedRows ?? 0).toLocaleString()} 行——请只 SELECT 需要的列（避免 <code>SELECT *</code>），或缩小查询条件。</span>
       </p>
     );
   }
   if (!running && truncated) {
     return (
-      <p className="text-xs text-amber-600 dark:text-amber-400">
-        ⚠ 结果已达上限 {rowLimit.toLocaleString()} 行，可能还有更多——调高上方"结果上限"或缩小查询条件后重新执行。
+      <p className="flex items-start gap-1 text-xs text-amber-600 dark:text-amber-400">
+        <SvgIcon name="warning" className="mt-0.5 h-3.5 w-3.5" />
+        <span>结果已达上限 {rowLimit.toLocaleString()} 行，可能还有更多——调高上方"结果上限"或缩小查询条件后重新执行。</span>
       </p>
     );
   }

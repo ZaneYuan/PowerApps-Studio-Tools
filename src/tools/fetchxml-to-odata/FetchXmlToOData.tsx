@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { convertFetchXmlToOData, naivePluralize } from "./convert";
+import SvgIcon from "../../shared/SvgIcon";
 
 const SAMPLE = `<fetch top="50">
   <entity name="account">
@@ -68,8 +69,7 @@ export default function FetchXmlToOData() {
   return (
     <div className="max-w-3xl space-y-6">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        基于启发式规则转换，不读取实际字段元数据（字段类型、查找字段导航属性名等），请核对生成结果后再使用，尤其是标记为"尽力而为"的日期专属函数和
-        link-entity → $expand 部分。
+        基于规则转换，不读取字段元数据，请核对生成结果后再使用。
       </div>
 
       <div>
@@ -139,8 +139,9 @@ export default function FetchXmlToOData() {
       {result.warnings.length > 0 && (
         <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
           {result.warnings.map((w, i) => (
-            <div key={i} className="mb-1 last:mb-0">
-              ⚠ {w}
+            <div key={i} className="mb-1 flex items-start gap-1 last:mb-0">
+              <SvgIcon name="warning" className="mt-0.5 h-3.5 w-3.5" />
+              <span>{w}</span>
             </div>
           ))}
         </div>

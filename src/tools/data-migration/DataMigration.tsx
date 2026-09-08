@@ -18,6 +18,7 @@ import { isRowDirty } from "../../shared/dirtyTracking";
 import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
+import SvgIcon from "../../shared/SvgIcon";
 import { planDeferredWrite, phase1Body, phase2Body } from "./deferredWrite";
 import {
   buildDataMigrationLogText,
@@ -639,12 +640,8 @@ export default function DataMigration() {
     <div className="max-w-5xl space-y-4">
       <UnsavedChangesBadge dirty={isDirty} />
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        默认模式：写一条或多条 `;` 分隔的 SELECT（可以查不同的表），对本页连接执行，每条查询结果各开一个 Tab，行默认不勾选、列默认全选。也可以点"以
-        SQL 导入"上传一个 `.sql` 文件——文件里的 INSERT 语句按表分组同样落进 Tab（行、列都默认全选），非 INSERT
-        语句会被忽略并提示。表格里文本、选项集（Picklist）、查找（Lookup/Customer/Owner，显示的是名称而非
-        GUID）字段可直接编辑，被改过的字段会标一个 ❗，列宽可拖拽。每次"执行查询"或"以 SQL 导入"都是一批新数据，会替换掉之前所有的 Tab。
-        配置好勾选后选一个目标连接点导入——自动识别这批数据里"一张表引用了另一张表还没创建的记录"这种依赖，先创建所有行（引用的字段先留空），再统一回填，不需要手动排好表的导入顺序。
-        查询结果会自动分页拉取到「结果上限」行（默认 1 万、可调，设 0 = 不限）；较慢时可点「取消查询」中止。
+        用多条 SELECT 或上传一个 .sql 文件把要迁移的数据加载进来，每张表一个 Tab，编辑后选一个目标连接导入。
+        批次内若一张表引用了另一张表尚未创建的记录，会自动先建后回填，无需手动排序。
       </div>
 
       <div className="space-y-2">
@@ -716,7 +713,8 @@ export default function DataMigration() {
                     : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
                 }`}
               >
-                {t.source === "query" ? "🔍" : "📄"} {t.entityLogicalName}（{t.rows.filter((r) => r.checked).length}）
+                <SvgIcon name={t.source === "query" ? "search" : "file"} className="mr-1 inline-block h-3.5 w-3.5 align-text-bottom" />
+                {t.entityLogicalName}（{t.rows.filter((r) => r.checked).length}）
               </button>
             ))}
           </div>
@@ -838,7 +836,7 @@ export default function DataMigration() {
                 <div className="flex max-h-[40vh] flex-col overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
                   <div className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
                     <span>
-                      {writeStopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+                      {writeStopped && <span className="mr-1 inline-flex items-center gap-1 font-medium text-amber-600 dark:text-amber-400"><SvgIcon name="warning" className="h-3.5 w-3.5" />已手动停止 —</span>}
                       导入成功 {importSuccess} 行，失败 {importError} 行
                       {backfilled.length > 0 && `；依赖回填成功 ${backfillSuccess} 处，失败 ${backfillError} 处`}
                     </span>

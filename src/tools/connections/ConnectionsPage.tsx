@@ -88,16 +88,16 @@ function ConnectionFormFields({
       />
       <input
         type="text"
-        placeholder="环境 URL，例如 https://xxx.crm5.dynamics.com"
+        placeholder="环境 URL（https://xxx.crm.dynamics.com）"
         value={values.environmentUrl}
         onChange={(e) => onChange({ environmentUrl: e.target.value })}
         required
         className={inputCls}
       />
       <select value={values.authType} onChange={(e) => onChange({ authType: e.target.value as AuthTypeInput })} className={inputCls}>
-        <option value="interactive">交互式登录（用户本人登录，原生支持 MFA / 条件访问）</option>
-        <option value="clientSecret">Client Secret（应用身份）</option>
-        <option value="certificate">证书认证（应用身份，.pfx 文件）</option>
+        <option value="interactive">交互式登录</option>
+        <option value="clientSecret">Client Secret</option>
+        <option value="certificate">证书认证</option>
       </select>
 
       <label className="flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-300">
@@ -110,21 +110,18 @@ function ConnectionFormFields({
       </label>
       {!values.allowWrite && (
         <p className="text-xs text-amber-600 dark:text-amber-400">
-          关闭后，此连接对所有工具都只有查询权限——任何新建/修改/删除/发布等写操作都会被拒绝，直到重新打开此开关。
+          只读模式：所有新建 / 修改 / 删除 / 发布操作都会被拒绝。
         </p>
       )}
 
       {values.authType === "interactive" && (
         <>
           <p className="text-xs text-gray-400">
-            默认用微软通用的 Dynamics 客户端登录（和 XrmToolBox 一样），大多数租户直接就能用，只要填连接名称和环境 URL 就行，首次登录可能会弹一次授权确认。
-            只有当租户对应用启用了条件访问、或限制了用户同意时，才需要在目标租户里自己注册一个 App Registration（"Mobile and desktop applications"
-            平台、redirect URI <code>http://localhost</code>、允许 public client flow、已同意 Dynamics CRM API 委托权限），把它的 Client ID 填在下面。
-            租户会根据环境 URL 自动识别。
+            默认使用通用客户端，多数租户无需配置。仅当租户限制了应用访问或用户同意时，才需填入自建应用的 Client ID。
           </p>
           <input
             type="text"
-            placeholder="Client ID（可选，留空用通用客户端）"
+            placeholder="Client ID（可选）"
             value={values.clientId}
             onChange={(e) => onChange({ clientId: e.target.value })}
             className={inputCls}
@@ -314,7 +311,8 @@ export default function ConnectionsPage() {
         method: "GET",
         path: "WhoAmI",
       });
-      setStatus((s) => ({ ...s, [id]: { message: JSON.stringify(result, null, 2) } }));
+      const userId = typeof result.UserId === "string" ? result.UserId : undefined;
+      setStatus((s) => ({ ...s, [id]: { message: userId ? `连接成功（用户 ${userId}）` : "连接成功" } }));
     } catch (err) {
       setStatus((s) => ({ ...s, [id]: { error: err instanceof Error ? err.message : String(err) } }));
     }
@@ -334,7 +332,7 @@ export default function ConnectionsPage() {
   if (!available) {
     return (
       <div className="max-w-xl rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-        此功能仅在桌面版（WebView2 壳）中可用，当前在普通浏览器里打开，看不到已保存的连接。
+        此功能仅桌面版可用。
       </div>
     );
   }
@@ -344,7 +342,7 @@ export default function ConnectionsPage() {
       <div>
         <h2 className="mb-3 text-sm font-medium text-gray-700 dark:text-gray-300">已保存的连接</h2>
         {connections.length === 0 ? (
-          <p className="text-sm text-gray-400">还没有连接，在下面添加一个。</p>
+          <p className="text-sm text-gray-400">暂无连接，在下面添加一个。</p>
         ) : (
           <div className="space-y-3">
             {connections.map((c) => (
@@ -372,14 +370,14 @@ export default function ConnectionsPage() {
                       disabled={status[c.id]?.loading}
                       className="rounded-md border border-blue-300 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
                     >
-                      {status[c.id]?.loading ? "登录并调用中…" : "登录 + WhoAmI"}
+                      {status[c.id]?.loading ? "测试中…" : "测试连接"}
                     </button>
                     {c.authType === "Interactive" && (
                       <button
                         onClick={() => togglePasswordLogin(c.id)}
                         className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
                       >
-                        用户名密码登录
+                        用密码登录
                       </button>
                     )}
                     <button
@@ -431,7 +429,7 @@ export default function ConnectionsPage() {
                 {c.authType === "Interactive" && passwordLogin[c.id]?.open && (
                   <div className="mt-2 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2 dark:border-gray-800 dark:bg-gray-950">
                     <p className="text-xs text-amber-600 dark:text-amber-400">
-                      直接用用户名密码登录，不弹浏览器窗口——只对没有开启 MFA / 条件访问的账号有效，遇到 MFA 会报错提示改用上面的"登录 + WhoAmI"。密码只用于这一次登录，不会保存。
+                      不弹浏览器直接登录，仅适用于未启用 MFA 的账号。密码不会保存。
                     </p>
                     <input
                       type="text"
@@ -457,16 +455,16 @@ export default function ConnectionsPage() {
                       disabled={status[c.id]?.loading || !passwordLogin[c.id]?.username || !passwordLogin[c.id]?.password}
                       className="rounded-md bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                     >
-                      {status[c.id]?.loading ? "登录并调用中…" : "用密码登录 + WhoAmI"}
+                      {status[c.id]?.loading ? "测试中…" : "用密码测试连接"}
                     </button>
                   </div>
                 )}
 
                 {status[c.id]?.error && <ErrorMessage error={status[c.id].error} className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400" />}
                 {status[c.id]?.message && (
-                  <pre className="mt-2 overflow-x-auto rounded-md border border-gray-200 bg-gray-50 p-2 text-xs text-gray-900 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100">
+                  <p className="mt-2 rounded-md border border-green-200 bg-green-50 p-2 text-xs text-green-700 dark:border-green-900 dark:bg-green-900/20 dark:text-green-400">
                     {status[c.id].message}
-                  </pre>
+                  </p>
                 )}
               </div>
             ))}
@@ -477,7 +475,7 @@ export default function ConnectionsPage() {
       <div className="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-gray-800">
         <h2 className="text-sm font-medium text-gray-700 dark:text-gray-300">从连接字符串导入</h2>
         <p className="text-xs text-gray-400">
-          粘贴 XRM Tooling 格式的连接字符串（例如 <code>AuthType=OAuth;Url=...;ClientId=...</code>），解析后会预填下面的表单，不会自动提交——请检查无误后再点"添加"。租户会根据环境 URL 自动识别，连接字符串里的 Tenant ID 只作为可选覆盖。
+          粘贴 XRM Tooling 连接字符串，解析后预填下方表单，检查无误后再点"添加"。
         </p>
         <textarea
           value={connectionString}

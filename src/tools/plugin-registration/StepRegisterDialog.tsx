@@ -12,6 +12,7 @@ import {
   type SdkMessageFilter,
 } from "./dataverseOps";
 import { DEPLOYMENT_LABELS, MODE_LABELS, STAGE_LABELS } from "./types";
+import SvgIcon from "../../shared/SvgIcon";
 
 const inputCls =
   "w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -274,7 +275,7 @@ export default function StepRegisterDialog({
                     </ul>
                   )}
                   {selectedMessage && (
-                    <p className="mt-1 text-xs text-green-600 dark:text-green-400">✓ 已选择：{selectedMessage.name}</p>
+                    <p className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400"><SvgIcon name="check" className="h-3.5 w-3.5" />已选择：{selectedMessage.name}</p>
                   )}
                 </div>
 

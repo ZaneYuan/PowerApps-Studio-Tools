@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
 import ErrorMessage from "../../shared/ErrorMessage";
+import SvgIcon from "../../shared/SvgIcon";
 import {
   exportSolutionZip,
   fetchEffectiveRibbonCompressed,
@@ -259,15 +260,9 @@ export default function RibbonWorkbench() {
   return (
     <div className="max-w-5xl space-y-4">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        编辑表的 RibbonDiffXml（原始 XML，暂无可视化编辑器）。原理：导出你选的 solution → 改 RibbonDiffXml →
-        重新导入 → 发布。只能选 solution 里已有的表，只支持单表的 ribbon，不支持全局 Application Ribbon。
+        编辑单个表的 RibbonDiffXml（原始 XML）：导出解决方案 → 修改 → 重新导入 → 发布。也可以只填表名，只读查看当前生效的完整功能区树。
         <br />
-        v2：可以只填表名（不用先选 solution）"只读"地读取当前真实生效的完整 Ribbon 树（RetrieveEntityRibbon，系统默认
-        + 所有 solution 层叠加后的结果），点树里的按钮/Group 能直接把真实 Id 填进下面两个引导表单；也会列出这张表已有的
-        CustomAction/HideCustomAction。
-        <br />
-        ⚠️ 会实际修改所选 solution 的 unmanaged customizations，建议先在测试表/非生产环境上试。跟其他人同时编辑同一张表的
-        ribbon 有小概率互相覆盖（保存前会重新导出一次，但没法完全消除这个窗口）。
+        <span className="mt-1 flex items-start gap-1.5 font-medium"><SvgIcon name="warning" className="mt-0.5 h-3.5 w-3.5" /><span>会实际修改所选解决方案的非托管自定义项，建议先在非生产环境上试。</span></span>
       </div>
 
       <div className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-800">

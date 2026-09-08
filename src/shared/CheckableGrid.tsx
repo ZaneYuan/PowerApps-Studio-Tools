@@ -5,6 +5,7 @@ import LookupPickerModal from "./LookupPickerModal";
 import ColumnFilterPopover from "./ColumnFilterPopover";
 import { classifyColumnKind, compareForSort, matchesFilter, sortLabels, sortValueFor, type GridColumnFilter } from "./gridFilter";
 import { valuesEqual } from "./dirtyTracking";
+import SvgIcon from "./SvgIcon";
 
 // Matches this grid's actual rendered row height closely enough for @tanstack/react-virtual's
 // scroll-position math — every cell uses the same py-1.5 padding and whitespace-nowrap (no
@@ -235,7 +236,7 @@ const GridRowView = memo(function GridRowView({
                 className="pointer-events-none absolute right-0.5 top-0.5 text-[10px] leading-none text-amber-500 dark:text-amber-400"
                 title={`该字段已修改（原值：${row.originalValues?.[c.key] == null || row.originalValues[c.key] === "" ? "(空)" : String(row.originalValues[c.key])}）`}
               >
-                ❗
+                <SvgIcon name="edit" className="h-3 w-3" />
               </span>
             )}
             {!c.editable ? (
@@ -272,7 +273,7 @@ const GridRowView = memo(function GridRowView({
             ) : c.editKind === "lookup" ? (
               // Blur lives on the wrapping div (not the text input) and checks `relatedTarget` —
               // same "ignore a blur that's just focus moving to a sibling inside this same widget"
-              // technique as GridHeader's own `handleMenuBlur` — so clicking 🔍 doesn't itself
+              // technique as GridHeader's own `handleMenuBlur` — so clicking the search button doesn't itself
               // deactivate the cell out from under the click.
               <div onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && onDeactivateCell(row.id, c.key)} className="flex items-center gap-1">
                 <input
@@ -290,7 +291,7 @@ const GridRowView = memo(function GridRowView({
                   disabled={!connectionId || !entityLogicalName}
                   className="shrink-0 rounded border border-gray-300 px-1 py-0.5 text-xs hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700"
                 >
-                  🔍
+                  <SvgIcon name="search" className="h-3.5 w-3.5" />
                 </button>
               </div>
             ) : c.editKind === "multiselect" ? (
@@ -619,7 +620,7 @@ export default function CheckableGrid({
   onColumnsChange: (columns: GridColumn[]) => void;
   onRowsChange: (rows: GridRow[]) => void;
   /** Only needed when at least one column is `editable` — omit for a read-only grid. */
-  /** `label` is only ever passed for a "lookup" cell edited via the 🔍 search-and-pick modal
+  /** `label` is only ever passed for a "lookup" cell edited via the search-and-pick modal
    *  (LookupPickerModal's own `onPick` already resolves the picked record's display name for
    *  free) — the caller should store it as that row's new `formattedValues[columnKey]` so the
    *  cell shows the picked record's name immediately instead of falling back to its raw GUID

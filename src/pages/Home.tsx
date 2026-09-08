@@ -1,6 +1,7 @@
 import { tools, isBetaCategory } from "../tools/registry";
 import { useActiveConnection } from "../native/activeConnection";
 import { useTabManager } from "../native/tabs";
+import SvgIcon from "../shared/SvgIcon";
 
 export default function Home() {
   const { activeConnectionId } = useActiveConnection();
@@ -12,12 +13,12 @@ export default function Home() {
         Power Apps Studio & Tools
       </h1>
       <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-        为 Dataverse / Power Platform 日常开发整理的小工具集合。
+        Dataverse / Power Platform 开发工具集。
       </p>
 
       {tools.length === 0 ? (
         <div className="mt-10 rounded-lg border border-dashed border-gray-300 p-10 text-center text-sm text-gray-400 dark:border-gray-700">
-          还没有工具，去 src/tools 下新增一个吧。
+          暂无工具。
         </div>
       ) : (
         <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -27,8 +28,10 @@ export default function Home() {
               onClick={() => openTab(tool.id, tool.connectionScoped === false ? null : activeConnectionId)}
               className="rounded-lg border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-300 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-blue-700"
             >
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">{tool.icon}</span>
+              <div className="flex items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                  <SvgIcon name={tool.icon} className="h-5 w-5" />
+                </span>
                 <span className="font-medium text-gray-900 dark:text-gray-100">
                   {tool.name}
                 </span>

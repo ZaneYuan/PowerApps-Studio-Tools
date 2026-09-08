@@ -2,6 +2,7 @@ import { useState, type FocusEvent } from "react";
 import LookupPickerModal from "./LookupPickerModal";
 import { operatorsForKind, type ColumnKind, type FilterOperator, type GridColumnFilter } from "./gridFilter";
 import type { GridColumn } from "./CheckableGrid";
+import SvgIcon from "./SvgIcon";
 
 const inputCls =
   "block w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -126,7 +127,7 @@ export default function ColumnFilterPopover({
               type="text"
               value={label || value}
               readOnly
-              placeholder="点击 🔍 搜索记录"
+              placeholder="点击搜索按钮选择记录"
               className={`${inputCls} min-w-0 flex-1 cursor-default`}
             />
             <button
@@ -137,7 +138,7 @@ export default function ColumnFilterPopover({
               disabled={!connectionId || !entityLogicalName}
               className="shrink-0 rounded border border-gray-300 px-1.5 py-1 text-xs hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700"
             >
-              🔍
+              <SvgIcon name="search" className="h-3.5 w-3.5" />
             </button>
           </div>
           {lookupModalOpen && connectionId && entityLogicalName && (

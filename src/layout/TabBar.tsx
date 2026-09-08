@@ -2,6 +2,7 @@ import { useActiveConnection } from "../native/activeConnection";
 import { useTabManager } from "../native/tabs";
 import { getToolById } from "../tools/registry";
 import { useConfirmDialog } from "../shared/ConfirmDialog";
+import SvgIcon from "../shared/SvgIcon";
 
 const tabCls = (active: boolean) =>
   `flex shrink-0 items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm ${
@@ -18,7 +19,8 @@ export default function TabBar() {
   return (
     <div className="flex flex-wrap items-center border-b border-gray-200 bg-white px-2 dark:border-gray-800 dark:bg-gray-950">
       <button onClick={activateHome} className={tabCls(activeTabKey === null)}>
-        🧰 工具列表
+        <SvgIcon name="app-tools" className="h-4 w-4" />
+        工具列表
       </button>
       {openTabs.map((tab) => {
         const tool = getToolById(tab.toolId);
@@ -28,7 +30,7 @@ export default function TabBar() {
         return (
           <div key={tab.tabKey} className={tabCls(activeTabKey === tab.tabKey)}>
             <button onClick={() => activateTab(tab.tabKey)} className="flex items-center gap-1.5">
-              <span>{tool.icon}</span>
+              <SvgIcon name={tool.icon} className="h-4 w-4" />
               {isDirty && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" title="有未提交的改动" />}
               <span className="max-w-[14rem] truncate">
                 {tool.name}
@@ -53,7 +55,7 @@ export default function TabBar() {
               title="关闭"
               aria-label={`关闭 ${tool.name}${connectionName ? `（${connectionName}）` : ""}`}
             >
-              ✕
+              <SvgIcon name="close" className="h-3 w-3" />
             </button>
           </div>
         );

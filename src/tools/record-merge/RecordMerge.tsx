@@ -18,6 +18,7 @@ import {
 import CheckableGrid, { type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
+import SvgIcon from "../../shared/SvgIcon";
 
 const inputCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -59,7 +60,7 @@ function MigrationResultTable({ results, stopped, log }: { results: MigrationLog
     <div className="flex max-h-[60vh] flex-col overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
       <div className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
         <span>
-          {stopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+          {stopped && <span className="mr-1 inline-flex items-center gap-1 font-medium text-amber-600 dark:text-amber-400"><SvgIcon name="warning" className="h-3.5 w-3.5" />已手动停止 —</span>}
           共 {results.length} 条，成功 {success}，失败 {error}
         </span>
         {log && (
@@ -134,7 +135,7 @@ function RefTableRecordsPanel({ connectionId, scannedId, table }: { connectionId
     <div className="max-h-80 overflow-auto rounded-md border border-gray-200 dark:border-gray-800">
       {truncated && (
         <p className="border-b border-amber-200 bg-amber-50 px-3 py-1 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-400">
-          ⚠ 已截断，仅显示前 {rows.length} 条
+          <span className="inline-flex items-center gap-1"><SvgIcon name="warning" className="h-3.5 w-3.5" />已截断，仅显示前 {rows.length} 条</span>
         </p>
       )}
       <RefTableGrid columns={state.data.columns} rows={gridRows} />
@@ -323,8 +324,8 @@ export default function RecordMerge() {
   return (
     <div className="max-w-5xl space-y-4">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        输入实体 + GUID（或粘贴记录的 D365 表单 URL）定位一条记录，查询有多少条记录（1:N 查找字段 + N:N 关联，含系统表）引用了它；再输入另一条同表记录的
-        GUID，把所有这些引用批量迁移过去。旧记录本身不会被停用或删除，需要自行处理。Web API 没有批量更新接口，实际是逐条 PATCH/关联，引用数很多时会需要一些时间。
+        输入实体 + GUID（或粘贴记录的表单 URL）定位一条记录，查看有哪些记录引用了它，再把这些引用批量迁移到另一条同表记录。
+        旧记录不会被停用或删除。
       </div>
 
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
@@ -359,7 +360,7 @@ export default function RecordMerge() {
 
           {scanResult.failedRelationships.length > 0 && (
             <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-              <p className="mb-1">⚠ {scanResult.failedRelationships.length} 个关系的引用计数查询失败，被跳过——下面的结果可能不完整，不代表这些表一定没有引用：</p>
+              <p className="mb-1 flex items-start gap-1"><SvgIcon name="warning" className="mt-0.5 h-3.5 w-3.5" /><span>{scanResult.failedRelationships.length} 个关系的引用计数查询失败，被跳过——下面的结果可能不完整，不代表这些表一定没有引用：</span></p>
               <ul className="list-disc space-y-0.5 pl-4">
                 {scanResult.failedRelationships.map((f, i) => (
                   <li key={i}>
@@ -443,14 +444,14 @@ export default function RecordMerge() {
                     className={`${inputCls} w-full font-mono`}
                     disabled={writeRunning}
                   />
-                  {newIdInput.trim() && !newId && <div className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">⚠ 无法识别为一个 GUID</div>}
-                  {newId && isSameRecord && <div className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">⚠ 和当前记录是同一条，不能迁移到自身</div>}
+                  {newIdInput.trim() && !newId && <div className="mt-0.5 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><SvgIcon name="warning" className="h-3.5 w-3.5" />无法识别为一个 GUID</div>}
+                  {newId && isSameRecord && <div className="mt-0.5 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><SvgIcon name="warning" className="h-3.5 w-3.5" />和当前记录是同一条，不能迁移到自身</div>}
                   {newId && !isSameRecord && newIdCheck.loading && <div className="mt-0.5 text-xs text-gray-400">校验中…</div>}
                   {newId && !isSameRecord && !newIdCheck.loading && newIdCheck.exists === true && (
-                    <div className="mt-0.5 text-xs text-green-600 dark:text-green-400">✓ 记录存在：{newIdCheck.primaryName ?? newId}</div>
+                    <div className="mt-0.5 flex items-center gap-1 text-xs text-green-600 dark:text-green-400"><SvgIcon name="check" className="h-3.5 w-3.5" />记录存在：{newIdCheck.primaryName ?? newId}</div>
                   )}
                   {newId && !isSameRecord && !newIdCheck.loading && newIdCheck.exists === false && (
-                    <div className="mt-0.5 text-xs text-red-600 dark:text-red-400">✗ 在 {scanResult.entityLogicalName} 表中找不到这条记录</div>
+                    <div className="mt-0.5 flex items-center gap-1 text-xs text-red-600 dark:text-red-400"><SvgIcon name="error" className="h-3.5 w-3.5" />在 {scanResult.entityLogicalName} 表中找不到这条记录</div>
                   )}
                 </div>
                 <button

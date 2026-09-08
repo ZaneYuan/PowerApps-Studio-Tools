@@ -134,8 +134,7 @@ export default function BpfViewer() {
   return (
     <div className="max-w-6xl space-y-4">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        只读查看 Business Process Flow 的阶段 / 步骤 / 条件分支，暂不支持编辑——分支逻辑存的是 Microsoft
-        未公开的内部 JSON 格式，贸然写入风险很高，v1 先只做可视化。
+        只读查看业务流程（BPF）的阶段、步骤与条件分支。暂不支持编辑。
       </div>
 
       <div className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-200 p-3 dark:border-gray-800">

@@ -1,8 +1,9 @@
 import { useContext, useEffect } from "react";
 import { TabDirtyContext } from "../native/tabs";
+import SvgIcon from "./SvgIcon";
 
 /** Drop into any tool built on CheckableGrid's dirty-tracking (Data Migration/Data Copy/Data
- *  Edit) once, next to its own `rows.some(isRowDirty)` check — renders the "⚠ 有改动，待更新"
+ *  Edit) once, next to its own `rows.some(isRowDirty)` check — renders the "有改动，待更新"
  *  floating badge (bottom-right, same amber convention as this app's other in-progress/warning
  *  states) while `dirty`, and reports `dirty` up through TabDirtyContext so TabBar can mark this
  *  tab and confirm before discarding its edits on close. Outside a tab (no Provider — shouldn't
@@ -20,7 +21,8 @@ export default function UnsavedChangesBadge({ dirty }: { dirty: boolean }) {
   if (!dirty) return null;
   return (
     <div className="pointer-events-none fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-lg dark:border-amber-700 dark:bg-amber-900/95 dark:text-amber-300">
-      <span aria-hidden="true">⚠</span> 有改动，待更新
+      <SvgIcon name="warning" className="h-3.5 w-3.5" />
+      有改动，待更新
     </div>
   );
 }

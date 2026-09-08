@@ -9,6 +9,7 @@ import { downloadTextFile } from "../../native/download";
 import { mergeRowColumnKeys, unwrapODataRow } from "../../native/odata";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
+import SvgIcon from "../../shared/SvgIcon";
 import { fetchEntityMeta, fetchManyToManyInfo } from "../../native/metadataService";
 import { runConcurrent } from "./concurrency";
 import { orderStatementsByDependency, type DependencyOrderResult } from "./dependencyOrder";
@@ -129,7 +130,7 @@ function WriteResultTable({
     <div className="flex max-h-[70vh] flex-col overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
       <div className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
         <span>
-          {stopped && <span className="mr-1 font-medium text-amber-600 dark:text-amber-400">⚠ 已手动停止 —</span>}
+          {stopped && <span className="mr-1 inline-flex items-center gap-1 font-medium text-amber-600 dark:text-amber-400"><SvgIcon name="warning" className="h-3.5 w-3.5" />已手动停止 —</span>}
           共 {results.length} 条，成功 {success}，失败 {error}
         </span>
         {log && (
@@ -737,12 +738,8 @@ export default function Sql4Cds() {
     // max-width so a full-screen window doesn't stretch that paragraph edge to edge.
     <div className="max-w-none space-y-6">
       <div className="max-w-4xl rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        支持 SELECT（含 DISTINCT / JOIN / GROUP BY / 聚合函数，翻译成 FetchXML 执行）、INSERT、UPDATE、DELETE。UPDATE/DELETE
-        必须带 WHERE 子句（不支持整表操作，请自己写恒真条件）；DELETE 可以带 JOIN（先查出目标表的匹配主键、再逐条删除）。UPDATE/DELETE 会分页查出**全部**匹配记录（执行前弹窗显示总数二次确认），再逐条写入并自动下载执行日志。
-        SELECT 结果会自动分页拉取到「结果上限」行（默认 1 万、可调，设 0 = 不限）；查询较慢时可点「取消查询」中止。用 T-SQL
-        语法解析，翻译成 Dataverse Web API 查询后真实执行。支持用分号分隔粘贴多条 INSERT/UPDATE/DELETE 语句一次性批量执行（可以跨不同的表），
-        执行日志会合并成一份文件；批量里暂不支持 SELECT。写入按并发数（默认 {DEFAULT_WRITE_CONCURRENCY}，可调）同时发多个请求，比逐条执行快；单个请求遇到
-        Dataverse 限流（429）会自动退避重试。
+        用 T-SQL 语法查询和修改 Dataverse 数据：SELECT（支持 DISTINCT / JOIN / GROUP BY / 聚合）、INSERT / UPDATE / DELETE，可用分号分隔批量执行。
+        UPDATE / DELETE 必须带 WHERE，执行前会弹窗确认影响的记录数。
       </div>
 
       <div>
@@ -772,7 +769,7 @@ export default function Sql4Cds() {
       {(result.kind === "select-simple" || result.kind === "select-complex") && result.warnings.length > 0 && (
         <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
           {result.warnings.map((w, i) => (
-            <div key={i}>⚠ {w}</div>
+            <div key={i} className="flex items-start gap-1"><SvgIcon name="warning" className="mt-0.5 h-3.5 w-3.5" /><span>{w}</span></div>
           ))}
         </div>
       )}
@@ -943,7 +940,7 @@ export default function Sql4Cds() {
                           {os.originalIndex !== i && <span className="ml-1 text-amber-500">(原第 {os.originalIndex + 1} 条)</span>}
                         </td>
                         <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{describeStatement(os.statement)}</td>
-                        {os.rowCycleError && <td className="px-3 py-1.5 text-xs text-red-600 dark:text-red-400">⚠ {os.rowCycleError}</td>}
+                        {os.rowCycleError && <td className="px-3 py-1.5 text-xs text-red-600 dark:text-red-400"><span className="inline-flex items-center gap-1"><SvgIcon name="warning" className="h-3.5 w-3.5" />{os.rowCycleError}</span></td>}
                       </tr>
                     ))}
                   </tbody>

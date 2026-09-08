@@ -6,6 +6,7 @@ import { useConnectionHealth } from "../native/useConnectionHealth";
 import type { ToolDefinition } from "../tools/types";
 import { isBetaCategory } from "../tools/registry";
 import ToolErrorBoundary from "./ToolErrorBoundary";
+import SvgIcon from "../shared/SvgIcon";
 
 const selectCls =
   "rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
@@ -44,7 +45,9 @@ export default function ToolPanel({
         <div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <span className="text-2xl">{tool.icon}</span>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                <SvgIcon name={tool.icon} className="h-5 w-5" />
+              </span>
               <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{tool.name}</h1>
               {isBetaCategory(tool.category) && (
                 <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">

@@ -4,6 +4,7 @@ import { useActiveConnection } from "../native/activeConnection";
 import { useTabManager } from "../native/tabs";
 import type { ToolDefinition } from "../tools/types";
 import ConnectionSwitcher from "./ConnectionSwitcher";
+import SvgIcon from "../shared/SvgIcon";
 
 function ToolButton({ tool, active, onOpen }: { tool: ToolDefinition; active: boolean; onOpen: () => void }) {
   return (
@@ -15,7 +16,7 @@ function ToolButton({ tool, active, onOpen }: { tool: ToolDefinition; active: bo
           : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
       }`}
     >
-      <span>{tool.icon}</span>
+      <SvgIcon name={tool.icon} className="h-4 w-4" />
       <span>{tool.name}</span>
     </button>
   );
@@ -41,7 +42,9 @@ export default function Sidebar() {
   return (
     <nav className="flex h-full flex-col overflow-y-auto">
       <button onClick={activateHome} className="flex items-center gap-2 px-4 pb-1 pt-4 text-left">
-        <span className="text-xl">🧰</span>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
+          <SvgIcon name="app-tools" className="h-5 w-5" />
+        </span>
         <span className="text-base font-semibold text-gray-900 dark:text-gray-100">
           Power Apps Studio & Tools
         </span>

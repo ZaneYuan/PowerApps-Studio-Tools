@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import SvgIcon, { type SvgIconName } from "../../shared/SvgIcon";
 import {
   fetchAllPluginTypes,
   fetchAssemblies,
@@ -67,6 +68,13 @@ const rowSelected = "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 da
 
 function Caret({ open }: { open: boolean }) {
   return <span className="inline-block w-3 shrink-0 text-gray-400">{open ? "▾" : "▸"}</span>;
+}
+
+function nodeIcon(kind: TreeNodeKind): SvgIconName {
+  if (kind === "assembly") return "assembly";
+  if (kind === "type") return "plugin-type";
+  if (kind === "step") return "step";
+  return "image";
 }
 
 const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel(
@@ -458,7 +466,8 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                       }`}
                       title={row.label}
                     >
-                      {row.kind === "assembly" ? "📦" : row.kind === "type" ? "🧩" : "⚙️"} {row.label}
+                      <SvgIcon name={nodeIcon(row.kind)} className="h-3.5 w-3.5" />
+                      {row.label}
                     </button>
                   ))}
                   {(searchRows.length > MAX_SEARCH_ROWS || stepsCapped) && (
@@ -486,11 +495,12 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                     <Caret open={open} />
                   </button>
                   <button
-                    className="flex-1 truncate text-left"
+                    className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-left"
                     onClick={() => onSelect("assembly", asm.pluginassemblyid)}
                     title={asm.name}
                   >
-                    📦 {asm.name} <span className="text-xs text-gray-400">v{asm.version}</span>
+                    <SvgIcon name="assembly" className="h-3.5 w-3.5" />
+                    <span className="truncate">{asm.name}</span> <span className="text-xs text-gray-400">v{asm.version}</span>
                   </button>
                 </div>
                 {open && (
@@ -509,11 +519,12 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                               <Caret open={tOpen} />
                             </button>
                             <button
-                              className="flex-1 truncate text-left"
+                              className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-left"
                               onClick={() => onSelect("type", t.plugintypeid)}
                               title={t.typename}
                             >
-                              🧩 {pluginTypeLabel(t)}
+                              <SvgIcon name="plugin-type" className="h-3.5 w-3.5" />
+                              <span className="truncate">{pluginTypeLabel(t)}</span>
                             </button>
                             <button
                               onClick={() => onAddStep(t.plugintypeid, pluginTypeLabel(t))}
@@ -544,7 +555,7 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                                         <Caret open={sOpen} />
                                       </button>
                                       <button
-                                        className="min-w-0 flex-1 truncate text-left"
+                                        className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-left"
                                         onClick={() =>
                                           debouncedClick(sKey, () => onSelect("step", s.sdkmessageprocessingstepid))
                                         }
@@ -553,9 +564,12 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                                         }
                                         title={`${s.name}（双击编辑）`}
                                       >
-                                        ⚙️ {s.sdkmessageid?.name ?? "?"}
-                                        {entity ? `(${entity})` : ""} · {STAGE_LABELS[s.stage] ?? s.stage} ·{" "}
-                                        {MODE_LABELS[s.mode] ?? s.mode}
+                                        <SvgIcon name="step" className="h-3.5 w-3.5" />
+                                        <span className="truncate">
+                                          {s.sdkmessageid?.name ?? "?"}
+                                          {entity ? `(${entity})` : ""} · {STAGE_LABELS[s.stage] ?? s.stage} ·{" "}
+                                          {MODE_LABELS[s.mode] ?? s.mode}
+                                        </span>
                                         {s.statecode !== 0 && (
                                           <span className="ml-1 rounded bg-gray-100 px-1 text-[10px] text-gray-500 dark:bg-gray-800">
                                             {STEP_STATE_LABELS[s.statecode] ?? s.statecode}
@@ -600,7 +614,8 @@ const TreePanel = forwardRef<TreePanelHandle, TreePanelProps>(function TreePanel
                                                 title={`${img.name}（双击编辑）`}
                                               >
                                                 <span className="inline-block w-3 shrink-0" />
-                                                🖼️ {img.entityalias}{" "}
+                                                <SvgIcon name="image" className="h-3.5 w-3.5" />
+                                                {img.entityalias}{" "}
                                                 <span className="text-xs text-gray-400">
                                                   ({IMAGE_TYPE_LABELS[img.imagetype] ?? img.imagetype})
                                                 </span>
