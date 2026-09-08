@@ -117,16 +117,16 @@ function ConnectionFormFields({
       {values.authType === "interactive" && (
         <>
           <p className="text-xs text-gray-400">
-            交互式登录需要一个在目标环境所在租户里注册好的 App Registration（"Mobile and desktop applications"平台、redirect
-            URI <code>http://localhost</code>、允许 public client flow、并已同意 Dynamics CRM API 的委托权限）——先问问这个环境的管理员是不是已经有现成的可以直接用，没有的话去
-            Entra 后台自己注册一个。同一个 Client ID 只在它注册所在的那个租户里能用，所以这里没有默认值。租户会根据环境 URL 自动识别，不用手填。
+            默认用微软通用的 Dynamics 客户端登录（和 XrmToolBox 一样），大多数租户直接就能用，只要填连接名称和环境 URL 就行，首次登录可能会弹一次授权确认。
+            只有当租户对应用启用了条件访问、或限制了用户同意时，才需要在目标租户里自己注册一个 App Registration（"Mobile and desktop applications"
+            平台、redirect URI <code>http://localhost</code>、允许 public client flow、已同意 Dynamics CRM API 委托权限），把它的 Client ID 填在下面。
+            租户会根据环境 URL 自动识别。
           </p>
           <input
             type="text"
-            placeholder="Client ID（必填）"
+            placeholder="Client ID（可选，留空用通用客户端）"
             value={values.clientId}
             onChange={(e) => onChange({ clientId: e.target.value })}
-            required
             className={inputCls}
           />
         </>

@@ -94,23 +94,22 @@ public sealed class AuthService
         return token;
     }
 
-    // No fallback app registration — a public-client app registration is only usable (and
-    // consentable) in the tenant it was created in, so a single hardcoded default could only
-    // ever work for one specific tenant and silently fails (AADSTS700016) for every other
-    // account, with no indication *why* short of reading the raw AAD error. The tenant itself no
-    // longer has to be typed in: it's discovered from the environment URL (see TenantDiscovery),
-    // or taken from an explicitly saved Tenant ID when one is present (connection-string import).
+    // Microsoft's first-party, multi-tenant public-client app ("Microsoft Dynamics CRM") — the
+    // same fallback the official Dataverse ServiceClient and XrmToolBox use when no app
+    // registration is supplied. It has a service principal in every tenant and carries delegated
+    // Dataverse access, and http://localhost is one of its registered redirect URIs (verified
+    // against login.microsoftonline.com), so the loopback/system-browser flow below works
+    // unchanged. A tenant that enforces Conditional Access on apps, or blocks user consent, may
+    // still reject it — that's why Client ID stays an optional per-connection override.
+    private const string DefaultInteractiveClientId = "51f81489-12ee-4a9e-aaae-a2591f45987d";
+
     private async Task<(string ClientId, string Authority)> ResolveInteractiveClientAndAuthorityAsync(Connection connection)
     {
-        if (string.IsNullOrEmpty(connection.ClientId))
-        {
-            throw new InvalidOperationException(
-                "此连接缺少 Client ID。交互式登录需要一个在目标租户里注册好的 App Registration" +
-                "（\"Mobile and desktop applications\" 平台、redirect URI http://localhost、允许 public client flow、" +
-                "并已同意 Dynamics CRM API 的委托权限）——去 Entra 后台注册一个，或者问问这个环境的管理员是不是已经有现成的。");
-        }
+        var clientId = string.IsNullOrWhiteSpace(connection.ClientId)
+            ? DefaultInteractiveClientId
+            : connection.ClientId.Trim();
         var authority = await ResolveAuthorityAsync(connection).ConfigureAwait(false);
-        return (connection.ClientId, authority);
+        return (clientId, authority);
     }
 
     /// <summary>The MSAL authority for a connection: an explicitly saved Tenant ID wins (manual
