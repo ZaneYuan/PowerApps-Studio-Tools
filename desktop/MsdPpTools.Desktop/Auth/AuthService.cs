@@ -12,6 +12,7 @@ public sealed class AuthService
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MsdPpTools", "msal_cache");
 
     private readonly ConnectionStore _store;
+    private readonly TenantDiscovery _tenantDiscovery = new();
     private readonly Dictionary<string, TokenResult> _tokenCache = new();
     // Keyed by "{clientId}|{authority}" — different connections can point at different app
     // registrations/tenants now, so this can no longer be a single shared instance. All
@@ -73,7 +74,7 @@ public sealed class AuthService
             throw new InvalidOperationException("只有交互式登录类型的连接支持用户名密码直接登录。");
         }
 
-        var (clientId, authority) = ResolveInteractiveClientAndAuthority(connection);
+        var (clientId, authority) = await ResolveInteractiveClientAndAuthorityAsync(connection);
         var app = await GetPublicClientAppAsync(clientId, authority);
         var scopes = new[] { $"{connection.EnvironmentUrl.TrimEnd('/')}/.default" };
 
@@ -96,19 +97,35 @@ public sealed class AuthService
     // No fallback app registration — a public-client app registration is only usable (and
     // consentable) in the tenant it was created in, so a single hardcoded default could only
     // ever work for one specific tenant and silently fails (AADSTS700016) for every other
-    // account, with no indication *why* short of reading the raw AAD error. Requiring each
-    // connection to state its own tenant + app registration makes that explicit instead.
-    private static (string ClientId, string Authority) ResolveInteractiveClientAndAuthority(Connection connection)
+    // account, with no indication *why* short of reading the raw AAD error. The tenant itself no
+    // longer has to be typed in: it's discovered from the environment URL (see TenantDiscovery),
+    // or taken from an explicitly saved Tenant ID when one is present (connection-string import).
+    private async Task<(string ClientId, string Authority)> ResolveInteractiveClientAndAuthorityAsync(Connection connection)
     {
-        if (string.IsNullOrEmpty(connection.ClientId) || string.IsNullOrEmpty(connection.TenantId))
+        if (string.IsNullOrEmpty(connection.ClientId))
         {
             throw new InvalidOperationException(
-                "此连接缺少 Tenant ID / Client ID。交互式登录需要一个在目标租户里注册好的 App Registration" +
+                "此连接缺少 Client ID。交互式登录需要一个在目标租户里注册好的 App Registration" +
                 "（\"Mobile and desktop applications\" 平台、redirect URI http://localhost、允许 public client flow、" +
-                "并已同意 Dynamics CRM API 的委托权限）——去 Entra 后台注册一个，或者问问这个环境的管理员是不是已经有现成的，" +
-                "把 Tenant ID / Client ID 填到连接里。");
+                "并已同意 Dynamics CRM API 的委托权限）——去 Entra 后台注册一个，或者问问这个环境的管理员是不是已经有现成的。");
         }
-        return (connection.ClientId, $"https://login.microsoftonline.com/{connection.TenantId}");
+        var authority = await ResolveAuthorityAsync(connection).ConfigureAwait(false);
+        return (connection.ClientId, authority);
+    }
+
+    /// <summary>The MSAL authority for a connection: an explicitly saved Tenant ID wins (manual
+    /// override, or carried in from an imported connection string), otherwise it's auto-discovered
+    /// from the environment URL's sign-in challenge.</summary>
+    private async Task<string> ResolveAuthorityAsync(Connection connection)
+    {
+        var tenant = connection.TenantId?.Trim();
+        if (!string.IsNullOrEmpty(tenant))
+        {
+            return tenant.Contains("://", StringComparison.Ordinal)
+                ? tenant.TrimEnd('/')
+                : $"https://login.microsoftonline.com/{tenant}";
+        }
+        return await _tenantDiscovery.ResolveAuthorityAsync(connection.EnvironmentUrl).ConfigureAwait(false);
     }
 
     private async Task<IPublicClientApplication> GetPublicClientAppAsync(string clientId, string authority)
@@ -135,7 +152,7 @@ public sealed class AuthService
 
     private async Task<TokenResult> AcquireInteractiveTokenAsync(Connection connection)
     {
-        var (clientId, authority) = ResolveInteractiveClientAndAuthority(connection);
+        var (clientId, authority) = await ResolveInteractiveClientAndAuthorityAsync(connection);
         var app = await GetPublicClientAppAsync(clientId, authority);
         var scopes = new[] { $"{connection.EnvironmentUrl.TrimEnd('/')}/.default" };
 
@@ -153,17 +170,16 @@ public sealed class AuthService
         return new TokenResult { AccessToken = result.AccessToken, ExpiresOn = result.ExpiresOn };
     }
 
-    private static async Task<TokenResult> AcquireClientSecretTokenAsync(Connection connection)
+    private async Task<TokenResult> AcquireClientSecretTokenAsync(Connection connection)
     {
         if (string.IsNullOrEmpty(connection.EncryptedClientSecret) ||
-            string.IsNullOrEmpty(connection.ClientId) ||
-            string.IsNullOrEmpty(connection.TenantId))
+            string.IsNullOrEmpty(connection.ClientId))
         {
-            throw new InvalidOperationException("此连接缺少 client secret / client id / tenant id。");
+            throw new InvalidOperationException("此连接缺少 client secret / client id。");
         }
 
         var secret = SecretProtector.Unprotect(connection.EncryptedClientSecret);
-        var authority = $"https://login.microsoftonline.com/{connection.TenantId}";
+        var authority = await ResolveAuthorityAsync(connection).ConfigureAwait(false);
 
         var app = ConfidentialClientApplicationBuilder.Create(connection.ClientId)
             .WithClientSecret(secret)
@@ -176,14 +192,13 @@ public sealed class AuthService
         return new TokenResult { AccessToken = result.AccessToken, ExpiresOn = result.ExpiresOn };
     }
 
-    private static async Task<TokenResult> AcquireCertificateTokenAsync(Connection connection)
+    private async Task<TokenResult> AcquireCertificateTokenAsync(Connection connection)
     {
         if (string.IsNullOrEmpty(connection.CertificateFilePath) ||
             string.IsNullOrEmpty(connection.EncryptedCertificatePassword) ||
-            string.IsNullOrEmpty(connection.ClientId) ||
-            string.IsNullOrEmpty(connection.TenantId))
+            string.IsNullOrEmpty(connection.ClientId))
         {
-            throw new InvalidOperationException("此连接缺少证书文件 / 证书密码 / client id / tenant id。");
+            throw new InvalidOperationException("此连接缺少证书文件 / 证书密码 / client id。");
         }
 
         var password = SecretProtector.Unprotect(connection.EncryptedCertificatePassword);
@@ -194,7 +209,7 @@ public sealed class AuthService
         var certificate = X509CertificateLoader.LoadPkcs12FromFile(
             connection.CertificateFilePath, password, X509KeyStorageFlags.EphemeralKeySet);
 
-        var authority = $"https://login.microsoftonline.com/{connection.TenantId}";
+        var authority = await ResolveAuthorityAsync(connection).ConfigureAwait(false);
 
         var app = ConfidentialClientApplicationBuilder.Create(connection.ClientId)
             .WithCertificate(certificate)

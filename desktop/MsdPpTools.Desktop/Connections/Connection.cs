@@ -20,8 +20,12 @@ public sealed class Connection
     /// writable rather than silently going read-only.</summary>
     public bool AllowWrite { get; set; } = true;
 
-    // ClientSecret and Certificate auth.
+    /// <summary>Optional. Normally left null — AuthService discovers the tenant from
+    /// <see cref="EnvironmentUrl"/> at sign-in (see TenantDiscovery). Only set when carried in
+    /// from an imported connection string, where it acts as an explicit override.</summary>
     public string? TenantId { get; set; }
+
+    // Required for ClientSecret / Certificate auth; the app registration for Interactive auth.
     public string? ClientId { get; set; }
 
     /// <summary>DPAPI-protected (CurrentUser scope), base64-encoded. Never sent to the JS side —

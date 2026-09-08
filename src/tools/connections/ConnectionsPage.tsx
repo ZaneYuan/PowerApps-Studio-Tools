@@ -119,16 +119,8 @@ function ConnectionFormFields({
           <p className="text-xs text-gray-400">
             交互式登录需要一个在目标环境所在租户里注册好的 App Registration（"Mobile and desktop applications"平台、redirect
             URI <code>http://localhost</code>、允许 public client flow、并已同意 Dynamics CRM API 的委托权限）——先问问这个环境的管理员是不是已经有现成的可以直接用，没有的话去
-            Entra 后台自己注册一个。这里没有默认值：不同租户各自有各自的 App Registration，同一个 Client ID 只在它注册所在的那个租户里能用。
+            Entra 后台自己注册一个。同一个 Client ID 只在它注册所在的那个租户里能用，所以这里没有默认值。租户会根据环境 URL 自动识别，不用手填。
           </p>
-          <input
-            type="text"
-            placeholder="Tenant ID（必填，例如 contoso.onmicrosoft.com 或租户 GUID）"
-            value={values.tenantId}
-            onChange={(e) => onChange({ tenantId: e.target.value })}
-            required
-            className={inputCls}
-          />
           <input
             type="text"
             placeholder="Client ID（必填）"
@@ -142,13 +134,6 @@ function ConnectionFormFields({
 
       {values.authType === "clientSecret" && (
         <>
-          <input
-            type="text"
-            placeholder="Tenant ID"
-            value={values.tenantId}
-            onChange={(e) => onChange({ tenantId: e.target.value })}
-            className={inputCls}
-          />
           <input
             type="text"
             placeholder="Client ID"
@@ -168,13 +153,6 @@ function ConnectionFormFields({
 
       {values.authType === "certificate" && (
         <>
-          <input
-            type="text"
-            placeholder="Tenant ID"
-            value={values.tenantId}
-            onChange={(e) => onChange({ tenantId: e.target.value })}
-            className={inputCls}
-          />
           <input
             type="text"
             placeholder="Client ID"
@@ -499,7 +477,7 @@ export default function ConnectionsPage() {
       <div className="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-gray-800">
         <h2 className="text-sm font-medium text-gray-700 dark:text-gray-300">从连接字符串导入</h2>
         <p className="text-xs text-gray-400">
-          粘贴 XRM Tooling 格式的连接字符串（例如 <code>AuthType=OAuth;Url=...;ClientId=...</code>），解析后会预填下面的表单，不会自动提交——请检查无误后再点"添加"。
+          粘贴 XRM Tooling 格式的连接字符串（例如 <code>AuthType=OAuth;Url=...;ClientId=...</code>），解析后会预填下面的表单，不会自动提交——请检查无误后再点"添加"。租户会根据环境 URL 自动识别，连接字符串里的 Tenant ID 只作为可选覆盖。
         </p>
         <textarea
           value={connectionString}

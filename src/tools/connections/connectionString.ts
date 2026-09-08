@@ -73,7 +73,10 @@ export function parseConnectionString(raw: string): ParsedConnectionString {
         result.clientSecret = value;
         break;
       case "tenantid":
+        // Kept only as an optional override — the app normally auto-detects the tenant from the
+        // environment URL at sign-in time, and there's no Tenant ID field on the form anymore.
         result.tenantId = value;
+        result.warnings.push(`Tenant ID 已作为可选覆盖记录（${value}）；一般无需，登录时会按环境 URL 自动识别`);
         break;
       default: {
         const reason = IGNORED_FIELDS[key];
