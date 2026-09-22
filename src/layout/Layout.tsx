@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useTabManager } from "../native/tabs";
+import { TabKeyContext, useTabManager } from "../native/tabs";
 import { getToolById } from "../tools/registry";
 import Home from "../pages/Home";
 import ErrorBoundary from "../shared/ErrorBoundary";
@@ -51,7 +51,9 @@ export default function Layout() {
             return (
               <div key={tab.tabKey} style={{ display: activeTabKey === tab.tabKey ? "block" : "none" }}>
                 <ErrorBoundary label={tool.name}>
-                  <ToolPanel tool={tool} tabKey={tab.tabKey} connectionId={tab.connectionId} />
+                  <TabKeyContext.Provider value={tab.tabKey}>
+                    <ToolPanel tool={tool} tabKey={tab.tabKey} connectionId={tab.connectionId} />
+                  </TabKeyContext.Provider>
                 </ErrorBoundary>
               </div>
             );

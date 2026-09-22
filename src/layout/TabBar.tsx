@@ -26,7 +26,7 @@ export default function TabBar({ onToggleSidebar }: { onToggleSidebar: () => voi
 
   function tabLabel(tab: TabInstance): string {
     const toolName = getToolById(tab.toolId)?.name ?? tab.toolId;
-    const scopedConnectionName = connectionName(tab);
+    const scopedConnectionName = tab.temporary ? "temporary" : connectionName(tab);
     return scopedConnectionName ? `${toolName}（${scopedConnectionName}）` : toolName;
   }
 
@@ -78,7 +78,7 @@ export default function TabBar({ onToggleSidebar }: { onToggleSidebar: () => voi
         {openTabs.map((tab) => {
           const tool = getToolById(tab.toolId);
           if (!tool) return null;
-          const scopedConnectionName = connectionName(tab);
+          const scopedConnectionName = tab.temporary ? null : connectionName(tab);
           const isDirty = dirtyTabKeys.has(tab.tabKey);
           const iconTone = getToolIconTone(tool.category);
           return (
@@ -87,6 +87,11 @@ export default function TabBar({ onToggleSidebar }: { onToggleSidebar: () => voi
                 <SvgIcon name={tool.icon} className={`h-4 w-4 ${iconTone.icon}`} />
                 {isDirty && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" title="有未提交的改动" />}
                 <span className="max-w-40 truncate">{tool.name}</span>
+                {tab.temporary && (
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-normal text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
+                    temporary
+                  </span>
+                )}
                 {scopedConnectionName && (
                   <span className="max-w-24 truncate rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-normal text-gray-500 dark:bg-gray-800 dark:text-gray-400">
                     {scopedConnectionName}

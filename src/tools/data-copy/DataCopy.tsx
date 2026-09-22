@@ -12,6 +12,7 @@ import { buildSelectPath, parseSql, resolveLookupColumns, resolveSqlSubqueries, 
 import { insertRow } from "../sql4cds/writeOps";
 import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry } from "../sql4cds/executionLog";
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
+import { selectCreatedRecordsSql } from "../data-migration/pendingMigrationSql";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid, { applyEditedLabel, type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
@@ -20,6 +21,8 @@ import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
 import SvgIcon from "../../shared/SvgIcon";
+import PendingMigrationNotice from "../../shared/PendingMigrationNotice";
+import { useTabManager } from "../../native/tabs";
 
 const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
 
@@ -40,6 +43,7 @@ export function replaceSelectColumns(sqlText: string, columnNames: string[]): st
 
 export default function DataCopy() {
   const { activeConnectionId, connections } = useActiveConnection();
+  const { queueTemporaryMigrationSql } = useTabManager();
   const confirmDialog = useConfirmDialog();
 
   const [sql, setSql] = useState("");
@@ -63,6 +67,7 @@ export default function DataCopy() {
   const [writeLog, setWriteLog] = useState<{ filename: string; text: string } | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [writeConcurrency, setWriteConcurrency] = useState(8);
+  const [migrationNotice, setMigrationNotice] = useState<{ tabKey: string; recordCount: number } | null>(null);
   const stopRequestedRef = useRef(false);
   const [writeStopped, setWriteStopped] = useState(false);
 
@@ -207,10 +212,12 @@ export default function DataCopy() {
     setWriteResults([]);
     setWriteLog(null);
     setWriteError(null);
+    setMigrationNotice(null);
     stopRequestedRef.current = false;
     setWriteStopped(false);
     const startedAt = new Date();
     const entries: Sql4CdsLogEntry[] = [];
+    const createdIds: string[] = [];
     // Source rows whose (edited) values actually made it into a newly-created record — reset to
     // "clean" below once the batch finishes (unchecked, ❗ cleared), since a successful create has
     // already consumed that edit; there's nothing left pending for it (Bugs/8.24.md #6). A row
@@ -229,6 +236,7 @@ export default function DataCopy() {
             const body = Object.fromEntries(checkedColumns.map((c) => [c.key, row.values[c.key] ?? null]));
             const { newId } = await insertRow(activeConnectionId, entityLogicalName, entitySetName, body);
             entry = { key, state: "success", detail: newId ?? undefined };
+            if (newId) createdIds.push(newId);
             succeededRowIds.add(row.id);
           } catch (err) {
             entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
@@ -244,6 +252,10 @@ export default function DataCopy() {
       }
       if (succeededRowIds.size > 0) {
         setRows((rs) => rs.map((r) => (succeededRowIds.has(r.id) ? { ...r, checked: false, originalValues: r.values } : r)));
+      }
+      const migrationSql = selectCreatedRecordsSql(entityLogicalName, primaryIdAttribute, createdIds);
+      if (migrationSql.length > 0) {
+        setMigrationNotice({ tabKey: queueTemporaryMigrationSql(migrationSql), recordCount: createdIds.length });
       }
 
       const finishedAt = new Date();
@@ -377,6 +389,7 @@ export default function DataCopy() {
 
           {writeError && <ErrorMessage error={writeError} />}
 
+          {migrationNotice && <PendingMigrationNotice tabKey={migrationNotice.tabKey} recordCount={migrationNotice.recordCount} />}
           {writeResults && writeResults.length > 0 && (
             // The summary/下载日志 bar is a sibling *above* the scrolling body, not inside it —
             // it used to share the same horizontally-scrolling `inline-block min-w-full` wrapper

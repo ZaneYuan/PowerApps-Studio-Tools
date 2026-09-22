@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
+import { useContext, useRef, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { runPagedQuery, mapWithYield } from "../../native/dataverseQuery";
 import { useActiveConnection } from "../../native/activeConnection";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
+import { TabKeyContext, usePendingMigrationSql, useTabManager } from "../../native/tabs";
 import { downloadTextFile } from "../../native/download";
 import { mergeRowColumnKeys, unwrapODataRowWithFormatting } from "../../native/odata";
 import { RowLimitInput, CancelQueryButton, QueryProgressNote, DEFAULT_QUERY_ROW_LIMIT } from "../../shared/QueryRunControls";
@@ -18,6 +19,7 @@ import { isRowDirty } from "../../shared/dirtyTracking";
 import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
+import { appendSqlStatements } from "./pendingMigrationSql";
 import SvgIcon from "../../shared/SvgIcon";
 import { planDeferredWrite, phase1Body, phase2Body } from "./deferredWrite";
 import {
@@ -140,6 +142,9 @@ export default function DataMigration() {
 
   const [sql, setSql] = useState("");
   const { schema: editorSchema, defaultTable: editingTable } = useSqlEditorSchema(activeConnectionId, sql);
+  const tabKey = useContext(TabKeyContext);
+  const isTemporaryTab = useTabManager().openTabs.some((t) => t.tabKey === tabKey && t.temporary);
+  usePendingMigrationSql((statements) => setSql((prev) => appendSqlStatements(prev, statements)));
   const [queryRunning, setQueryRunning] = useState(false);
   const [fileImporting, setFileImporting] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
@@ -643,6 +648,11 @@ export default function DataMigration() {
         用多条 SELECT 或上传一个 .sql 文件把要迁移的数据加载进来，每张表一个 Tab，编辑后选一个目标连接导入。
         批次内若一张表引用了另一张表尚未创建的记录，会自动先建后回填，无需手动排序。
       </div>
+      {isTemporaryTab && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+          临时迁移清单：在数据编辑 / 数据复制里新增或更新的记录会自动追加一条 SELECT 到下面，这些数据待迁移。
+        </div>
+      )}
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">

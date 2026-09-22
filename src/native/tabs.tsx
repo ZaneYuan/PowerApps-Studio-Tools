@@ -1,5 +1,8 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useActiveConnection } from "./activeConnection";
+
+const DATA_MIGRATION_TOOL_ID = "data-migration";
 
 export interface TabInstance {
   /** Opaque unique identity for this open tab — stable even if its connectionId is later
@@ -8,6 +11,10 @@ export interface TabInstance {
   tabKey: string;
   toolId: string;
   connectionId: string | null;
+  /** The single Data Migration tab that collects SELECTs for records just written by Data Edit /
+   *  Data Copy (Requirements/9.15 #3). Labelled "temporary" instead of by environment, and never
+   *  reused by openTab. */
+  temporary?: boolean;
 }
 
 interface TabManagerContextValue {
@@ -38,6 +45,12 @@ interface TabManagerContextValue {
    *  section reads this. Updated from `openTab` itself (not duplicated in Sidebar) so it reflects
    *  every entry point (sidebar click, home page card, ...) consistently. */
   recentToolIds: string[];
+  /** Appends a SELECT to the temporary Data Migration tab, opening it in the background (bound to
+   *  the sidebar's new-tab connection) when none is open. Returns that tab's key. */
+  queueTemporaryMigrationSql: (statements: string[]) => string;
+  /** Statements queued for a temporary tab that its Data Migration hasn't picked up yet. */
+  pendingMigrationSql: Record<string, string[]>;
+  clearPendingMigrationSql: (tabKey: string) => void;
 }
 
 const TabManagerContext = createContext<TabManagerContextValue | null>(null);
@@ -61,6 +74,9 @@ function loadRecentToolIds(): string[] {
  *  outside a tab) makes reporting a no-op. */
 export const TabDirtyContext = createContext<((dirty: boolean) => void) | null>(null);
 
+/** Set by Layout to each tab's own key, for tools that need to know which tab they live in. */
+export const TabKeyContext = createContext<string | null>(null);
+
 let tabKeySeq = 0;
 function makeTabKey(toolId: string): string {
   tabKeySeq += 1;
@@ -75,6 +91,11 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
   const [activeTabKey, setActiveTabKey] = useState<string | null>(null);
   const [dirtyTabKeys, setDirtyTabKeys] = useState<Set<string>>(new Set());
   const [recentToolIds, setRecentToolIds] = useState<string[]>(loadRecentToolIds);
+  const [pendingMigrationSql, setPendingMigrationSql] = useState<Record<string, string[]>>({});
+  // A ref rather than a lookup in openTabs: two writes finishing before the next render must still
+  // land in one temporary tab instead of each opening its own.
+  const temporaryTabKeyRef = useRef<string | null>(null);
+  const { activeConnectionId } = useActiveConnection();
 
   function recordRecentTool(toolId: string) {
     setRecentToolIds((prev) => {
@@ -86,7 +107,7 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
 
   function openTab(toolId: string, connectionId: string | null) {
     recordRecentTool(toolId);
-    const existing = openTabs.find((t) => t.toolId === toolId && t.connectionId === connectionId);
+    const existing = openTabs.find((t) => t.toolId === toolId && t.connectionId === connectionId && !t.temporary);
     if (existing) {
       setActiveTabKey(existing.tabKey);
       return;
@@ -100,9 +121,33 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
     setActiveTabKey(tabKey);
   }
 
+  function queueTemporaryMigrationSql(statements: string[]): string {
+    let tabKey = temporaryTabKeyRef.current;
+    if (!tabKey) {
+      const newKey = makeTabKey(DATA_MIGRATION_TOOL_ID);
+      tabKey = newKey;
+      temporaryTabKeyRef.current = newKey;
+      setOpenTabs((tabs) => [...tabs, { tabKey: newKey, toolId: DATA_MIGRATION_TOOL_ID, connectionId: activeConnectionId, temporary: true }]);
+    }
+    const key = tabKey;
+    setPendingMigrationSql((prev) => ({ ...prev, [key]: [...(prev[key] ?? []), ...statements] }));
+    return key;
+  }
+
+  function clearPendingMigrationSql(tabKey: string) {
+    setPendingMigrationSql((prev) => {
+      if (!(tabKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[tabKey];
+      return next;
+    });
+  }
+
   function closeTabs(tabKeys: string[]) {
     const closingKeys = new Set(tabKeys);
     if (closingKeys.size === 0) return;
+    if (temporaryTabKeyRef.current && closingKeys.has(temporaryTabKeyRef.current)) temporaryTabKeyRef.current = null;
+    closingKeys.forEach(clearPendingMigrationSql);
     setOpenTabs((tabs) => {
       const activeIndex = tabs.findIndex((t) => t.tabKey === activeTabKey);
       const next = tabs.filter((t) => !closingKeys.has(t.tabKey));
@@ -145,7 +190,22 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
 
   return (
     <TabManagerContext.Provider
-      value={{ openTabs, activeTabKey, openTab, activateTab, closeTab, closeTabs, activateHome, setTabConnection, dirtyTabKeys, setTabDirty, recentToolIds }}
+      value={{
+        openTabs,
+        activeTabKey,
+        openTab,
+        activateTab,
+        closeTab,
+        closeTabs,
+        activateHome,
+        setTabConnection,
+        dirtyTabKeys,
+        setTabDirty,
+        recentToolIds,
+        queueTemporaryMigrationSql,
+        pendingMigrationSql,
+        clearPendingMigrationSql,
+      }}
     >
       {children}
     </TabManagerContext.Provider>
@@ -156,4 +216,23 @@ export function useTabManager(): TabManagerContextValue {
   const ctx = useContext(TabManagerContext);
   if (!ctx) throw new Error("useTabManager 必须在 TabManagerProvider 内使用");
   return ctx;
+}
+
+/** Hands statements queued for the calling tool's tab (see queueTemporaryMigrationSql) to
+ *  `onStatements`, once each. A no-op outside a tab or when nothing is queued. */
+export function usePendingMigrationSql(onStatements: (statements: string[]) => void) {
+  const tabKey = useContext(TabKeyContext);
+  const ctx = useContext(TabManagerContext);
+  const pending = tabKey && ctx ? ctx.pendingMigrationSql[tabKey] : undefined;
+  const onStatementsRef = useRef(onStatements);
+  onStatementsRef.current = onStatements;
+  // StrictMode runs effects twice before the clear below lands; the batch's identity marks it handled.
+  const handledRef = useRef<string[] | null>(null);
+
+  useEffect(() => {
+    if (!tabKey || !ctx || !pending || pending.length === 0 || handledRef.current === pending) return;
+    handledRef.current = pending;
+    onStatementsRef.current(pending);
+    ctx.clearPendingMigrationSql(tabKey);
+  }, [tabKey, ctx, pending]);
 }

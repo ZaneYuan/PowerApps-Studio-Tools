@@ -12,6 +12,7 @@ import { buildSelectPath, parseSql, resolveLookupColumns, resolveSqlSubqueries, 
 import { deleteRow, insertRow, updateRow } from "../sql4cds/writeOps";
 import { buildSql4CdsLogText, sql4CdsLogFilename, type Sql4CdsLogEntry } from "../sql4cds/executionLog";
 import { buildInsertSql, insertSqlFilename } from "../sql4cds/sqlGen";
+import { selectCreatedRecordsSql, selectUpdatedRecordsSql } from "../data-migration/pendingMigrationSql";
 import SqlEditor from "../../shared/SqlEditor";
 import CheckableGrid, { applyEditedLabel, type GridColumn, type GridRow } from "../../shared/CheckableGrid";
 import { buildEditableGridColumns, convertEditedCellValue } from "../../shared/gridColumns";
@@ -20,6 +21,8 @@ import UnsavedChangesBadge from "../../shared/UnsavedChangesBadge";
 import { useAlertDialog, useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
 import SvgIcon from "../../shared/SvgIcon";
+import PendingMigrationNotice from "../../shared/PendingMigrationNotice";
+import { useTabManager } from "../../native/tabs";
 
 const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
 
@@ -40,6 +43,7 @@ export function replaceSelectColumns(sqlText: string, columnNames: string[]): st
 
 export default function DataEdit() {
   const { activeConnectionId, connections } = useActiveConnection();
+  const { queueTemporaryMigrationSql } = useTabManager();
   const confirmDialog = useConfirmDialog();
   const alertDialog = useAlertDialog();
 
@@ -68,6 +72,7 @@ export default function DataEdit() {
   const [writeLog, setWriteLog] = useState<{ filename: string; text: string } | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [writeConcurrency, setWriteConcurrency] = useState(8);
+  const [migrationNotice, setMigrationNotice] = useState<{ tabKey: string; recordCount: number } | null>(null);
   const [writeSkippedCount, setWriteSkippedCount] = useState(0);
   const stopRequestedRef = useRef(false);
   const [writeStopped, setWriteStopped] = useState(false);
@@ -266,6 +271,7 @@ export default function DataEdit() {
     setWriteLog(null);
     setWriteError(null);
     setWriteSkippedCount(skippedCount);
+    setMigrationNotice(null);
     stopRequestedRef.current = false;
     setWriteStopped(false);
     const startedAt = new Date();
@@ -276,6 +282,8 @@ export default function DataEdit() {
     // edited value never actually landed in Dataverse, so silently treating it as the new
     // baseline would make a later re-submit skip that field entirely, thinking it already matches.
     const succeededRowIds = new Set<string>();
+    const createdIds: string[] = [];
+    const updatedColumnKeys = new Set<string>();
     let stopped = false;
 
     try {
@@ -298,9 +306,11 @@ export default function DataEdit() {
             if (isUpdate) {
               await updateRow(activeConnectionId, entityLogicalName, entitySetName, row.id, body);
               entry = { key, state: "success" };
+              for (const column of Object.keys(body)) updatedColumnKeys.add(column);
             } else {
               const { newId } = await insertRow(activeConnectionId, entityLogicalName, entitySetName, body);
               entry = { key, state: "success", detail: newId ?? undefined };
+              if (newId) createdIds.push(newId);
             }
             succeededRowIds.add(row.id);
           } catch (err) {
@@ -317,6 +327,13 @@ export default function DataEdit() {
       }
       if (succeededRowIds.size > 0) {
         setRows((rs) => rs.map((r) => (succeededRowIds.has(r.id) ? { ...r, checked: false, originalValues: r.values } : r)));
+      }
+      const writtenIds = isUpdate ? [...succeededRowIds] : createdIds;
+      const migrationSql = isUpdate
+        ? selectUpdatedRecordsSql(entityLogicalName, primaryIdAttribute, [...updatedColumnKeys], writtenIds)
+        : selectCreatedRecordsSql(entityLogicalName, primaryIdAttribute, writtenIds);
+      if (migrationSql.length > 0) {
+        setMigrationNotice({ tabKey: queueTemporaryMigrationSql(migrationSql), recordCount: writtenIds.length });
       }
 
       const finishedAt = new Date();
@@ -551,6 +568,7 @@ export default function DataEdit() {
 
           {writeError && <ErrorMessage error={writeError} />}
 
+          {migrationNotice && <PendingMigrationNotice tabKey={migrationNotice.tabKey} recordCount={migrationNotice.recordCount} />}
           {writeResults && writeResults.length > 0 && (
             // The summary/下载日志 bar is a sibling *above* the scrolling body, not inside it — see
             // DataCopy.tsx's matching comment (Bugs/8.24.md #5): it used to share the same
