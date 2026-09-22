@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Out-of-process host for Microsoft's Plug-in Profiler. The Profiler's libraries target
+       .NET Framework and the Xrm Tooling SDK, which the net10 desktop shell cannot load, so the
+       shell starts this exe per operation and talks to it over stdin/stdout JSON. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>MsdPpTools.ProfilerHost</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CrmSdk.XrmTooling.CoreAssembly" Version="9.1.1.65" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.0" PrivateAssets="all" />
+    <!-- Compile-time only: PluginProfiler.* is not on the SDK's redistributable list, so it is
+         never copied to the output. At runtime Program.cs resolves it from the user's own
+         Plugin Registration Tool install. -->
+    <PackageDownload Include="Microsoft.CrmSdk.XrmTooling.PluginRegistrationTool" Version="[9.1.0.200]" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <PrtToolsDir>$(NuGetPackageRoot)microsoft.crmsdk.xrmtooling.pluginregistrationtool\9.1.0.200\tools\</PrtToolsDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="PluginProfiler.Library">
+      <HintPath>$(PrtToolsDir)PluginProfiler.Library.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="PluginProfiler.Plugins">
+      <HintPath>$(PrtToolsDir)PluginProfiler.Plugins.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+
+</Project>

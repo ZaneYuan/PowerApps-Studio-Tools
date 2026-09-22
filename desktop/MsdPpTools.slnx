@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="MsdPpTools.Desktop/MsdPpTools.Desktop.csproj" />
+  <Project Path="MsdPpTools.ProfilerHost/MsdPpTools.ProfilerHost.csproj" />
 </Solution>

@@ -1,0 +1,150 @@
+{
+  "typeName": "ClaudeIntegrationTestPlugin.NoOpPlugin",
+  "operationType": "Plugin",
+  "contextFormat": "Xml",
+  "isolationMode": 2,
+  "executionStartTime": "2026-09-22T14:56:47.3713518Z",
+  "executionDurationMs": 0,
+  "constructorException": null,
+  "executionException": null,
+  "replayEventCount": 0,
+  "unsecureConfiguration": null,
+  "context": {
+    "messageName": "Create",
+    "stage": 40,
+    "mode": 0,
+    "depth": 1,
+    "primaryEntityName": "task",
+    "primaryEntityId": "4d9740ce-95b6-f111-aaae-70a8a500b6a7",
+    "secondaryEntityName": "none",
+    "userId": "094dae8e-c722-f011-8c4d-00224819e439",
+    "initiatingUserId": "094dae8e-c722-f011-8c4d-00224819e439",
+    "businessUnitId": "d345ae8e-c722-f011-8c4d-00224819e439",
+    "organizationName": "unq5c8ccfc1462af0119a43002248ed6",
+    "correlationId": "5c8d9779-2f2e-4432-bc86-2b76e824db2e",
+    "requestId": "9eb81eb8-35ea-4e6c-a6f2-c185ce616238",
+    "operationCreatedOn": "2026-09-22T14:56:43",
+    "isInTransaction": true,
+    "isolationMode": 2,
+    "inputParameters": {
+      "Target": {
+        "$type": "Entity",
+        "logicalName": "task",
+        "id": "4d9740ce-95b6-f111-aaae-70a8a500b6a7",
+        "attributes": {
+          "activityid": "4d9740ce-95b6-f111-aaae-70a8a500b6a7",
+          "description": "safe to delete",
+          "owningbusinessunit": {
+            "$type": "EntityReference",
+            "logicalName": "businessunit",
+            "id": "d345ae8e-c722-f011-8c4d-00224819e439",
+            "name": null
+          },
+          "modifiedonbehalfby": null,
+          "subject": "Claude profiler e2e 2026-09-22T14:56:40.431Z",
+          "statecode": {
+            "$type": "OptionSetValue",
+            "value": 0
+          },
+          "statuscode": {
+            "$type": "OptionSetValue",
+            "value": 2
+          },
+          "createdby": {
+            "$type": "EntityReference",
+            "logicalName": "systemuser",
+            "id": "094dae8e-c722-f011-8c4d-00224819e439",
+            "name": null
+          },
+          "isworkflowcreated": false,
+          "activitytypecode": "task",
+          "isbilled": false,
+          "ownerid": {
+            "$type": "EntityReference",
+            "logicalName": "systemuser",
+            "id": "094dae8e-c722-f011-8c4d-00224819e439",
+            "name": null
+          },
+          "isregularactivity": true,
+          "modifiedby": {
+            "$type": "EntityReference",
+            "logicalName": "systemuser",
+            "id": "094dae8e-c722-f011-8c4d-00224819e439",
+            "name": null
+          },
+          "createdon": "2026-09-22T14:56:43.0000000Z",
+          "prioritycode": {
+            "$type": "OptionSetValue",
+            "value": 1
+          },
+          "modifiedon": "2026-09-22T14:56:43.0000000Z"
+        }
+      }
+    },
+    "outputParameters": {
+      "id": "4d9740ce-95b6-f111-aaae-70a8a500b6a7"
+    },
+    "sharedVariables": {
+      "IsAutoTransact": true,
+      "AcceptLang": "*",
+      "DefaultsAddedFlag": true
+    },
+    "preEntityImages": {},
+    "postEntityImages": {},
+    "parentContext": {
+      "messageName": "Create",
+      "stage": 30,
+      "mode": 0,
+      "depth": 1,
+      "primaryEntityName": "task",
+      "primaryEntityId": "4d9740ce-95b6-f111-aaae-70a8a500b6a7",
+      "secondaryEntityName": "none",
+      "userId": "094dae8e-c722-f011-8c4d-00224819e439",
+      "initiatingUserId": "094dae8e-c722-f011-8c4d-00224819e439",
+      "businessUnitId": "d345ae8e-c722-f011-8c4d-00224819e439",
+      "organizationName": "unq5c8ccfc1462af0119a43002248ed6",
+      "correlationId": "5c8d9779-2f2e-4432-bc86-2b76e824db2e",
+      "requestId": "9eb81eb8-35ea-4e6c-a6f2-c185ce616238",
+      "operationCreatedOn": "2026-09-22T14:56:43",
+      "isInTransaction": true,
+      "isolationMode": 2,
+      "inputParameters": {
+        "Target": {
+          "$type": "Entity",
+          "logicalName": "task",
+          "id": "4d9740ce-95b6-f111-aaae-70a8a500b6a7",
+          "attributes": {
+            "subject": "Claude profiler e2e 2026-09-22T14:56:40.431Z",
+            "description": "safe to delete",
+            "isregularactivity": false,
+            "isbilled": false,
+            "prioritycode": {
+              "$type": "OptionSetValue",
+              "value": 1
+            },
+            "isworkflowcreated": false,
+            "activityid": "4d9740ce-95b6-f111-aaae-70a8a500b6a7"
+          }
+        }
+      },
+      "outputParameters": {},
+      "sharedVariables": {
+        "IsAutoTransact": true,
+        "AcceptLang": "*",
+        "DefaultsAddedFlag": true,
+        "ChangedEntityTypes": [
+          {
+            "$type": "KeyValuePair`2",
+            "value": "[activityparty, Create]"
+          },
+          {
+            "$type": "KeyValuePair`2",
+            "value": "[task, Update]"
+          }
+        ]
+      },
+      "preEntityImages": {},
+      "postEntityImages": {}
+    }
+  }
+}

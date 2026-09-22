@@ -58,6 +58,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./plugin-trace-viewer/PluginTraceViewer")),
   },
   {
+    id: "plugin-debugger",
+    name: "插件调试 (Profiler)",
+    description: "用官方 Plugin Profiler 抓取插件执行上下文，并在本机重放、附加 Visual Studio 调试。",
+    category: "插件开发",
+    icon: "step",
+    Component: lazy(() => import("./plugin-debugger/PluginDebugger")),
+  },
+  {
     id: "data-migration",
     name: "数据迁移",
     description: "跨表批量导入数据，自动处理批次内的记录引用依赖。",

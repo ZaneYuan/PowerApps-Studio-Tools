@@ -38,4 +38,19 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
   </ItemGroup>
 
+  <!-- ProfilerHost is a separate net48 exe (see its csproj), so it is built into a ProfilerHost\
+       subfolder next to this app rather than referenced as an assembly. Restore is its own
+       MSBuild call so that Build evaluates the project with the restored assets. -->
+  <PropertyGroup>
+    <ProfilerHostProject>..\MsdPpTools.ProfilerHost\MsdPpTools.ProfilerHost.csproj</ProfilerHostProject>
+  </PropertyGroup>
+  <Target Name="BuildProfilerHost" AfterTargets="Build">
+    <MSBuild Projects="$(ProfilerHostProject)" Targets="Restore" Properties="Configuration=$(Configuration);MSBuildRestoreSessionId=$([System.Guid]::NewGuid())" />
+    <MSBuild Projects="$(ProfilerHostProject)" Targets="Build" Properties="Configuration=$(Configuration);OutDir=$(ProjectDir)$(OutDir)ProfilerHost\" />
+  </Target>
+  <Target Name="PublishProfilerHost" AfterTargets="Publish">
+    <MSBuild Projects="$(ProfilerHostProject)" Targets="Restore" Properties="Configuration=$(Configuration);MSBuildRestoreSessionId=$([System.Guid]::NewGuid())" />
+    <MSBuild Projects="$(ProfilerHostProject)" Targets="Build" Properties="Configuration=$(Configuration);OutDir=$(PublishDir)ProfilerHost\" />
+  </Target>
+
 </Project>

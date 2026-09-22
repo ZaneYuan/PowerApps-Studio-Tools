@@ -33,6 +33,7 @@ public partial class MainWindow : Window
         DataverseHandlers.Register(_bridge, _dataverseClient);
         DialogHandlers.Register(_bridge);
         PluginInspectionHandlers.Register(_bridge);
+        ProfilerHandlers.Register(_bridge, _connectionStore, _authService);
 
 #if DEBUG
         // Dev mode: point straight at the Vite dev server so the existing `npm run dev`
