@@ -105,12 +105,11 @@ export interface SelectComplexResult {
   entityLogicalName: string;
   entitySetGuess: string;
   fetchXml: string;
-  /** Response-JSON keys expected for the *root* entity's selected columns (bare attribute names,
-   *  or the SELECT/aggregate alias where one was given) — used only to seed a result grid's column
-   *  list so a column the user explicitly selected still shows up even when it's null on every
-   *  returned row (Bugs/9.7.md #3). Root only: a `<link-entity>` column's response key depends on
-   *  FetchXML aliasing rules this layer doesn't model, so joined-table columns are left to be
-   *  discovered from the row data instead. */
+  /** Response-JSON keys for every selected column, in SELECT order: a root column's bare attribute
+   *  name, a joined column's `linkAlias.attribute` (how the Web API names `<link-entity>`
+   *  attributes), or the SELECT/aggregate alias where one applies. Seeds the result grid so a
+   *  column that's null on every row still shows (Bugs/9.7.md #3) and columns keep SELECT order
+   *  (Bugs/9.9 #4). */
   outputColumns: string[];
   warnings: string[];
 }
@@ -194,9 +193,8 @@ export function buildSelectPath(result: SelectSimpleResult | SelectComplexResult
  *  selected column that happens to be null everywhere on the page (Bugs/9.7.md #3). Bare names,
  *  normalized the same way the response is unwrapped (a `_x_value` Lookup shadow property → its
  *  bare logical name) so they line up with unwrapODataRow's output. Empty for `SELECT *`
- *  (select-simple with `select === null`) and for a select-complex query's joined-table columns
- *  (see SelectComplexResult.outputColumns) — those still fall back to row-data discovery. Callers
- *  union this with the keys seen across every returned row (see mergeRowColumnKeys). */
+ *  (select-simple with `select === null`), which falls back to row-data discovery (see
+ *  mergeRowColumnKeys). */
 export function resultGridSeedColumns(result: SelectSimpleResult | SelectComplexResult): string[] {
   if (result.kind === "select-complex") return result.outputColumns;
   if (!result.select) return [];
@@ -819,9 +817,6 @@ function translateComplexSelect(ast: SelectAst): {
   const needsGrouping = hasAggregate || !!ast.groupby;
 
   const selectedKeys = new Set<string>();
-  // Response-JSON keys for the root entity's selected columns, in SELECT order — seeds the result
-  // grid so a selected-but-all-null column still shows (Bugs/9.7.md #3). Joined-table columns are
-  // deliberately left out (see SelectComplexResult.outputColumns).
   const outputColumns: string[] = [];
   for (const c of ast.columns) {
     const expr = c.expr;
@@ -857,7 +852,7 @@ function translateComplexSelect(ast: SelectAst): {
 
       const alias = c.as ?? `${aggFunc}_${attrName}`;
       target.push({ name: attrName, aggregate: aggFunc, alias });
-      if (target === rootAttributes) outputColumns.push(alias);
+      outputColumns.push(alias);
       continue;
     }
 
@@ -881,7 +876,7 @@ function translateComplexSelect(ast: SelectAst): {
     const attrAlias = isGrouped ? (c.as ?? ref.column) : undefined;
     target.push({ name: ref.column, groupby: isGrouped || undefined, alias: attrAlias });
     selectedKeys.add(key);
-    if (target === rootAttributes) outputColumns.push(attrAlias ?? ref.column);
+    outputColumns.push(attrAlias ?? (target === rootAttributes ? ref.column : `${tableAlias}.${ref.column}`));
   }
 
   for (const key of groupBySet) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { escapeODataString, mergeRowColumnKeys, unwrapODataRow, unwrapODataRowWithFormatting } from "./odata";
+import { escapeODataString, mergeRowColumnKeys, selectedResultColumnKeys, unwrapODataRow, unwrapODataRowWithFormatting } from "./odata";
 
 describe("mergeRowColumnKeys", () => {
   it("unions keys across every row, not just the first (Dataverse omits null attributes per row)", () => {
@@ -103,5 +103,24 @@ describe("unwrapODataRowWithFormatting", () => {
       "_parentaccountid_value@OData.Community.Display.V1.FormattedValue": "Parent Co",
     };
     expect(unwrapODataRow(row)).toEqual(unwrapODataRowWithFormatting(row).fields);
+  });
+});
+
+describe("selectedResultColumnKeys", () => {
+  it("shows only the selected columns in SELECT order, hiding the auto-returned primary id (Bugs/9.9 #4/#5)", () => {
+    const rows = [{ bupa_name: "A", bupa_productbenefittypeid: "g1", "p.productnumber": "IBF1" }];
+    expect(selectedResultColumnKeys(["p.productnumber", "bupa_name"], rows)).toEqual(["p.productnumber", "bupa_name"]);
+  });
+
+  it("keeps a selected column that's null on every row", () => {
+    expect(selectedResultColumnKeys(["name", "deductibleid"], [{ name: "A" }])).toEqual(["name", "deductibleid"]);
+  });
+
+  it("uses the response's spelling when the query typed a different case", () => {
+    expect(selectedResultColumnKeys(["Name", "P.ProductNumber"], [{ name: "A", "p.productnumber": "X" }])).toEqual(["name", "p.productnumber"]);
+  });
+
+  it("falls back to every row key when there is no explicit column list", () => {
+    expect(selectedResultColumnKeys([], [{ id: "1", name: "A" }, { id: "2", extra: 1 }])).toEqual(["id", "name", "extra"]);
   });
 });

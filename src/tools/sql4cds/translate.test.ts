@@ -175,10 +175,19 @@ describe("parseSql — JOIN / GROUP BY (complex select -> FetchXML)", () => {
     expect(r.outputColumns).toEqual(["bupa_name", "bupa_productbenefittypedeductibleid", "bupa_rate"]);
   });
 
-  it("outputColumns omits joined-table columns (their FetchXML response key isn't modeled here) but keeps root ones", () => {
+  it("outputColumns keeps joined-table columns in SELECT order as linkAlias.attribute (Bugs/9.9 #4)", () => {
+    const r = parseSql(
+      "select p.productnumber, pbt.bupa_name, pbt.bupa_iscore from bupa_productbenefittype pbt " +
+        "left join product p on p.productid = pbt.bupa_productid",
+    );
+    if (r.kind !== "select-complex") throw new Error(`expected select-complex, got ${r.kind === "error" ? r.error : r.kind}`);
+    expect(r.outputColumns).toEqual(["p.productnumber", "bupa_name", "bupa_iscore"]);
+  });
+
+  it("outputColumns tells a root column apart from a same-named joined one", () => {
     const r = parseSql("select p.name, u.name from product p JOIN uom u on p.uomid = u.uomid");
     if (r.kind !== "select-complex") throw new Error(`expected select-complex, got ${r.kind}`);
-    expect(r.outputColumns).toEqual(["name"]);
+    expect(r.outputColumns).toEqual(["name", "u.name"]);
   });
 
   it("outputColumns uses the alias for aggregates / group-by columns", () => {

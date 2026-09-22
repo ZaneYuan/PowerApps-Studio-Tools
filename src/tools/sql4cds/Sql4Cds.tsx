@@ -6,7 +6,7 @@ import { useActiveConnection } from "../../native/activeConnection";
 import { useEntitySetName } from "../../native/useEntitySetName";
 import { useSqlEditorSchema } from "../../native/useSqlEditorSchema";
 import { downloadTextFile } from "../../native/download";
-import { mergeRowColumnKeys, unwrapODataRowWithFormatting } from "../../native/odata";
+import { selectedResultColumnKeys, unwrapODataRowWithFormatting } from "../../native/odata";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
 import SvgIcon from "../../shared/SvgIcon";
@@ -255,26 +255,28 @@ export default function Sql4Cds() {
       setRows(unwrapped);
       setTruncated(res.truncated);
       setStoppedForSize(res.stoppedForSize);
-      // Column set = the explicitly-selected list unioned with every key seen across all rows, not
-      // just row 0's keys — Dataverse omits null attributes per row, so a column that's null in the
-      // first row (or across the whole page) would otherwise silently vanish (Bugs/9.7.md #3).
-      const baseKeys = mergeRowColumnKeys(resultGridSeedColumns(resolvedResult), unwrapped.map((u) => u.fields));
-      // Bugs/9.8.md #1: order the columns like the entity's default view and show OptionSet/Lookup
-      // values as their name/label (not the raw GUID/code). Best-effort — a metadata hiccup falls
-      // back to plain, SELECT-order columns. Grid filtering is unaffected: CheckableGrid always
-      // matches the raw value in row.values, never the formatted label.
+      // An explicit column list is shown as written, in SELECT order and without the primary id
+      // Dataverse adds on its own (Bugs/9.9.md #4/#5); `SELECT *` falls back to every key seen
+      // across all rows, since Dataverse omits null attributes per row (Bugs/9.7.md #3).
+      const seedColumns = resultGridSeedColumns(resolvedResult);
+      const baseKeys = selectedResultColumnKeys(seedColumns, unwrapped.map((u) => u.fields));
+      // Bugs/9.8.md #1: show OptionSet/Lookup values as their name/label (not the raw GUID/code),
+      // and order a `SELECT *` like the entity's default view. Best-effort — a metadata hiccup falls
+      // back to plain columns. Grid filtering is unaffected: CheckableGrid always matches the raw
+      // value in row.values, never the formatted label.
       let columns: GridColumn[];
       try {
         const attrs = await fetchAttributes(activeConnectionId, resolvedResult.entityLogicalName);
         const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
         if (resolvedResult.kind === "select-simple") {
-          const viewOrder = await fetchDefaultViewColumnOrder(activeConnectionId, resolvedResult.entityLogicalName);
-          const ordered = sortColumnsForDisplay(baseKeys, meta.primaryIdAttribute, viewOrder);
+          const ordered =
+            seedColumns.length > 0
+              ? baseKeys
+              : sortColumnsForDisplay(baseKeys, meta.primaryIdAttribute, await fetchDefaultViewColumnOrder(activeConnectionId, resolvedResult.entityLogicalName));
           columns = await buildDisplayGridColumns(activeConnectionId, resolvedResult.entityLogicalName, ordered, typeByName);
         } else {
-          // JOIN / GROUP BY / aggregate: keep the SELECT/seen order (default-view order doesn't map
-          // onto joined-in or aggregated columns), but still tag root-entity columns with their
-          // type so their OptionSet/Lookup values render as labels.
+          // JOIN / GROUP BY / aggregate: keep SELECT order, but still tag root-entity columns with
+          // their type so their OptionSet/Lookup values render as labels.
           columns = baseKeys.map((key) => ({ key, checked: true, attributeType: typeByName.get(key.toLowerCase()) }));
         }
       } catch {

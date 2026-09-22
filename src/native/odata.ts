@@ -29,6 +29,18 @@ export function mergeRowColumnKeys(seed: string[], rows: Record<string, unknown>
   return keys;
 }
 
+/** Column keys for a result grid that should show exactly what the query selected: `seed` in SELECT
+ *  order when there is an explicit column list, so keys Dataverse adds on its own (the primary id
+ *  always comes back) stay hidden (Bugs/9.9 #5). Each seed key takes the spelling of a matching row
+ *  key when one exists, since the response uses logical-name casing whatever the query typed. With
+ *  no explicit list (`SELECT *`, empty `seed`) this is mergeRowColumnKeys. */
+export function selectedResultColumnKeys(seed: string[], rows: Record<string, unknown>[]): string[] {
+  if (seed.length === 0) return mergeRowColumnKeys(seed, rows);
+  const rowKeyByLower = new Map<string, string>();
+  for (const row of rows) for (const key of Object.keys(row)) if (!rowKeyByLower.has(key.toLowerCase())) rowKeyByLower.set(key.toLowerCase(), key);
+  return [...new Set(seed.map((key) => rowKeyByLower.get(key.toLowerCase()) ?? key))];
+}
+
 /** Dataverse returns a Lookup/Customer/Owner column as `_logicalname_value` (plus `@...`
  *  annotation keys alongside it, e.g. `_x_value@OData.Community.Display.V1.FormattedValue`) —
  *  unwrap every row to plain attribute names so a result table shows the same field names a user
