@@ -42,6 +42,12 @@ describe("parseSql — simple SELECT", () => {
     expect(r2.filter).toBe(`firstname eq 'Zane'`);
   });
 
+  it("strips the braces from a curly-braced GUID literal", () => {
+    const r = parseSql("SELECT name FROM contact WHERE parentcustomerid = '{D345AE8E-C722-F011-8C4D-00224819E439}'");
+    if (r.kind !== "select-simple") throw new Error("expected select-simple");
+    expect(r.filter).toBe("_parentcustomerid_value eq D345AE8E-C722-F011-8C4D-00224819E439");
+  });
+
   it("does not double-wrap a field the user already wrote wrapped", () => {
     const guid = "d345ae8e-c722-f011-8c4d-00224819e439";
     const r = parseSql(`SELECT name FROM contact WHERE _parentcustomerid_value = '${guid}'`);
@@ -498,6 +504,19 @@ describe("applyLookupColumnRenames", () => {
   it("wraps a Lookup column in $filter", () => {
     const r = applyLookupColumnRenames({ ...base, filter: "contoso_plantype eq null" }, lookups);
     expect(r.filter).toBe("_contoso_plantype_value eq null");
+  });
+
+  it("unwraps a GUID-compared column that metadata says is not a Lookup (N:N intersect id)", () => {
+    const guid = "b203efa1-8daa-f111-aaad-000d3a802463";
+    const parsed = parseSql(`SELECT TOP 10 * FROM bupa_opportunityproduct_offer WHERE bupa_opportunityproductid = '{${guid}}'`);
+    if (parsed.kind !== "select-simple") throw new Error("expected select-simple");
+    const r = applyLookupColumnRenames(parsed, new Set(), new Set(["bupa_opportunityproduct_offerid", "bupa_opportunityproductid", "bupa_offerid"]));
+    expect(r.filter).toBe(`bupa_opportunityproductid eq ${guid}`);
+  });
+
+  it("keeps a GUID-compared Lookup column wrapped", () => {
+    const r = applyLookupColumnRenames({ ...base, filter: "_contoso_plantype_value eq d345ae8e-c722-f011-8c4d-00224819e439" }, lookups, new Set(["name"]));
+    expect(r.filter).toBe("_contoso_plantype_value eq d345ae8e-c722-f011-8c4d-00224819e439");
   });
 
   it("is a no-op when the entity has no Lookup columns", () => {

@@ -7,12 +7,8 @@ import { callNative } from "../../native/bridge";
 import { fetchAttributes, fetchEntityMeta, isLookupAttributeType } from "../../native/metadataService";
 const { Parser } = pkg;
 
-const GUID_RE =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-
-// Same shape as GUID_RE but also accepts the classic curly-braced CRM GUID text form users copy
-// out of a browser URL or an old CRM screen — used only by the field-name heuristics below, not
-// by formatLiteral (which has its own, narrower notion of "should this be quoted").
+// Also accepts the classic curly-braced CRM GUID text form users copy out of a browser URL or an
+// old CRM screen; OData only takes the bare form, so formatLiteral strips the braces.
 const GUID_LOOSE_RE =
   /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
 
@@ -336,17 +332,29 @@ export async function resolveLookupColumns(
   const lookupNames = new Set(
     attributes.filter((a) => isLookupAttributeType(a.attributeType)).map((a) => a.logicalName.toLowerCase()),
   );
-  return applyLookupColumnRenames(result, lookupNames);
+  const nonLookupNames = new Set(
+    attributes.filter((a) => !isLookupAttributeType(a.attributeType)).map((a) => a.logicalName.toLowerCase()),
+  );
+  return applyLookupColumnRenames(result, lookupNames, nonLookupNames);
 }
 
 /** Pure core of resolveLookupColumns — given the entity's Lookup logical names (lowercased),
  *  rewrite each one named in `$select`/`$orderby`/`$filter` to its `_x_value` shadow-property
- *  form. Split out from the metadata fetch so it can be unit-tested without a live connection. */
-export function applyLookupColumnRenames(result: SelectSimpleResult, lookupLogicalNames: Set<string>): SelectSimpleResult {
-  if (lookupLogicalNames.size === 0) return result;
+ *  form. Also reverses a `_x_value` wrapper when `x` is a known non-Lookup attribute
+ *  (`nonLookupLogicalNames`): translateWhere wraps any column compared to a GUID literal, which is
+ *  wrong for a plain Uniqueidentifier column such as an N:N intersect table's entity ids
+ *  (Bugs/9.9 #9). Split out from the metadata fetch so it can be unit-tested without a live
+ *  connection. */
+export function applyLookupColumnRenames(
+  result: SelectSimpleResult,
+  lookupLogicalNames: Set<string>,
+  nonLookupLogicalNames: Set<string> = new Set(),
+): SelectSimpleResult {
+  if (lookupLogicalNames.size === 0 && nonLookupLogicalNames.size === 0) return result;
 
   const rename = (field: string): string => {
-    if (/^_.+_value$/i.test(field)) return field;
+    const wrapped = /^_(.+)_value$/i.exec(field);
+    if (wrapped) return nonLookupLogicalNames.has(wrapped[1].toLowerCase()) ? wrapped[1] : field;
     return lookupLogicalNames.has(field.toLowerCase()) ? `_${field}_value` : field;
   };
 
@@ -427,7 +435,7 @@ function formatLiteral(node: SqlNode): string {
   if (node.type === "number") return String(node.value);
   if (isStringLiteral(node)) {
     const raw = stringLiteralValue(node);
-    return GUID_RE.test(raw) ? raw : quoteString(raw);
+    return GUID_LOOSE_RE.test(raw) ? raw.replace(/^\{|\}$/g, "") : quoteString(raw);
   }
   if (node.type === "bool") return node.value ? "true" : "false";
   throw new Error(`不支持的字面量类型: ${node.type}`);
