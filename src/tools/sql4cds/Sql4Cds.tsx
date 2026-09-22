@@ -210,7 +210,7 @@ export default function Sql4Cds() {
   const hasEntity = result.kind !== "error" && result.kind !== "empty" && result.kind !== "batch";
   const entityLogicalName = hasEntity ? result.entityLogicalName : null;
   const entitySetGuess = hasEntity ? result.entitySetGuess : null;
-  // A JOIN'd DELETE carries a FetchXML instead of an OData $filter — the two are mutually
+  // A JOIN'd UPDATE/DELETE carries a FetchXML instead of an OData $filter — the two are mutually
   // exclusive on a mutate result (filter is "" when fetchXml is set).
   const mutateFetchXml = result.kind === "mutate" ? (result.fetchXml ?? null) : null;
   const mutateFilter = result.kind === "mutate" && !result.fetchXml ? result.filter : null;
@@ -904,7 +904,7 @@ export default function Sql4Cds() {
       {result.kind === "mutate" && (
         <>
           <OutputRow label="WHERE → $filter" value={result.filter} />
-          <OutputRow label="DELETE + JOIN → 匹配记录用的 FetchXML" value={result.fetchXml ?? null} />
+          <OutputRow label="JOIN → 匹配记录用的 FetchXML" value={result.fetchXml ?? null} />
 
           {matchLoading && <p className="text-xs text-gray-400">正在查询匹配的记录…</p>}
           {matchError && (

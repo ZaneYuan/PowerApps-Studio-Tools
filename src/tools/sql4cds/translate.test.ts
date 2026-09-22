@@ -326,6 +326,7 @@ describe("DELETE with JOIN (Bugs/9.7.md #5 — resolve target ids via FetchXML, 
     expect(r.filter).toBe("");
     expect(r.fetchXml).toBeDefined();
     expect(r.fetchXml).toContain('<attribute name="bupa_agebasedratetableitemid" />');
+    expect(r.fetchXml).toContain('distinct="true"');
     expect(r.fetchXml).toContain('<link-entity name="bupa_agebasedratetable" from="bupa_agedbasedratetableid" to="bupa_agedbasedratetableid" alias="ab" link-type="outer">');
     expect(r.fetchXml).toContain('<link-entity name="product" from="productid" to="bupa_productid" alias="p" link-type="outer" />');
     expect(r.fetchXml).toContain('<condition attribute="productnumber" entityname="p" operator="in">');
@@ -356,7 +357,7 @@ describe("DELETE with JOIN (Bugs/9.7.md #5 — resolve target ids via FetchXML, 
   it("DELETE + JOIN inside a ;-batch is rejected (run it on its own)", () => {
     const r = parseSql("delete from a x join b y on x.bid = y.bid where y.name = 'z'; delete from c where cid = 1");
     expect(r.kind).toBe("error");
-    if (r.kind === "error") expect(r.error).toContain("DELETE + JOIN");
+    if (r.kind === "error") expect(r.error).toContain("JOIN");
   });
 
   it("plain single-table DELETE is unchanged (still an OData $filter, no fetchXml)", () => {
@@ -560,5 +561,57 @@ describe("scanReferencedTables", () => {
   it("ignores keywords inside string literals and comments", () => {
     const sql = ["select name from account where name = 'from contact' -- join lead", "/* update task */"].join("\n");
     expect(scanReferencedTables(sql)).toEqual(["account"]);
+  });
+});
+
+describe("UPDATE with JOIN (Requirements/9.15 #1 — resolve target ids via FetchXML, then update each)", () => {
+  const setAndWhere = "SET pbt.bupa_effectivefrom = '2019-01-01' where p.productnumber in ('IBA2','IBA3')";
+
+  it("accepts the UPDATE t alias JOIN ... SET form from the report", () => {
+    const r = parseSql(`UPDATE bupa_productbenefittype pbt left join product p on p.productid = pbt.bupa_productid ${setAndWhere}`);
+    if (r.kind !== "mutate") throw new Error(`expected mutate, got ${r.kind === "error" ? r.error : r.kind}`);
+    expect(r.action).toBe("update");
+    expect(r.entityLogicalName).toBe("bupa_productbenefittype");
+    expect(r.filter).toBe("");
+    expect(r.setClauses?.map((s) => s.column)).toEqual(["bupa_effectivefrom"]);
+    expect(r.fetchXml).toContain('distinct="true"');
+    expect(r.fetchXml).toContain('<attribute name="bupa_productbenefittypeid" />');
+    expect(r.fetchXml).toContain('<link-entity name="product" from="productid" to="bupa_productid" alias="p" link-type="outer" />');
+    expect(r.fetchXml).toContain('<condition attribute="productnumber" entityname="p" operator="in">');
+  });
+
+  it("accepts the T-SQL UPDATE alias SET ... FROM t alias JOIN ... form", () => {
+    const r = parseSql(
+      "UPDATE pbt SET pbt.bupa_effectivefrom = '2019-01-01' FROM bupa_productbenefittype pbt " +
+        "join product p on p.productid = pbt.bupa_productid where p.productnumber = 'IBA2'",
+    );
+    if (r.kind !== "mutate") throw new Error(`expected mutate, got ${r.kind === "error" ? r.error : r.kind}`);
+    expect(r.entityLogicalName).toBe("bupa_productbenefittype");
+    expect(r.fetchXml).toContain('<link-entity name="product" from="productid" to="bupa_productid" alias="p" />');
+  });
+
+  it("rejects SET on a joined table's column", () => {
+    const r = parseSql("UPDATE bupa_productbenefittype pbt join product p on p.productid = pbt.bupa_productid SET p.name = 'x' where p.productnumber = 'IBA2'");
+    expect(r.kind).toBe("error");
+    if (r.kind === "error") expect(r.error).toContain("JOIN");
+  });
+
+  it("rejects updating the joined table in the FROM form", () => {
+    const r = parseSql("UPDATE p SET name = 'x' FROM bupa_productbenefittype pbt join product p on p.productid = pbt.bupa_productid where p.productnumber = 'IBA2'");
+    expect(r.kind).toBe("error");
+    if (r.kind === "error") expect(r.error).toContain("第一张表");
+  });
+
+  it("still requires a WHERE", () => {
+    const r = parseSql("UPDATE bupa_productbenefittype pbt join product p on p.productid = pbt.bupa_productid SET pbt.bupa_name = 'x'");
+    expect(r.kind).toBe("error");
+    if (r.kind === "error") expect(r.error).toContain("WHERE");
+  });
+
+  it("leaves a plain single-table UPDATE on the OData $filter path, now allowing the table's own alias prefix in SET", () => {
+    const r = parseSql("UPDATE account SET account.name = 'x' WHERE accountnumber = 'A1'");
+    if (r.kind !== "mutate") throw new Error(`expected mutate, got ${r.kind === "error" ? r.error : r.kind}`);
+    expect(r.fetchXml).toBeUndefined();
+    expect(r.filter).toBe("accountnumber eq 'A1'");
   });
 });

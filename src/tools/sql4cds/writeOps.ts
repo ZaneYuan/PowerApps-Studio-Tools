@@ -243,8 +243,8 @@ export async function queryMatchingIds(
   return { ids, totalCount: ids.length, truncated: res.truncated || res.stoppedForSize };
 }
 
-/** The FetchXML counterpart of queryMatchingIds — for a DELETE whose target rows are picked out by
- *  a JOIN (Bugs/9.7.md #5, translate.ts's MutateResult.fetchXml). `fetchXml` already selects just
+/** The FetchXML counterpart of queryMatchingIds — for an UPDATE/DELETE whose target rows are picked
+ *  out by a JOIN (Bugs/9.7.md #5, translate.ts's MutateResult.fetchXml). `fetchXml` already selects just
  *  the target entity's primary key; runPagedQuery follows the fetch paging cookie through every
  *  page. */
 export async function queryMatchingIdsViaFetchXml(

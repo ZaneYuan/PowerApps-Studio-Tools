@@ -75,7 +75,10 @@ interface SetClauseAst {
 
 interface UpdateAst {
   type: "update";
-  table: { table: string }[];
+  /** `UPDATE t a JOIN ... SET` puts every table (JOINs included) here; `UPDATE a SET ... FROM t a
+   *  JOIN ...` puts only the target alias here and the tables in `from`. */
+  table: FromItem[];
+  from?: FromItem[] | null;
   set: SetClauseAst[];
   where: SqlNode | null;
 }
@@ -139,10 +142,10 @@ export interface MutateResult {
   /** OData $filter — WHERE is mandatory for both update and delete (enforced below). Empty string
    *  when `fetchXml` is set instead (a JOIN'd DELETE, see below). */
   filter: string;
-  /** Set only for `DELETE ... JOIN ... WHERE` (Bugs/9.7.md #5): Dataverse has no bulk
-   *  delete-with-join, so the target table's matching primary keys are resolved by running this
-   *  FetchXML (link-entities + WHERE, selecting just the PK), then deleted one by one — exactly
-   *  what the plain-WHERE delete does after queryMatchingIds. `filter` is "" in this case. */
+  /** Set only for a JOIN'd UPDATE/DELETE (Bugs/9.7.md #5, Requirements/9.15 #1): Dataverse has no
+   *  bulk write-with-join, so the target table's matching primary keys are resolved by running this
+   *  FetchXML (link-entities + WHERE, selecting just the PK), then written one by one — exactly
+   *  what the plain-WHERE statement does after queryMatchingIds. `filter` is "" in this case. */
   fetchXml?: string;
   setClauses?: SetClause[];
   warnings: string[];
@@ -1000,14 +1003,47 @@ function parseInsert(ast: InsertAst): ParsedStatement {
   }
 }
 
+/** FetchXML that selects the root (first) table's primary key for every row a JOIN'd UPDATE/DELETE
+ *  matches. `distinct` because a 1:N join returns the same root row once per matching child, which
+ *  would otherwise write the same record repeatedly. */
+function joinTargetIdsFetchXml(fromList: FromItem[], where: SqlNode, table: string): { fetchXml: string; pkAttr: string } {
+  const rootAlias = fromList[0].as ?? table;
+  const pkAttr = guessPrimaryIdAttribute(table);
+  const synthetic: SelectAst = {
+    type: "select",
+    columns: [{ expr: { type: "column_ref", table: rootAlias, column: pkAttr } }],
+    from: fromList,
+    where,
+    groupby: null,
+    having: null,
+    distinct: { type: "DISTINCT" },
+    top: null,
+    orderby: null,
+  };
+  return { fetchXml: translateComplexSelect(synthetic).fetchXml, pkAttr };
+}
+
 function parseUpdate(ast: UpdateAst): ParsedStatement {
-  const table = ast.table?.[0]?.table;
+  const fromList: FromItem[] = ast.from && ast.from.length > 0 ? ast.from : (ast.table ?? []);
+  const root = fromList[0];
+  const table = root?.table;
   if (!table) return { kind: "error", error: "无法识别 UPDATE 的表名。" };
-  if (ast.table.length > 1) return { kind: "error", error: "暂不支持一次 UPDATE 多个表。" };
+  const rootNames = new Set([table.toLowerCase(), (root.as ?? table).toLowerCase()]);
+  const hasJoin = fromList.some((f) => f.join);
+  if (!hasJoin && fromList.length > 1) return { kind: "error", error: "暂不支持逗号并列多表的 UPDATE，请改用 JOIN 写法。" };
+  if (ast.from && ast.from.length > 0) {
+    const target = ast.table?.[0]?.table;
+    if (target && !rootNames.has(target.toLowerCase())) {
+      return {
+        kind: "error",
+        error: `UPDATE 只能更新 FROM 里的第一张表（"${table}"${root.as ? ` ${root.as}` : ""}），不支持更新 JOIN 进来的 "${target}"。`,
+      };
+    }
+  }
   if (!ast.set || ast.set.length === 0) return { kind: "error", error: "UPDATE 必须至少有一个 SET 字段。" };
   for (const s of ast.set) {
-    if (s.table) {
-      return { kind: "error", error: `SET 子句不支持表别名前缀（"${s.table}.${s.column}"）。` };
+    if (s.table && !rootNames.has(s.table.toLowerCase())) {
+      return { kind: "error", error: `SET 只能更新第一张表 "${table}" 的字段，"${s.table}.${s.column}" 属于 JOIN 进来的表。` };
     }
   }
   if (!ast.where) {
@@ -1015,6 +1051,28 @@ function parseUpdate(ast: UpdateAst): ParsedStatement {
       kind: "error",
       error: "UPDATE 必须带 WHERE 子句（不支持不写 WHERE 更新整张表；如果确实要更新全表，请自己写一个恒真条件，例如 WHERE statecode >= 0）。",
     };
+  }
+
+  const setClauses = ast.set.map((s) => ({ column: s.column, value: s.value }));
+
+  if (hasJoin) {
+    try {
+      const { fetchXml, pkAttr } = joinTargetIdsFetchXml(fromList, ast.where, table);
+      return {
+        kind: "mutate",
+        action: "update",
+        entityLogicalName: table,
+        entitySetGuess: naivePluralize(table),
+        filter: "",
+        fetchXml,
+        setClauses,
+        warnings: [
+          `UPDATE + JOIN：先用 FetchXML 查出 ${table} 的匹配记录、再逐条更新；假设其主键字段名为 "${pkAttr}"（Dataverse 惯例：{实体名}+id），若不是这个格式请改写查询。`,
+        ],
+      };
+    } catch (err) {
+      return { kind: "error", error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   const warnings: string[] = [];
@@ -1026,7 +1084,7 @@ function parseUpdate(ast: UpdateAst): ParsedStatement {
       entityLogicalName: table,
       entitySetGuess: naivePluralize(table),
       filter,
-      setClauses: ast.set.map((s) => ({ column: s.column, value: s.value })),
+      setClauses,
       warnings,
     };
   } catch (err) {
@@ -1063,22 +1121,10 @@ function parseDelete(ast: DeleteAst): ParsedStatement {
       }
     }
     try {
-      const pkAttr = guessPrimaryIdAttribute(table);
+      const { fetchXml, pkAttr } = joinTargetIdsFetchXml(fromList, ast.where, table);
       const warnings = [
         `DELETE + JOIN：先用 FetchXML 查出 ${table} 的匹配记录、再逐条删除；假设其主键字段名为 "${pkAttr}"（Dataverse 惯例：{实体名}+id），若不是这个格式请改写查询。`,
       ];
-      const synthetic: SelectAst = {
-        type: "select",
-        columns: [{ expr: { type: "column_ref", table: rootAlias, column: pkAttr } }],
-        from: fromList,
-        where: ast.where,
-        groupby: null,
-        having: null,
-        distinct: null,
-        top: null,
-        orderby: null,
-      };
-      const { fetchXml } = translateComplexSelect(synthetic);
       return {
         kind: "mutate",
         action: "delete",
@@ -1346,7 +1392,7 @@ export function parseSql(sql: string): ParsedStatement {
     for (let i = 0; i < parsed.length; i++) {
       const p = parsed[i];
       if (p.kind === "mutate" && p.fetchXml) {
-        return { kind: "error", error: `第 ${i + 1} 条是 DELETE + JOIN，暂不支持放进批量里，请单独执行。` };
+        return { kind: "error", error: `第 ${i + 1} 条是带 JOIN 的 UPDATE/DELETE，暂不支持放进批量里，请单独执行。` };
       }
       if (p.kind === "insert" || p.kind === "mutate") continue;
       if (p.kind === "error") return { kind: "error", error: `第 ${i + 1} 条语句解析失败：${p.error}` };
