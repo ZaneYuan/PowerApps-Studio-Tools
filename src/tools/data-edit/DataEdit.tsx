@@ -333,7 +333,7 @@ export default function DataEdit() {
         ? selectUpdatedRecordsSql(entityLogicalName, primaryIdAttribute, [...updatedColumnKeys], writtenIds)
         : selectCreatedRecordsSql(entityLogicalName, primaryIdAttribute, writtenIds);
       if (migrationSql.length > 0) {
-        setMigrationNotice({ tabKey: queueTemporaryMigrationSql(migrationSql), recordCount: writtenIds.length });
+        setMigrationNotice({ tabKey: queueTemporaryMigrationSql(activeConnectionId, migrationSql), recordCount: writtenIds.length });
       }
 
       const finishedAt = new Date();

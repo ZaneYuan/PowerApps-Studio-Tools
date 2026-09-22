@@ -255,7 +255,7 @@ export default function DataCopy() {
       }
       const migrationSql = selectCreatedRecordsSql(entityLogicalName, primaryIdAttribute, createdIds);
       if (migrationSql.length > 0) {
-        setMigrationNotice({ tabKey: queueTemporaryMigrationSql(migrationSql), recordCount: createdIds.length });
+        setMigrationNotice({ tabKey: queueTemporaryMigrationSql(activeConnectionId, migrationSql), recordCount: createdIds.length });
       }
 
       const finishedAt = new Date();

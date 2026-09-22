@@ -26,7 +26,7 @@ export default function TabBar({ onToggleSidebar }: { onToggleSidebar: () => voi
 
   function tabLabel(tab: TabInstance): string {
     const toolName = getToolById(tab.toolId)?.name ?? tab.toolId;
-    const scopedConnectionName = tab.temporary ? "temporary" : connectionName(tab);
+    const scopedConnectionName = tab.temporary ? `temporary · ${connectionName(tab) ?? ""}` : connectionName(tab);
     return scopedConnectionName ? `${toolName}（${scopedConnectionName}）` : toolName;
   }
 
@@ -78,7 +78,7 @@ export default function TabBar({ onToggleSidebar }: { onToggleSidebar: () => voi
         {openTabs.map((tab) => {
           const tool = getToolById(tab.toolId);
           if (!tool) return null;
-          const scopedConnectionName = tab.temporary ? null : connectionName(tab);
+          const scopedConnectionName = connectionName(tab);
           const isDirty = dirtyTabKeys.has(tab.tabKey);
           const iconTone = getToolIconTone(tool.category);
           return (

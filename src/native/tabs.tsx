@@ -1,6 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useActiveConnection } from "./activeConnection";
 
 const DATA_MIGRATION_TOOL_ID = "data-migration";
 
@@ -11,9 +10,9 @@ export interface TabInstance {
   tabKey: string;
   toolId: string;
   connectionId: string | null;
-  /** The single Data Migration tab that collects SELECTs for records just written by Data Edit /
-   *  Data Copy (Requirements/9.15 #3). Labelled "temporary" instead of by environment, and never
-   *  reused by openTab. */
+  /** A Data Migration tab that collects SELECTs for records just written by Data Edit / Data Copy
+   *  (Requirements/9.15 #3). One per connection, since the SELECTs only find the records in the
+   *  environment that wrote them; labelled "temporary" and never reused by openTab. */
   temporary?: boolean;
 }
 
@@ -45,9 +44,9 @@ interface TabManagerContextValue {
    *  section reads this. Updated from `openTab` itself (not duplicated in Sidebar) so it reflects
    *  every entry point (sidebar click, home page card, ...) consistently. */
   recentToolIds: string[];
-  /** Appends a SELECT to the temporary Data Migration tab, opening it in the background (bound to
-   *  the sidebar's new-tab connection) when none is open. Returns that tab's key. */
-  queueTemporaryMigrationSql: (statements: string[]) => string;
+  /** Appends SELECTs to `connectionId`'s temporary Data Migration tab, opening it in the background
+   *  when none is open. Returns that tab's key. */
+  queueTemporaryMigrationSql: (connectionId: string, statements: string[]) => string;
   /** Statements queued for a temporary tab that its Data Migration hasn't picked up yet. */
   pendingMigrationSql: Record<string, string[]>;
   clearPendingMigrationSql: (tabKey: string) => void;
@@ -94,8 +93,7 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
   const [pendingMigrationSql, setPendingMigrationSql] = useState<Record<string, string[]>>({});
   // A ref rather than a lookup in openTabs: two writes finishing before the next render must still
   // land in one temporary tab instead of each opening its own.
-  const temporaryTabKeyRef = useRef<string | null>(null);
-  const { activeConnectionId } = useActiveConnection();
+  const temporaryTabKeysRef = useRef(new Map<string, string>());
 
   function recordRecentTool(toolId: string) {
     setRecentToolIds((prev) => {
@@ -121,13 +119,13 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
     setActiveTabKey(tabKey);
   }
 
-  function queueTemporaryMigrationSql(statements: string[]): string {
-    let tabKey = temporaryTabKeyRef.current;
+  function queueTemporaryMigrationSql(connectionId: string, statements: string[]): string {
+    let tabKey = temporaryTabKeysRef.current.get(connectionId);
     if (!tabKey) {
       const newKey = makeTabKey(DATA_MIGRATION_TOOL_ID);
       tabKey = newKey;
-      temporaryTabKeyRef.current = newKey;
-      setOpenTabs((tabs) => [...tabs, { tabKey: newKey, toolId: DATA_MIGRATION_TOOL_ID, connectionId: activeConnectionId, temporary: true }]);
+      temporaryTabKeysRef.current.set(connectionId, newKey);
+      setOpenTabs((tabs) => [...tabs, { tabKey: newKey, toolId: DATA_MIGRATION_TOOL_ID, connectionId, temporary: true }]);
     }
     const key = tabKey;
     setPendingMigrationSql((prev) => ({ ...prev, [key]: [...(prev[key] ?? []), ...statements] }));
@@ -146,7 +144,9 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
   function closeTabs(tabKeys: string[]) {
     const closingKeys = new Set(tabKeys);
     if (closingKeys.size === 0) return;
-    if (temporaryTabKeyRef.current && closingKeys.has(temporaryTabKeyRef.current)) temporaryTabKeyRef.current = null;
+    for (const [connectionId, tabKey] of temporaryTabKeysRef.current) {
+      if (closingKeys.has(tabKey)) temporaryTabKeysRef.current.delete(connectionId);
+    }
     closingKeys.forEach(clearPendingMigrationSql);
     setOpenTabs((tabs) => {
       const activeIndex = tabs.findIndex((t) => t.tabKey === activeTabKey);

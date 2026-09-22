@@ -650,7 +650,7 @@ export default function DataMigration() {
       </div>
       {isTemporaryTab && (
         <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-          临时迁移清单：在数据编辑 / 数据复制里新增或更新的记录会自动追加一条 SELECT 到下面，这些数据待迁移。
+          临时迁移清单：在这个连接上用数据编辑 / 数据复制新增或更新的记录会自动追加一条 SELECT 到下面，这些数据待迁移。
         </div>
       )}
 

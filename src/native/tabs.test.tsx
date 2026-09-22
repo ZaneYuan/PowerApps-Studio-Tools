@@ -34,7 +34,6 @@ function Harness() {
 }
 
 beforeEach(() => {
-  localStorage.setItem("msdpptools.activeConnectionId", "conn-default");
   for (const key of Object.keys(received)) delete received[key];
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -57,25 +56,41 @@ afterEach(() => {
 });
 
 describe("temporary Data Migration tab (Requirements/9.15 #3)", () => {
-  it("opens one temporary tab on the new-tab connection, in the background, even for two writes before a render", () => {
+  it("opens one temporary tab on the writing connection, in the background, even for two writes before a render", () => {
     let first = "";
     let second = "";
     act(() => {
-      first = manager.queueTemporaryMigrationSql(["select * from a where aid in ('1')"]);
-      second = manager.queueTemporaryMigrationSql(["select name from b where bid in ('2')"]);
+      first = manager.queueTemporaryMigrationSql("conn-dev", ["select * from a where aid in ('1')"]);
+      second = manager.queueTemporaryMigrationSql("conn-dev", ["select name from b where bid in ('2')"]);
     });
     expect(second).toBe(first);
-    expect(manager.openTabs).toEqual([{ tabKey: first, toolId: "data-migration", connectionId: "conn-default", temporary: true }]);
+    expect(manager.openTabs).toEqual([{ tabKey: first, toolId: "data-migration", connectionId: "conn-dev", temporary: true }]);
     expect(manager.activeTabKey).toBeNull();
+  });
+
+  it("keeps a separate temporary tab per connection, since each SELECT only finds records in its own environment", () => {
+    let dev = "";
+    let sit = "";
+    act(() => {
+      dev = manager.queueTemporaryMigrationSql("conn-dev", ["s-dev"]);
+      sit = manager.queueTemporaryMigrationSql("conn-sit", ["s-sit"]);
+    });
+    expect(sit).not.toBe(dev);
+    expect(manager.openTabs.map((t) => [t.connectionId, t.temporary])).toEqual([
+      ["conn-dev", true],
+      ["conn-sit", true],
+    ]);
+    expect(received[dev]).toEqual([["s-dev"]]);
+    expect(received[sit]).toEqual([["s-sit"]]);
   });
 
   it("delivers queued statements to the tab once, then clears them", () => {
     let tabKey = "";
     act(() => {
-      tabKey = manager.queueTemporaryMigrationSql(["s1"]);
+      tabKey = manager.queueTemporaryMigrationSql("conn-dev", ["s1"]);
     });
     act(() => {
-      manager.queueTemporaryMigrationSql(["s2", "s3"]);
+      manager.queueTemporaryMigrationSql("conn-dev", ["s2", "s3"]);
     });
     expect(received[tabKey]).toEqual([["s1"], ["s2", "s3"]]);
     expect(manager.pendingMigrationSql).toEqual({});
@@ -84,16 +99,16 @@ describe("temporary Data Migration tab (Requirements/9.15 #3)", () => {
   it("is never reused by a normal openTab, and a new one opens after it's closed", () => {
     let tabKey = "";
     act(() => {
-      tabKey = manager.queueTemporaryMigrationSql(["s1"]);
+      tabKey = manager.queueTemporaryMigrationSql("conn-dev", ["s1"]);
     });
-    act(() => manager.openTab("data-migration", "conn-default"));
+    act(() => manager.openTab("data-migration", "conn-dev"));
     expect(manager.openTabs).toHaveLength(2);
     expect(manager.activeTabKey).not.toBe(tabKey);
 
     act(() => manager.closeTab(tabKey));
     let next = "";
     act(() => {
-      next = manager.queueTemporaryMigrationSql(["s2"]);
+      next = manager.queueTemporaryMigrationSql("conn-dev", ["s2"]);
     });
     expect(next).not.toBe(tabKey);
     expect(manager.openTabs.filter((t) => t.temporary)).toHaveLength(1);
