@@ -41,6 +41,7 @@ export default function NewColumnDialog({
   const [displayName, setDisplayName] = useState("");
   const [schemaName, setSchemaName] = useState("");
   const [schemaNameTouched, setSchemaNameTouched] = useState(false);
+  const [lowercaseSchemaName, setLowercaseSchemaName] = useState(false);
   const [required, setRequired] = useState(false);
   const [description, setDescription] = useState("");
 
@@ -96,8 +97,10 @@ export default function NewColumnDialog({
     }
   }
 
+  const effectiveSchemaName = lowercaseSchemaName ? schemaName.toLowerCase() : schemaName;
+
   async function handleSubmit() {
-    if (!displayName.trim() || !schemaName.trim()) return;
+    if (!displayName.trim() || !effectiveSchemaName.trim()) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -108,7 +111,7 @@ export default function NewColumnDialog({
           return;
         }
         await createLookupColumn(connectionId, solutionUniqueName, {
-          schemaName: schemaName.trim(),
+          schemaName: effectiveSchemaName.trim(),
           displayName: displayName.trim(),
           description,
           required,
@@ -122,11 +125,11 @@ export default function NewColumnDialog({
           setSubmitting(false);
           return;
         }
-        const params: NewColumnParams = { schemaName: schemaName.trim(), displayName: displayName.trim(), description, required };
+        const params: NewColumnParams = { schemaName: effectiveSchemaName.trim(), displayName: displayName.trim(), description, required };
         await createColumnWithGlobalChoice(connectionId, solutionUniqueName, entityLogicalName, globalOptionSetId, params);
       } else {
         const params: NewColumnParams = {
-          schemaName: schemaName.trim(),
+          schemaName: effectiveSchemaName.trim(),
           displayName: displayName.trim(),
           description,
           required,
@@ -178,14 +181,20 @@ export default function NewColumnDialog({
           </div>
           <div>
             <label className={labelCls}>SchemaName（含 publisher 前缀，创建后不可改）</label>
-            <input
-              value={schemaName}
-              onChange={(e) => {
-                setSchemaName(e.target.value);
-                setSchemaNameTouched(true);
-              }}
-              className={`${inputCls} font-mono`}
-            />
+            <div className="flex items-center gap-2">
+              <input
+                value={effectiveSchemaName}
+                onChange={(e) => {
+                  setSchemaName(e.target.value);
+                  setSchemaNameTouched(true);
+                }}
+                className={`${inputCls} font-mono`}
+              />
+              <label className="flex shrink-0 items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+                <input type="checkbox" checked={lowercaseSchemaName} onChange={(e) => setLowercaseSchemaName(e.target.checked)} />
+                转小写
+              </label>
+            </div>
           </div>
 
           {type === "Lookup" && (
