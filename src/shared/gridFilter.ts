@@ -201,7 +201,8 @@ function matchesNumber(rawValue: unknown, filter: GridColumnFilter): boolean {
   const hasValue = rawValue !== null && rawValue !== undefined && rawValue !== "";
   if (filter.operator === "contains-data") return hasValue;
   if (filter.operator === "not-contains-data") return !hasValue;
-  if (!hasValue) return false;
+  // An empty cell is "not equal" to any number, matching how the text/choice filters treat blanks.
+  if (!hasValue) return filter.operator === "not-equals";
   const num = typeof rawValue === "number" ? rawValue : Number(rawValue);
   const filterNum = Number(filter.value);
   if (Number.isNaN(num) || Number.isNaN(filterNum)) return false;
