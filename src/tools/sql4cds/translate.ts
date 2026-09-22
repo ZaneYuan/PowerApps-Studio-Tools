@@ -1157,6 +1157,21 @@ export function guessEditingTable(sqlText: string): string | null {
   }
 }
 
+/** Every name that follows FROM / JOIN / UPDATE / INTO, lowercased and de-duplicated, in text order.
+ *  A plain text scan rather than a parse, so the SQL editor still knows which tables a statement
+ *  touches while a clause is half-typed (`WHERE o.`) or clauses are out of order — both make
+ *  guessEditingTable return null. String literals and comments are skipped. Aliases can match too
+ *  (`UPDATE p SET ... FROM product p`), so callers keep only known entity names. */
+export function scanReferencedTables(sqlText: string): string[] {
+  const code = sqlText.replace(/'(?:[^']|'')*'?|--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)/g, " ");
+  const names: string[] = [];
+  for (const m of code.matchAll(/\b(?:from|join|update|into)\s+\[?([A-Za-z_]\w*)\]?/gi)) {
+    const name = m[1].toLowerCase();
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
 /** Finds the first `[NOT] IN (SELECT ...)` subquery in `sqlText` (case-insensitive) and returns
  *  the offsets of the parenthesized subquery (parens included) plus its own SQL text (parens
  *  excluded) — or null if there isn't one. Text-based rather than AST-based: node-sql-parser's

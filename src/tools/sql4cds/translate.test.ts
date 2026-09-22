@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyLookupColumnRenames, buildSelectPath, guessEditingTable, literalToJsValue, parseSql, previewSql, resultGridSeedColumns, rewriteODataFilterFields, type SelectSimpleResult } from "./translate";
+import { applyLookupColumnRenames, buildSelectPath, guessEditingTable, literalToJsValue, parseSql, previewSql, resultGridSeedColumns, rewriteODataFilterFields, scanReferencedTables, type SelectSimpleResult } from "./translate";
 
 describe("parseSql — simple SELECT", () => {
   it("translates a basic filter/orderby/top", () => {
@@ -531,5 +531,34 @@ describe("applyLookupColumnRenames", () => {
   it("is a no-op when the entity has no Lookup columns", () => {
     const input = { ...base, select: "name,contoso_plantype" };
     expect(applyLookupColumnRenames(input, new Set())).toBe(input);
+  });
+});
+
+describe("scanReferencedTables", () => {
+  it("finds the FROM and JOIN tables of a half-typed query that doesn't parse (Bugs/9.9 #3)", () => {
+    const sql = [
+      "select * from bupa_bupa_offer_product op",
+      "  left join product p on op.productid = p.productid",
+      " left join bupa_offer o on o.bupa_offerid = op.bupa_offerid",
+      "where o.",
+    ].join("\n");
+    expect(guessEditingTable(sql)).toBeNull();
+    expect(scanReferencedTables(sql)).toEqual(["bupa_bupa_offer_product", "product", "bupa_offer"]);
+  });
+
+  it("finds the table when clauses are out of order (Bugs/9.9 #2)", () => {
+    const sql = ["select top 100 bupa_name from bupa_productbenefittype order by createdon desc", "where bupa_under"].join("\n");
+    expect(guessEditingTable(sql)).toBeNull();
+    expect(scanReferencedTables(sql)).toEqual(["bupa_productbenefittype"]);
+  });
+
+  it("covers UPDATE / INSERT INTO, lowercases, de-duplicates and strips brackets", () => {
+    expect(scanReferencedTables("UPDATE [Account] SET name = 'x' WHERE accountid in (select accountid from account)")).toEqual(["account"]);
+    expect(scanReferencedTables("insert into contact (firstname) values ('a')")).toEqual(["contact"]);
+  });
+
+  it("ignores keywords inside string literals and comments", () => {
+    const sql = ["select name from account where name = 'from contact' -- join lead", "/* update task */"].join("\n");
+    expect(scanReferencedTables(sql)).toEqual(["account"]);
   });
 });

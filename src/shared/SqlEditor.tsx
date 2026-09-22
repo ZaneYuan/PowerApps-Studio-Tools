@@ -3,7 +3,8 @@ import { Compartment, EditorState, Prec, type Extension } from "@codemirror/stat
 import { EditorView, keymap, placeholder as placeholderExt } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { MSSQL, sql } from "@codemirror/lang-sql";
+import { sql } from "@codemirror/lang-sql";
+import { TSQL } from "./sqlDialect";
 import { acceptCompletion, autocompletion, snippetCompletion, type CompletionSource } from "@codemirror/autocomplete";
 import { tags as t } from "@lezer/highlight";
 
@@ -176,8 +177,8 @@ export default function SqlEditor({ value, onChange, schema, defaultTable, place
           basicSetup,
           tabAccepts,
           autocompletion(),
-          languageConf.current.of(sql({ dialect: MSSQL, schema, defaultTable, upperCaseKeywords: true })),
-          MSSQL.language.data.of({ autocomplete: snippetSource }),
+          languageConf.current.of(sql({ dialect: TSQL, schema, defaultTable, upperCaseKeywords: true })),
+          TSQL.language.data.of({ autocomplete: snippetSource }),
           syntaxHighlighting(lightHighlight),
           syntaxHighlighting(darkHighlight),
           themeConf.current.of(chrome(isDarkPreferred())),
@@ -212,7 +213,7 @@ export default function SqlEditor({ value, onChange, schema, defaultTable, place
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
-      effects: languageConf.current.reconfigure(sql({ dialect: MSSQL, schema, defaultTable, upperCaseKeywords: true })),
+      effects: languageConf.current.reconfigure(sql({ dialect: TSQL, schema, defaultTable, upperCaseKeywords: true })),
     });
     // Keyed on a cheap fingerprint rather than the schema object identity — the caller rebuilds
     // schema on every render, and reconfiguring on every keystroke would reset completion state.
