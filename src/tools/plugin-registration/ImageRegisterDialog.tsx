@@ -169,6 +169,7 @@ export default function ImageRegisterDialog({
                 selected={selectedAttributes}
                 onToggle={toggleAttribute}
                 onToggleAll={toggleAllAttributes}
+                initiallyShowUnchecked={selectedAttributes.size === 0}
               />
             ) : (
               <div>

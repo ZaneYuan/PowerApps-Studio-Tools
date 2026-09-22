@@ -19,6 +19,7 @@ function AttributePicker({
   onToggle,
   onToggleAll,
   renderBadge,
+  initiallyShowUnchecked = true,
 }: {
   label: string;
   options: string[];
@@ -29,10 +30,12 @@ function AttributePicker({
    *  works regardless of any visual filtering. */
   onToggleAll: (selectAll: boolean) => void;
   renderBadge?: (name: string) => ReactNode;
+  /** Mount-time state of the 未勾选 filter; the user can change it afterwards. */
+  initiallyShowUnchecked?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [showChecked, setShowChecked] = useState(true);
-  const [showUnchecked, setShowUnchecked] = useState(true);
+  const [showUnchecked, setShowUnchecked] = useState(initiallyShowUnchecked);
   const allSelected = options.length > 0 && options.every((o) => selected.has(o));
 
   const filtered = useMemo(() => {

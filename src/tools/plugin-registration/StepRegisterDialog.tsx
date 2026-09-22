@@ -351,6 +351,7 @@ export default function StepRegisterDialog({
                 selected={selectedAttributes}
                 onToggle={toggleAttribute}
                 onToggleAll={toggleAllAttributes}
+                initiallyShowUnchecked={selectedAttributes.size === 0}
               />
             )}
 
