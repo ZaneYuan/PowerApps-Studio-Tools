@@ -106,6 +106,14 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./bpf-viewer/BpfViewer")),
   },
   {
+    id: "workflow-viewer",
+    name: "Workflow 查看器",
+    description: "查看经典工作流、Action、业务规则和云端流的触发时机与具体操作。",
+    category: "Power Apps",
+    icon: "workflow",
+    Component: lazy(() => import("./workflow-viewer/WorkflowViewer")),
+  },
+  {
     id: "solution-diff",
     name: "Solution 深度对比",
     description: "对比两个解决方案包的组件差异。",
