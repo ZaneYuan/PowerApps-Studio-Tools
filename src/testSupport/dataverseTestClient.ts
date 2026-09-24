@@ -32,7 +32,7 @@ const API_BASE = `${TEST_ORG_URL}/api/data/v9.2/`;
 // below makes this entirely optional: a machine without this exact path just falls through to the
 // interactive-cache flow. The note itself is parsed for "clientId"/"clientSecret"/"tenantId".
 const CREDENTIALS_MD_PATH =
-  "D:/document/ObsidianLocal/01-Projects/MSD365-PP-Tools/Tests/ZaneYuan1.md";
+  "D:/Material/Documents/obsidian3/ObsidianLocal/01-Projects/MSD365-PP-Tools/Tests/ZaneYuan1.md";
 
 interface ClientCredentialsConfig {
   clientId: string;
