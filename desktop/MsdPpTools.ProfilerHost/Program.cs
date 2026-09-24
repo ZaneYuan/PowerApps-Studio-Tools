@@ -30,6 +30,8 @@ internal sealed class HostRequest
     public string? AssemblyPath { get; set; }
     public string? TypeName { get; set; }
     public bool LaunchDebugger { get; set; }
+    public string? Operation { get; set; }
+    public string? Data { get; set; }
 }
 
 /// <summary>Hands the desktop shell's existing MSAL access token to CrmServiceClient, so the
@@ -53,11 +55,18 @@ internal static class Program
 {
     private static string _prtDirectory = "";
 
-    /// <summary>Commands: install | uninstall | enable | disable | decode | replay. Writes exactly
-    /// one JSON line to stdout: {"ok":true,"result":…} or {"ok":false,"error":"…"}.</summary>
+    private const string RibbonWorkbenchCommand = "rwb-serve";
+
+    /// <summary>Commands: install | uninstall | enable | disable | decode | replay read one request
+    /// from stdin and write exactly one JSON line to stdout: {"ok":true,"result":…} or
+    /// {"ok":false,"error":"…"}. rwb-serve instead stays running and answers one request line with
+    /// one result line until stdin closes.</summary>
     private static int Main(string[] args)
     {
         Console.OutputEncoding = new UTF8Encoding(false);
+        // Dispatched before anything touches Run: JIT-compiling Run loads PluginProfiler.Library
+        // for its Profiler calls, which Ribbon Workbench runs without.
+        if (args.Length == 1 && args[0] == RibbonWorkbenchCommand) return ServeRibbonWorkbench();
         try
         {
             if (args.Length != 1) throw new ArgumentException("Usage: MsdPpTools.ProfilerHost <command> < request.json");
@@ -124,6 +133,28 @@ internal static class Program
             default:
                 throw new ArgumentException($"Unknown command \"{command}\".");
         }
+    }
+
+    private static int ServeRibbonWorkbench()
+    {
+        string? line;
+        while ((line = Console.In.ReadLine()) is not null)
+        {
+            JObject response;
+            // Request boundary: a failure is reported for this request and the host keeps serving.
+            try
+            {
+                var request = JsonConvert.DeserializeObject<HostRequest>(line) ?? throw new ArgumentException("Empty request.");
+                response = new JObject { ["ok"] = true, ["result"] = RibbonWorkbenchAction.Execute(request) };
+            }
+            catch (Exception ex)
+            {
+                response = new JObject { ["ok"] = false, ["error"] = Describe(ex) };
+            }
+            Console.WriteLine(response.ToString(Formatting.None));
+            Console.Out.Flush();
+        }
+        return 0;
     }
 
     private static CrmServiceClient Connect(HostRequest request)

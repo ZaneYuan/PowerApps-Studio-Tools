@@ -77,7 +77,7 @@ public static class ProfilerHandlers
     private static ProfilerParams Parse(JsonElement @params) =>
         @params.Deserialize<ProfilerParams>(NativeBridge.JsonOptions) ?? throw new ArgumentException("缺少请求参数");
 
-    private static string HostPath => Path.Combine(AppContext.BaseDirectory, "ProfilerHost", "MsdPpTools.ProfilerHost.exe");
+    internal static string HostPath =>Path.Combine(AppContext.BaseDirectory, "ProfilerHost", "MsdPpTools.ProfilerHost.exe");
 
     /// <summary>The official Plugin Registration Tool as restored by NuGet
     /// (`Microsoft.CrmSdk.XrmTooling.PluginRegistrationTool`). Its Profiler libraries are not

@@ -100,7 +100,7 @@ export const tools: ToolDefinition[] = [
   {
     id: "ribbon-workbench-embedded",
     name: "Ribbon Workbench",
-    description: "嵌入环境里已安装的 Develop1 Ribbon Workbench 2016，编辑命令栏与功能区。",
+    description: "内嵌 Develop1 Ribbon Workbench 2016，用当前连接编辑命令栏与功能区，环境无需安装、无需登录。",
     category: "Power Apps",
     icon: "ribbon",
     Component: lazy(() => import("./ribbon-workbench-embedded/RibbonWorkbenchEmbedded")),

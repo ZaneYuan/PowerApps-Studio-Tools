@@ -34,7 +34,7 @@ public partial class MainWindow : Window
         DialogHandlers.Register(_bridge);
         PluginInspectionHandlers.Register(_bridge);
         ProfilerHandlers.Register(_bridge, _connectionStore, _authService);
-        EmbeddedBrowserHandlers.Register(_bridge, Browser, _connectionStore);
+        RibbonWorkbenchHost.Register(_bridge, Browser.CoreWebView2, _authService, _connectionStore);
 
 #if DEBUG
         // Dev mode: point straight at the Vite dev server so the existing `npm run dev`
