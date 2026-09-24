@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security;
@@ -38,11 +39,17 @@ public sealed class RibbonWorkbenchHost
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "MscrmTools", "XrmToolBox", "Plugins", "RibbonWorkbench", "RibbonWorkbench2016_managed.zip");
 
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
+    // Responses are handed to WebView2 with only a Content-Type header, so the body must already be
+    // decoded: Dataverse brotli-compresses ClientGlobalContext.js.aspx and friends whenever the
+    // request offers it, and passing those bytes through left RWB stuck on its loading spinner.
+    private static readonly HttpClient Http = new(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All })
+    {
+        Timeout = TimeSpan.FromMinutes(5),
+    };
 
     private static readonly HashSet<string> SkippedRequestHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Host", "Origin", "Referer", "Cookie", "Authorization", "Content-Length", "Connection",
+        "Host", "Origin", "Referer", "Cookie", "Authorization", "Content-Length", "Connection", "Accept-Encoding",
     };
 
     private sealed class OpenParams
