@@ -54,12 +54,21 @@ type SelectedNode =
   | { kind: "entity-columns"; component: SolutionComponentRow }
   | { kind: "other"; component: SolutionComponentRow };
 
+type SolutionFilter = "unmanaged" | "managed" | "all";
+
+const SOLUTION_FILTERS: { key: SolutionFilter; label: string }[] = [
+  { key: "unmanaged", label: "非托管" },
+  { key: "managed", label: "托管" },
+  { key: "all", label: "全部" },
+];
+
 export default function SolutionEditor() {
   const { activeConnectionId } = useActiveConnection();
 
   const [solutions, setSolutions] = useState<SolutionSummary[] | null>(null);
   const [solutionsError, setSolutionsError] = useState<string | null>(null);
   const [showNewSolution, setShowNewSolution] = useState(false);
+  const [solutionFilter, setSolutionFilter] = useState<SolutionFilter>("unmanaged");
 
   const [selected, setSelected] = useState<SolutionSummary | null>(null);
   const [components, setComponents] = useState<SolutionComponentRow[] | null>(null);
@@ -107,7 +116,6 @@ export default function SolutionEditor() {
   }
 
   function openSolution(s: SolutionSummary) {
-    if (s.ismanaged) return; // read-only in v1 — nothing to edit on a managed solution
     setSelected(s);
     setSelectedNode(null);
     setTablesGroupOpen(true);
@@ -238,10 +246,13 @@ export default function SolutionEditor() {
 
   // ---- List view ----
   if (!selected) {
+    const visibleSolutions = solutions?.filter((s) =>
+      solutionFilter === "all" ? true : solutionFilter === "managed" ? s.ismanaged : !s.ismanaged,
+    );
     return (
       <div className="space-y-4">
         <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-          查看或新建解决方案。进入一个非托管解决方案后可以浏览组件、添加已有组件（表、Web Resource、插件、流程等）、新建表/字段/Web Resource、管理发布者并发布。托管解决方案只能查看。
+          查看或新建解决方案。进入一个非托管解决方案后可以浏览组件、添加已有组件（表、Web Resource、插件、流程等）、新建表/字段/Web Resource、管理发布者并发布。托管解决方案只能浏览组件。
         </div>
 
         <div className="flex items-center gap-2">
@@ -253,10 +264,26 @@ export default function SolutionEditor() {
           </button>
         </div>
 
+        <div className="flex items-center gap-2">
+          {SOLUTION_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setSolutionFilter(f.key)}
+              className={
+                solutionFilter === f.key
+                  ? "rounded-full bg-purple-600 px-3 py-1 text-sm font-medium text-white"
+                  : "rounded-full border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+              }
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
         {solutionsError && <ErrorMessage error={solutionsError} />}
         {!solutions && !solutionsError && <p className="text-sm text-gray-400">加载中…</p>}
 
-        {solutions && (
+        {visibleSolutions && (
           <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
             <table className="w-full text-left text-sm">
               <thead className="bg-gray-50 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
@@ -269,11 +296,18 @@ export default function SolutionEditor() {
                 </tr>
               </thead>
               <tbody>
-                {solutions.map((s) => (
+                {visibleSolutions.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-4 text-center text-sm text-gray-400">
+                      没有符合条件的解决方案。
+                    </td>
+                  </tr>
+                )}
+                {visibleSolutions.map((s) => (
                   <tr
                     key={s.solutionid}
                     onClick={() => openSolution(s)}
-                    className={`border-t border-gray-100 dark:border-gray-800 ${s.ismanaged ? "opacity-60" : "cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800"}`}
+                    className="cursor-pointer border-t border-gray-100 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800"
                   >
                     <td className="px-3 py-2 font-medium">{s.friendlyname}</td>
                     <td className="px-3 py-2 font-mono text-xs">{s.uniquename}</td>
@@ -338,6 +372,7 @@ export default function SolutionEditor() {
     otherGrouped.set(c.componenttype, list);
   }
   const otherGroupTypes = [...otherGrouped.keys()].sort((a, b) => (COMPONENT_TYPE_LABELS[a] ?? "").localeCompare(COMPONENT_TYPE_LABELS[b] ?? ""));
+  const readOnly = selected.ismanaged;
 
   return (
     <div className="space-y-4">
@@ -345,28 +380,33 @@ export default function SolutionEditor() {
         <button onClick={backToList} className="text-sm text-blue-600 hover:underline dark:text-blue-400">
           ← 返回列表
         </button>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handlePublishThisSolution}
-            disabled={publishing || (entityRows.length === 0 && webResourceRows.length === 0)}
-            title="只发布这个 solution 里的表和 Web Resource（PublishXml 显式列出组件），不影响其它 solution"
-            className="rounded-md border border-purple-300 px-3 py-1.5 text-sm font-medium text-purple-700 hover:bg-purple-50 disabled:opacity-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-900/20"
-          >
-            {publishing ? "发布中…" : "只发布这个 Solution"}
-          </button>
-          <button
-            onClick={handlePublish}
-            disabled={publishing}
-            title="Dataverse 没有'只发布一个 solution'的原语，这个按钮走 PublishAllXml，会republish 整个环境的自定义"
-            className="rounded-md bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
-          >
-            {publishing ? "发布中…" : "发布全部自定义"}
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handlePublishThisSolution}
+              disabled={publishing || (entityRows.length === 0 && webResourceRows.length === 0)}
+              title="只发布这个 solution 里的表和 Web Resource（PublishXml 显式列出组件），不影响其它 solution"
+              className="rounded-md border border-purple-300 px-3 py-1.5 text-sm font-medium text-purple-700 hover:bg-purple-50 disabled:opacity-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-900/20"
+            >
+              {publishing ? "发布中…" : "只发布这个 Solution"}
+            </button>
+            <button
+              onClick={handlePublish}
+              disabled={publishing}
+              title="Dataverse 没有'只发布一个 solution'的原语，这个按钮走 PublishAllXml，会republish 整个环境的自定义"
+              className="rounded-md bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+            >
+              {publishing ? "发布中…" : "发布全部自定义"}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-        <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{selected.friendlyname}</h2>
+        <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          {selected.friendlyname}
+          {readOnly && <span className="ml-2 rounded bg-gray-100 px-1.5 py-0.5 text-xs font-normal text-gray-500 dark:bg-gray-800">Managed · 只读</span>}
+        </h2>
         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
           {selected.uniquename} · v{selected.version} · {selected.publisherName} ({selected.publisherPrefix})
         </p>
@@ -375,20 +415,22 @@ export default function SolutionEditor() {
         {publishDone && <p className="mt-2 text-xs text-green-600 dark:text-green-400">已发布。</p>}
       </div>
 
-      <div className="flex items-center gap-2">
-        <DropdownMenuButton
-          label="+ 新建"
-          items={NEW_KINDS}
-          onSelect={handleNewKind}
-          buttonClassName="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-        />
-        <DropdownMenuButton
-          label="添加现有"
-          items={ADD_EXISTING_KINDS}
-          onSelect={(key) => setAddExistingKind(ADD_EXISTING_KINDS.find((k) => k.key === key) ?? null)}
-          buttonClassName="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-        />
-      </div>
+      {!readOnly && (
+        <div className="flex items-center gap-2">
+          <DropdownMenuButton
+            label="+ 新建"
+            items={NEW_KINDS}
+            onSelect={handleNewKind}
+            buttonClassName="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+          />
+          <DropdownMenuButton
+            label="添加现有"
+            items={ADD_EXISTING_KINDS}
+            onSelect={(key) => setAddExistingKind(ADD_EXISTING_KINDS.find((k) => k.key === key) ?? null)}
+            buttonClassName="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+          />
+        </div>
+      )}
 
       <div className="flex gap-3">
         <div className="w-72 shrink-0 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-800" style={{ maxHeight: "60vh" }}>
@@ -498,7 +540,7 @@ export default function SolutionEditor() {
                 {COMPONENT_TYPE_LABELS[selectedNode.component.componenttype] ?? `类型 ${selectedNode.component.componenttype}`}
               </p>
               <p className="mt-1 font-mono text-xs text-gray-400">{selectedNode.component.objectid}</p>
-              {selectedNode.component.componenttype === WEB_RESOURCE_COMPONENT_TYPE && (
+              {!readOnly && selectedNode.component.componenttype === WEB_RESOURCE_COMPONENT_TYPE && (
                 <button
                   onClick={() => publishComponents([], [selectedNode.component.objectid])}
                   disabled={publishing}
@@ -558,7 +600,7 @@ export default function SolutionEditor() {
                     onClick={() => selectEntityColumns(selectedNode.component)}
                     className="mt-4 rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
                   >
-                    查看/管理字段 →
+                    {readOnly ? "查看字段 →" : "查看/管理字段 →"}
                   </button>
                 </>
               )}
@@ -576,13 +618,15 @@ export default function SolutionEditor() {
                     {selectedNode.component.name} · 字段（Columns）
                   </h3>
                 </div>
-                <button
-                  onClick={() => setShowNewColumn(true)}
-                  disabled={!selectedNode.component.logicalName}
-                  className="rounded-md border border-blue-300 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
-                >
-                  + 新建字段
-                </button>
+                {!readOnly && (
+                  <button
+                    onClick={() => setShowNewColumn(true)}
+                    disabled={!selectedNode.component.logicalName}
+                    className="rounded-md border border-blue-300 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                  >
+                    + 新建字段
+                  </button>
+                )}
               </div>
               {entityFieldsError && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{entityFieldsError}</p>}
               {!entityFields && !entityFieldsError && <p className="mt-2 text-xs text-gray-400">加载字段中…</p>}
