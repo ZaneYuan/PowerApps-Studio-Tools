@@ -116,6 +116,40 @@ describe("parseSql — JOIN / GROUP BY (complex select -> FetchXML)", () => {
     expect(r.fetchXml).toContain('<link-entity name="uom" from="uomid" to="uomid" alias="u" />');
   });
 
+  it("rootAlias.* selects the root table's all-attributes, and the JOIN only filters (Requirements/9.23 #5)", () => {
+    const r = parseSql(
+      "select bpt.* from bupa_productbenefittype bpt left join product p on p.productid = bpt.bupa_productid where p.productnumber in ('IBA1','IBA2')",
+    );
+    if (r.kind !== "select-complex") throw new Error(r.kind === "error" ? r.error : "expected select-complex");
+    expect(r.rootAlias).toBe("bpt");
+    expect(r.rootRowsOnly).toBe(true);
+    expect(r.outputColumns).toEqual([]);
+    expect(r.fetchXml).toContain('<entity name="bupa_productbenefittype">\n    <all-attributes />');
+    expect(r.fetchXml).toContain('<link-entity name="product" from="productid" to="bupa_productid" alias="p" link-type="outer" />');
+    expect(r.fetchXml).toContain('<condition attribute="productnumber" entityname="p" operator="in">');
+  });
+
+  it("a bare * with a JOIN is rejected by default, but means the root table when the caller opts in", () => {
+    const sql = "select * from bupa_productbenefittype bpt join product p on p.productid = bpt.bupa_productid";
+    const plain = parseSql(sql);
+    expect(plain.kind).toBe("error");
+    if (plain.kind === "error") expect(plain.error).toContain("bpt.*");
+    const opted = parseSql(sql, { bareStarSelectsRootTable: true });
+    if (opted.kind !== "select-complex") throw new Error("expected select-complex");
+    expect(opted.rootRowsOnly).toBe(true);
+    expect(opted.fetchXml).toContain("<all-attributes />");
+  });
+
+  it("explicit root columns keep rootRowsOnly; a joined column, alias.* on a joined table, or DISTINCT clear it", () => {
+    const rootOnly = parseSql("select bpt.bupa_name from bupa_productbenefittype bpt join product p on p.productid = bpt.bupa_productid");
+    const joinedColumn = parseSql("select bpt.bupa_name, p.name from bupa_productbenefittype bpt join product p on p.productid = bpt.bupa_productid");
+    const joinedStar = parseSql("select p.* from bupa_productbenefittype bpt join product p on p.productid = bpt.bupa_productid");
+    const distinct = parseSql("select distinct bpt.bupa_name from bupa_productbenefittype bpt join product p on p.productid = bpt.bupa_productid");
+    const flags = [rootOnly, joinedColumn, joinedStar, distinct].map((r) => (r.kind === "select-complex" ? r.rootRowsOnly : r.kind));
+    expect(flags).toEqual([true, false, false, false]);
+    if (joinedStar.kind === "select-complex") expect(joinedStar.fetchXml).toContain('alias="p">\n      <all-attributes />');
+  });
+
   it("LEFT JOIN explicitly emits link-type=\"outer\"", () => {
     const r = parseSql("select p.name from product p LEFT JOIN uom u on p.uomid = u.uomid");
     if (r.kind !== "select-complex") throw new Error("expected select-complex");
@@ -405,7 +439,10 @@ describe("buildSelectPath", () => {
   });
 
   it("builds a fetchXml= path for a complex select", () => {
-    const path = buildSelectPath({ kind: "select-complex", entityLogicalName: "account", entitySetGuess: "accounts", fetchXml: "<fetch/>", outputColumns: [], warnings: [] }, "accounts");
+    const path = buildSelectPath(
+      { kind: "select-complex", entityLogicalName: "account", entitySetGuess: "accounts", fetchXml: "<fetch/>", outputColumns: [], rootAlias: "account", rootRowsOnly: true, warnings: [] },
+      "accounts",
+    );
     expect(path).toBe("accounts?fetchXml=%3Cfetch%2F%3E");
   });
 });

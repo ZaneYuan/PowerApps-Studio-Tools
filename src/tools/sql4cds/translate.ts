@@ -114,7 +114,19 @@ export interface SelectComplexResult {
    *  column that's null on every row still shows (Bugs/9.7.md #3) and columns keep SELECT order
    *  (Bugs/9.9 #4). */
   outputColumns: string[];
+  /** The FROM table's alias (its own name when unaliased). */
+  rootAlias: string;
+  /** Every row is exactly one root record's own columns: no DISTINCT, no GROUP BY/aggregate, no
+   *  joined-table column selected — JOINs only narrow which root records come back. Data Edit
+   *  needs this to write rows back to the root table. */
+  rootRowsOnly: boolean;
   warnings: string[];
+}
+
+export interface ParseOptions {
+  /** Read a bare `SELECT *` in a JOIN query as the root table's columns only (Data Edit, which
+   *  can only write back the root table), instead of rejecting it as ambiguous. */
+  bareStarSelectsRootTable?: boolean;
 }
 
 export interface InsertResult {
@@ -733,10 +745,15 @@ function translateFetchXmlFilter(node: SqlNode, knownAliases: Set<string>, rootA
  *  conditions. `<link-entity from="" to="">` is purely syntactic (just the ON clause's two
  *  attribute names) — no relationship metadata lookup needed, confirmed against FetchXML Builder's
  *  own LinkEntity type (also plain free-text from/to fields). */
-function translateComplexSelect(ast: SelectAst): {
+function translateComplexSelect(
+  ast: SelectAst,
+  options: ParseOptions,
+): {
   entityLogicalName: string;
   fetchXml: string;
   outputColumns: string[];
+  rootAlias: string;
+  rootRowsOnly: boolean;
   warnings: string[];
 } {
   const warnings: string[] = [];
@@ -813,16 +830,33 @@ function translateComplexSelect(ast: SelectAst): {
     }
   }
 
-  if (typeof ast.columns === "string" || ast.columns.some((c) => isStar(c.expr))) {
-    throw new Error("使用 DISTINCT / JOIN / GROUP BY / 聚合函数时不支持 SELECT *，请显式列出字段。");
-  }
-  const hasAggregate = ast.columns.some((c) => c.expr.type === "aggr_func");
+  const columns: ColumnItem[] = typeof ast.columns === "string" ? [{ expr: { type: "star" }, as: null }] : ast.columns;
+  const hasAggregate = columns.some((c) => c.expr.type === "aggr_func");
   const needsGrouping = hasAggregate || !!ast.groupby;
 
+  let rootAllAttributes = false;
   const selectedKeys = new Set<string>();
   const outputColumns: string[] = [];
-  for (const c of ast.columns) {
+  for (const c of columns) {
     const expr = c.expr;
+
+    // `alias.*` is one table's <all-attributes />. A bare `*` is ambiguous across joined tables,
+    // so it's only accepted where the caller has said it means the root table.
+    if (isStar(expr)) {
+      if (ast.distinct || needsGrouping) {
+        throw new Error("使用 DISTINCT / GROUP BY / 聚合函数时不支持 SELECT *，请显式列出字段。");
+      }
+      const starAlias = expr.type === "column_ref" ? parseColumnRefNormalized(expr).table : null;
+      const alias = starAlias ?? (options.bareStarSelectsRootTable ? rootAlias : null);
+      if (!alias) throw new Error(`JOIN 查询里不能单独写 SELECT *，请写 ${rootAlias}.*（主表全部字段）或显式列出字段。`);
+      if (alias === rootAlias) rootAllAttributes = true;
+      else {
+        const link = linkByAlias.get(alias);
+        if (!link) throw new Error(`SELECT 列表引用了未知的表别名 "${alias}"。`);
+        link.allAttributes = true;
+      }
+      continue;
+    }
 
     if (expr.type === "aggr_func") {
       const fnName = (expr.name ?? "").toUpperCase();
@@ -908,6 +942,7 @@ function translateComplexSelect(ast: SelectAst): {
   const query: FxQuery = {
     entityName: rootEntity,
     attributes: rootAttributes,
+    allAttributes: rootAllAttributes,
     aggregate: needsGrouping,
     distinct: !!ast.distinct,
     top: ast.top ? String(ast.top.value) : null,
@@ -916,10 +951,12 @@ function translateComplexSelect(ast: SelectAst): {
     orders,
   };
 
-  return { entityLogicalName: rootEntity, fetchXml: serializeFetchXml(query), outputColumns, warnings };
+  const rootRowsOnly =
+    !ast.distinct && !needsGrouping && [...linkByAlias.values()].every((link) => link.attributes.length === 0 && !link.allAttributes);
+  return { entityLogicalName: rootEntity, fetchXml: serializeFetchXml(query), outputColumns, rootAlias, rootRowsOnly, warnings };
 }
 
-function parseSelect(ast: SelectAst): ParsedStatement {
+function parseSelect(ast: SelectAst, options: ParseOptions): ParsedStatement {
   if (!ast.from || ast.from.length === 0) {
     return { kind: "error", error: "无法识别 FROM 子句中的表名。" };
   }
@@ -935,8 +972,17 @@ function parseSelect(ast: SelectAst): ParsedStatement {
 
   if (isComplex) {
     try {
-      const { entityLogicalName, fetchXml, outputColumns, warnings } = translateComplexSelect(ast);
-      return { kind: "select-complex", entityLogicalName, entitySetGuess: naivePluralize(entityLogicalName), fetchXml, outputColumns, warnings };
+      const { entityLogicalName, fetchXml, outputColumns, rootAlias, rootRowsOnly, warnings } = translateComplexSelect(ast, options);
+      return {
+        kind: "select-complex",
+        entityLogicalName,
+        entitySetGuess: naivePluralize(entityLogicalName),
+        fetchXml,
+        outputColumns,
+        rootAlias,
+        rootRowsOnly,
+        warnings,
+      };
     } catch (err) {
       return { kind: "error", error: err instanceof Error ? err.message : String(err) };
     }
@@ -1020,7 +1066,7 @@ function joinTargetIdsFetchXml(fromList: FromItem[], where: SqlNode, table: stri
     top: null,
     orderby: null,
   };
-  return { fetchXml: translateComplexSelect(synthetic).fetchXml, pkAttr };
+  return { fetchXml: translateComplexSelect(synthetic, {}).fetchXml, pkAttr };
 }
 
 function parseUpdate(ast: UpdateAst): ParsedStatement {
@@ -1159,8 +1205,8 @@ function parseDelete(ast: DeleteAst): ParsedStatement {
   }
 }
 
-function parseOneStatement(ast: { type?: string }): ParsedStatement {
-  if (ast.type === "select") return parseSelect(ast as unknown as SelectAst);
+function parseOneStatement(ast: { type?: string }, options: ParseOptions): ParsedStatement {
+  if (ast.type === "select") return parseSelect(ast as unknown as SelectAst, options);
   if (ast.type === "insert") return parseInsert(ast as unknown as InsertAst);
   if (ast.type === "update") return parseUpdate(ast as unknown as UpdateAst);
   if (ast.type === "delete") return parseDelete(ast as unknown as DeleteAst);
@@ -1338,7 +1384,7 @@ export async function resolveSqlSubqueries(connectionId: string, sqlText: string
 // parser gets a chance to either mis-parse or reject it.
 const RIGHT_JOIN_RE = /\bright\s+(outer\s+)?join\b/i;
 
-export function parseSql(sql: string): ParsedStatement {
+export function parseSql(sql: string, options: ParseOptions = {}): ParsedStatement {
   if (!sql.trim()) return { kind: "empty" };
   if (RIGHT_JOIN_RE.test(sql)) {
     return {
@@ -1386,9 +1432,9 @@ export function parseSql(sql: string): ParsedStatement {
   // batch since there's no single result shape to render for a read+write mix.
   if (Array.isArray(astResult)) {
     if (astResult.length === 0) return { kind: "empty" };
-    if (astResult.length === 1) return parseOneStatement(astResult[0] as { type: string });
+    if (astResult.length === 1) return parseOneStatement(astResult[0] as { type: string }, options);
 
-    const parsed = astResult.map((a) => parseOneStatement(a as { type: string }));
+    const parsed = astResult.map((a) => parseOneStatement(a as { type: string }, options));
     for (let i = 0; i < parsed.length; i++) {
       const p = parsed[i];
       if (p.kind === "mutate" && p.fetchXml) {
@@ -1404,5 +1450,5 @@ export function parseSql(sql: string): ParsedStatement {
     return { kind: "batch", statements: parsed as (InsertResult | MutateResult)[] };
   }
 
-  return parseOneStatement(astResult as { type: string });
+  return parseOneStatement(astResult as { type: string }, options);
 }

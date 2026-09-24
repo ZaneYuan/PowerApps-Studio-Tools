@@ -53,6 +53,8 @@ export interface FxLink {
   to: string;
   linkType: FxLinkType;
   attributes: FxAttribute[];
+  /** `<all-attributes />` — from `alias.*` in the SELECT list. */
+  allAttributes?: boolean;
   filter: FxFilter | null;
   links: FxLink[];
 }
@@ -60,6 +62,8 @@ export interface FxLink {
 export interface FxQuery {
   entityName: string;
   attributes: FxAttribute[];
+  /** `<all-attributes />` — from `rootAlias.*` in the SELECT list. */
+  allAttributes?: boolean;
   /** Sets `aggregate="true"` on <fetch> — required whenever any attribute has `aggregate`/`groupby`. */
   aggregate: boolean;
   distinct: boolean;
@@ -118,6 +122,7 @@ function serializeOrders(orders: FxOrder[], indent: string): string[] {
 
 function serializeLink(link: FxLink, indent: string): string {
   const body: string[] = [];
+  if (link.allAttributes) body.push(`${indent}  <all-attributes />`);
   for (const a of link.attributes) body.push(serializeAttribute(a, `${indent}  `));
   const filterXml = link.filter ? serializeFilter(link.filter, `${indent}  `) : null;
   if (filterXml) body.push(filterXml);
@@ -139,6 +144,7 @@ function serializeLink(link: FxLink, indent: string): string {
 
 export function serializeFetchXml(query: FxQuery): string {
   const body: string[] = [];
+  if (query.allAttributes) body.push("    <all-attributes />");
   for (const a of query.attributes) body.push(serializeAttribute(a, "    "));
   const filterXml = query.filter ? serializeFilter(query.filter, "    ") : null;
   if (filterXml) body.push(filterXml);

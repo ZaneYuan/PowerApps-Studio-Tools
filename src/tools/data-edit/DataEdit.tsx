@@ -33,8 +33,8 @@ const SAMPLE = `SELECT name, description FROM account WHERE statecode = 0`;
  *  such serializer, and doesn't need one just for this). No-ops (returns the input unchanged) when
  *  there are no checked columns — an empty SELECT list isn't valid SQL, and the user still needs
  *  to see/fix the query rather than have it silently mangled. Only ever called on a query that
- *  already passed handleRunQuery's select-simple-only check, so the shape is always exactly
- *  `SELECT [TOP n] <cols> FROM ...`. */
+ *  already passed handleRunQuery's checks (a plain SELECT, or a JOIN that selects root columns
+ *  only), so the shape is always `SELECT [TOP n] <cols> FROM ...`. */
 export function replaceSelectColumns(sqlText: string, columnNames: string[]): string {
   if (columnNames.length === 0) return sqlText;
   const columnList = columnNames.join(", ");
@@ -62,6 +62,7 @@ export default function DataEdit() {
   const [primaryIdAttribute, setPrimaryIdAttribute] = useState("");
   const [columns, setColumns] = useState<GridColumn[]>([]);
   const [rows, setRows] = useState<GridRow[]>([]);
+  const [selectColumnPrefix, setSelectColumnPrefix] = useState("");
 
   const [writeRunning, setWriteRunning] = useState(false);
   // Which of the two write buttons is actually in flight — handleSubmit and handleDelete share
@@ -114,7 +115,7 @@ export default function DataEdit() {
     queryAbortRef.current = abort;
     try {
       const resolvedSql = sql.trim() ? await resolveSqlSubqueries(activeConnectionId, sql) : sql;
-      const parsed = parseSql(resolvedSql);
+      const parsed = parseSql(resolvedSql, { bareStarSelectsRootTable: true });
       if (parsed.kind === "empty") return;
       if (parsed.kind === "error") {
         setQueryError(parsed.error);
@@ -124,8 +125,10 @@ export default function DataEdit() {
         setQueryError("请输入一条 SELECT 语句 — 数据编辑只用来查询、编辑、再更新/新建，不执行 INSERT/UPDATE/DELETE。");
         return;
       }
-      if (parsed.kind === "select-complex") {
-        setQueryError("数据编辑只支持单表 SELECT，不支持 DISTINCT / JOIN / GROUP BY 聚合（去重后的结果和聚合列都没法原样写回）。需要这类查询请用 SQL4CDS。");
+      if (parsed.kind === "select-complex" && !parsed.rootRowsOnly) {
+        setQueryError(
+          "数据编辑可以用 JOIN 筛选主表（FROM 后的第一个表）记录，但只能选主表的字段，且不支持 DISTINCT / GROUP BY 聚合（这些结果没法原样写回）。需要这类查询请用 SQL4CDS。",
+        );
         return;
       }
 
@@ -163,13 +166,16 @@ export default function DataEdit() {
       // CheckableGrid's own per-field modified marker both compare against — safe to alias the
       // same `fields` object rather than clone it, since edits always replace `values` wholesale
       // via spread and never mutate it in place.
-      const newRows: GridRow[] = unwrapped.map((u) => ({
-        id: String(u.fields[meta.primaryIdAttribute]),
-        checked: false,
-        values: u.fields,
-        originalValues: u.fields,
-        formattedValues: u.formattedFields,
-      }));
+      // A JOIN to the many side returns a root record once per match; the grid edits records, so
+      // each keeps its first occurrence.
+      const seenIds = new Set<string>();
+      const newRows: GridRow[] = [];
+      for (const u of unwrapped) {
+        const id = String(u.fields[meta.primaryIdAttribute]);
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        newRows.push({ id, checked: false, values: u.fields, originalValues: u.fields, formattedValues: u.formattedFields });
+      }
 
       setEntityLogicalName(parsed.entityLogicalName);
       setEntitySetName(meta.entitySetName);
@@ -178,7 +184,10 @@ export default function DataEdit() {
       setRows(newRows);
       // Even a `SELECT *` should read back as the actual (now-default) checked column list once
       // it's run, not stay `*` — same sync `handleColumnsChange` below keeps up on every toggle.
-      const checkedNames = newColumns.filter((c) => c.checked).map((c) => c.key);
+      // With a JOIN the names are alias-qualified so they can't collide with a joined table's.
+      const prefix = parsed.kind === "select-complex" ? `${parsed.rootAlias}.` : "";
+      setSelectColumnPrefix(prefix);
+      const checkedNames = newColumns.filter((c) => c.checked).map((c) => prefix + c.key);
       setSql((prev) => replaceSelectColumns(prev, checkedNames));
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -194,7 +203,7 @@ export default function DataEdit() {
    *  checkbox toggle, not just the initial query run (see handleRunQuery's own sync for that). */
   function handleColumnsChange(newColumns: GridColumn[]) {
     setColumns(newColumns);
-    const checkedNames = newColumns.filter((c) => c.checked).map((c) => c.key);
+    const checkedNames = newColumns.filter((c) => c.checked).map((c) => selectColumnPrefix + c.key);
     setSql((prev) => replaceSelectColumns(prev, checkedNames));
   }
 
@@ -459,7 +468,7 @@ export default function DataEdit() {
     <div className="space-y-4">
       <UnsavedChangesBadge dirty={isDirty} />
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-        用一条单表 SELECT 查出数据，在表格里编辑。勾选主键 ID 列时按"更新"（只提交真正变更的行），取消勾选时按"创建"复制为新记录；"删除"直接删掉勾选的行，不可撤销。不支持 JOIN / 聚合。
+        用一条 SELECT 查出数据，在表格里编辑。可以用 JOIN 按关联表筛选，但只编辑主表（FROM 后的第一个表）：写 * 或 主表别名.* 取主表全部字段。勾选主键 ID 列时按"更新"（只提交真正变更的行），取消勾选时按"创建"复制为新记录；"删除"直接删掉勾选的行，不可撤销。不支持 DISTINCT / 聚合。
       </div>
 
       <div className="space-y-2">
