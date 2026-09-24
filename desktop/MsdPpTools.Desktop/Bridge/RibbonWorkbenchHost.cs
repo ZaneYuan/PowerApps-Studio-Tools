@@ -35,6 +35,12 @@ public sealed class RibbonWorkbenchHost
     private const string StartPage = "WebResources/rwb_/html/EditCommandBar.htm";
     private const string ActionRequestMarker = "<a:RequestName>rwb_CustomiseRibbon</a:RequestName>";
 
+    // Dynamics' getClientUrl reads window.IS_PATHBASEDURLS and, when it's unset, falls back to
+    // window.top's — a SecurityError here, since RWB sits in a cross-origin iframe inside the app,
+    // which left RWB stuck loading. Defining it up front (false: this host isn't path-based) keeps
+    // that lookup inside the frame.
+    private const string FrameShim = "<script>window.IS_PATHBASEDURLS = false;</script>";
+
     private static readonly string LocalPackagePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "MscrmTools", "XrmToolBox", "Plugins", "RibbonWorkbench", "RibbonWorkbench2016_managed.zip");
@@ -224,8 +230,9 @@ public sealed class RibbonWorkbenchHost
         // pointing it back at the virtual host keeps RWB's follow-up SOAP calls coming through here.
         if (contentType.Contains("javascript", StringComparison.OrdinalIgnoreCase) || contentType.Contains("html", StringComparison.OrdinalIgnoreCase))
         {
-            var text = Encoding.UTF8.GetString(content);
-            content = Encoding.UTF8.GetBytes(text.Replace(environmentOrigin, $"https://{label}{HostSuffix}", StringComparison.OrdinalIgnoreCase));
+            var text = Encoding.UTF8.GetString(content).Replace(environmentOrigin, $"https://{label}{HostSuffix}", StringComparison.OrdinalIgnoreCase);
+            if (contentType.Contains("html", StringComparison.OrdinalIgnoreCase)) text = InjectFrameShim(text);
+            content = Encoding.UTF8.GetBytes(text);
         }
 
         return CreateResponse((int)response.StatusCode, response.ReasonPhrase ?? "", contentType, content);
@@ -258,7 +265,13 @@ public sealed class RibbonWorkbenchHost
             var fileName = webResource.Element("FileName")?.Value.TrimStart('/');
             var entry = fileName is null ? null : zip.GetEntry(fileName);
             if (name is null || entry is null) continue;
-            files[name] = new PackageFile(ReadEntry(entry), ContentTypeFor(webResource.Element("WebResourceType")?.Value));
+            var contentType = ContentTypeFor(webResource.Element("WebResourceType")?.Value);
+            var content = ReadEntry(entry);
+            if (contentType.StartsWith("text/html", StringComparison.Ordinal))
+            {
+                content = Encoding.UTF8.GetBytes(InjectFrameShim(Encoding.UTF8.GetString(content)));
+            }
+            files[name] = new PackageFile(content, contentType);
         }
 
         // The action's step names the plug-in type; its assembly file is extracted once per package
@@ -278,6 +291,12 @@ public sealed class RibbonWorkbenchHost
 
         _package = new Package(version, files, assemblyPath, pluginTypeName);
         return _package;
+    }
+
+    private static string InjectFrameShim(string html)
+    {
+        var head = html.IndexOf("<head>", StringComparison.OrdinalIgnoreCase);
+        return head < 0 ? FrameShim + html : html.Insert(head + "<head>".Length, FrameShim);
     }
 
     private static Stream OpenEntry(ZipArchive zip, string name)
