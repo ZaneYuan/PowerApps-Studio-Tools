@@ -217,7 +217,12 @@ public sealed class RibbonWorkbenchHost
             if (SkippedRequestHeaders.Contains(name)) continue;
             if (!request.Headers.TryAddWithoutValidation(name, value))
             {
-                request.Content?.Headers.TryAddWithoutValidation(name, value);
+                // A content header on a bodiless GET still has to reach the server:
+                // ClientGlobalContext.js.aspx re-requests itself with Content-Type:
+                // application/json to get its initialization script, and without that header it
+                // gets the loader back, which re-requests itself again — endlessly.
+                request.Content ??= new ByteArrayContent([]);
+                request.Content.Headers.TryAddWithoutValidation(name, value);
             }
         }
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
