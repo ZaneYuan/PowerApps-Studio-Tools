@@ -642,7 +642,7 @@ export default function DataMigration() {
   }
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="space-y-4">
       <UnsavedChangesBadge dirty={isDirty} />
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         用多条 SELECT 或上传一个 .sql 文件把要迁移的数据加载进来，每张表一个 Tab，编辑后选一个目标连接导入。
