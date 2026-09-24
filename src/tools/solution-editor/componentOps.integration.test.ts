@@ -7,9 +7,22 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dataverseTestRequest, hasTestCredentials, testRunSuffix } from "../../testSupport/dataverseTestClient";
 import { installMockNativeBridge, uninstallMockNativeBridge } from "../../testSupport/mockNativeBridge";
-import { addSolutionComponent, createWebResource, fetchSolutionComponents, publishSolutionComponents, searchComponentRecords } from "./dataverseOps";
+import {
+  addSolutionComponent,
+  createWebResource,
+  decodeBase64Utf8,
+  deleteComponent,
+  encodeBase64Utf8,
+  fetchEntityFields,
+  fetchSolutionComponents,
+  fetchWebResource,
+  publishSolutionComponents,
+  removeSolutionComponent,
+  searchComponentRecords,
+  updateWebResource,
+} from "./dataverseOps";
 import { ADD_EXISTING_KINDS } from "./componentCatalog";
-import { WEB_RESOURCE_COMPONENT_TYPE } from "./types";
+import { ATTRIBUTE_COMPONENT_TYPE, ENTITY_COMPONENT_TYPE, WEB_RESOURCE_COMPONENT_TYPE } from "./types";
 
 const FAKE_CONNECTION_ID = "integration-test";
 const SOLUTION_UNIQUE_NAME = "ad_ClaudeSmokeTest";
@@ -89,6 +102,72 @@ describe.skipIf(!hasTestCredentials())("Solution Editor components — real Data
     const after = await fetchSolutionComponents(FAKE_CONNECTION_ID, solutionId);
     expect(after.some((c) => c.componenttype === WEB_RESOURCE_COMPONENT_TYPE && c.objectid === webResourceId)).toBe(true);
   }, 60_000);
+
+  it("edits a web resource's display name, description and text content", async () => {
+    const { webResourceId } = await createWebResource(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, {
+      name: `ad_/integrationtest/edit${suffix}.js`,
+      displayName: `Integration Test Edit ${suffix}`,
+      webResourceType: 3,
+      content: SCRIPT_CONTENT,
+    });
+    createdWebResourceIds.push(webResourceId);
+
+    const text = "﻿// 编辑后的内容 — edited\nconsole.log(1);\n";
+    await updateWebResource(FAKE_CONNECTION_ID, webResourceId, { displayName: "Edited", description: "改过的描述", content: encodeBase64Utf8(text) });
+
+    const detail = await fetchWebResource(FAKE_CONNECTION_ID, webResourceId);
+    expect(detail.displayName).toBe("Edited");
+    expect(detail.description).toBe("改过的描述");
+    expect(detail.webResourceType).toBe(3);
+    expect(decodeBase64Utf8(detail.content)).toBe(text);
+  }, 60_000);
+
+  it("removes a web resource from the solution without deleting it, then deletes it from the environment", async () => {
+    const name = `ad_/integrationtest/remove${suffix}.js`;
+    const { webResourceId } = await createWebResource(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, {
+      name,
+      displayName: `Integration Test Remove ${suffix}`,
+      webResourceType: 3,
+      content: SCRIPT_CONTENT,
+    });
+    createdWebResourceIds.push(webResourceId);
+
+    await removeSolutionComponent(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, WEB_RESOURCE_COMPONENT_TYPE, webResourceId);
+    const after = await fetchSolutionComponents(FAKE_CONNECTION_ID, solutionId);
+    expect(after.some((c) => c.objectid === webResourceId)).toBe(false);
+    await expect(fetchWebResource(FAKE_CONNECTION_ID, webResourceId)).resolves.toMatchObject({ name });
+
+    await deleteComponent(FAKE_CONNECTION_ID, WEB_RESOURCE_COMPONENT_TYPE, webResourceId);
+    createdWebResourceIds.splice(createdWebResourceIds.indexOf(webResourceId), 1);
+    await expect(fetchWebResource(FAKE_CONNECTION_ID, webResourceId)).rejects.toThrow(/404/);
+  }, 60_000);
+
+  it("adds an existing column of a table to the solution, then removes it again", async () => {
+    const field = (await fetchEntityFields(FAKE_CONNECTION_ID, "account")).find((f) => f.logicalName === "fax");
+    expect(field, "account.fax should exist").toBeDefined();
+    const before = await fetchSolutionComponents(FAKE_CONNECTION_ID, solutionId);
+    expect(before.some((c) => c.objectid === field!.metadataId), "account.fax should not already be in the test solution").toBe(false);
+    const accountRowBefore = before.find((c) => c.componenttype === ENTITY_COMPONENT_TYPE && c.logicalName === "account");
+
+    try {
+      await addSolutionComponent(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, ATTRIBUTE_COMPONENT_TYPE, field!.metadataId);
+      const added = await fetchSolutionComponents(FAKE_CONNECTION_ID, solutionId);
+      expect(added.some((c) => c.componenttype === ATTRIBUTE_COMPONENT_TYPE && c.objectid === field!.metadataId)).toBe(true);
+
+      await removeSolutionComponent(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, ATTRIBUTE_COMPONENT_TYPE, field!.metadataId);
+      const removed = await fetchSolutionComponents(FAKE_CONNECTION_ID, solutionId);
+      expect(removed.some((c) => c.objectid === field!.metadataId)).toBe(false);
+    } finally {
+      const final = await fetchSolutionComponents(FAKE_CONNECTION_ID, solutionId);
+      if (final.some((c) => c.objectid === field!.metadataId)) {
+        await removeSolutionComponent(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, ATTRIBUTE_COMPONENT_TYPE, field!.metadataId);
+      }
+      const accountRow = final.find((c) => c.componenttype === ENTITY_COMPONENT_TYPE && c.logicalName === "account");
+      if (accountRow && !accountRowBefore) {
+        await removeSolutionComponent(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, ENTITY_COMPONENT_TYPE, accountRow.objectid);
+      }
+    }
+  }, 120_000);
 
   it("publishes tables and web resources together in one PublishXml call", async () => {
     const components = await fetchSolutionComponents(FAKE_CONNECTION_ID, solutionId);

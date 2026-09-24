@@ -1,14 +1,29 @@
 import { useEffect, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
-import { fetchEntityBasicInfo, fetchEntityFields, fetchSolutionComponents, fetchSolutions, publishAll, publishSolutionComponents } from "./dataverseOps";
+import {
+  componentDeletePath,
+  deleteColumn,
+  deleteComponent,
+  fetchEntityBasicInfo,
+  fetchEntityFields,
+  fetchSolutionComponents,
+  fetchSolutions,
+  publishAll,
+  publishSolutionComponents,
+  removeSolutionComponent,
+} from "./dataverseOps";
 import AddExistingComponentDialog from "./AddExistingComponentDialog";
 import { ADD_EXISTING_KINDS, NEW_KINDS, type AddableComponentKind } from "./componentCatalog";
 import DropdownMenuButton from "./DropdownMenuButton";
+import EditColumnDialog from "./EditColumnDialog";
+import EditTableDialog from "./EditTableDialog";
 import NewColumnDialog from "./NewColumnDialog";
 import NewSolutionDialog from "./NewSolutionDialog";
 import NewTableDialog from "./NewTableDialog";
 import NewWebResourceDialog from "./NewWebResourceDialog";
+import WebResourceEditor from "./WebResourceEditor";
+import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
 import SvgIcon from "../../shared/SvgIcon";
 import {
@@ -27,6 +42,17 @@ import {
 const rowBase = "flex w-full items-center gap-1.5 truncate px-2 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800";
 const rowSelected = "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400";
 
+/** A table added with "Include Subcomponents" carries every field implicitly — no field of it has
+ *  its own Attribute(2) row, so fields can't be individually added to or removed from the solution. */
+function includesAllSubcomponents(entityRow: SolutionComponentRow): boolean {
+  return entityRow.rootComponentBehavior === undefined || entityRow.rootComponentBehavior === 0;
+}
+
+const REMOVE_MENU_BUTTON =
+  "rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20";
+const SECONDARY_BUTTON =
+  "rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800";
+
 /** Scopes a table's full live field list down to what's actually part of this solution — an
  *  unfiltered EntityDefinitions/Attributes query returns every field the table has, standard OOB
  *  fields included, regardless of what the solution actually added (Bugs/8.25.md #4). `undefined`/
@@ -37,7 +63,7 @@ const rowSelected = "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 da
  *  to fields with their own Attribute(2) row, plus the primary name column (not separately
  *  addable/removable from a solution, so it wouldn't have its own row either way). */
 function scopeEntityFields(fields: ColumnFieldMeta[], entityRow: SolutionComponentRow, allComponents: SolutionComponentRow[]): ColumnFieldMeta[] {
-  if (entityRow.rootComponentBehavior === undefined || entityRow.rootComponentBehavior === 0) return fields;
+  if (includesAllSubcomponents(entityRow)) return fields;
   const includedIds = new Set(
     allComponents.filter((c) => c.componenttype === ATTRIBUTE_COMPONENT_TYPE).map((c) => c.objectid.toLowerCase()),
   );
@@ -87,6 +113,12 @@ export default function SolutionEditor() {
   const [showNewWebResource, setShowNewWebResource] = useState(false);
   const [addExistingKind, setAddExistingKind] = useState<AddableComponentKind | null>(null);
   const [showNewColumn, setShowNewColumn] = useState(false);
+  const [editingColumn, setEditingColumn] = useState<string | null>(null);
+  const [showEditTable, setShowEditTable] = useState(false);
+
+  const confirm = useConfirmDialog();
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -134,6 +166,7 @@ export default function SolutionEditor() {
 
   function selectEntity(c: SolutionComponentRow) {
     setSelectedNode({ kind: "entity", component: c });
+    setActionError(null);
     setEntityBasicInfo(null);
     setEntityBasicInfoError(null);
     if (c.logicalName && activeConnectionId) {
@@ -143,8 +176,14 @@ export default function SolutionEditor() {
     }
   }
 
+  function selectOther(c: SolutionComponentRow) {
+    setSelectedNode({ kind: "other", component: c });
+    setActionError(null);
+  }
+
   function selectEntityColumns(c: SolutionComponentRow, allComponents: SolutionComponentRow[] | null = components) {
     setSelectedNode({ kind: "entity-columns", component: c });
+    setActionError(null);
     setEntityFields(null);
     setEntityFieldsError(null);
     if (c.logicalName && activeConnectionId) {
@@ -154,11 +193,10 @@ export default function SolutionEditor() {
     }
   }
 
-  /** Re-shows the entity-columns panel after creating a new column — re-fetches solutioncomponents
-   *  first (not just the field list) so the field just created, which now has its own Attribute(2)
-   *  row, is actually counted as "in scope" by scopeEntityFields instead of getting filtered right
-   *  back out by the stale pre-creation `components` snapshot. */
-  function reloadEntityFieldsAfterColumnCreate() {
+  /** Re-shows the entity-columns panel after a column is created/added/removed — re-fetches
+   *  solutioncomponents first (not just the field list) so scopeEntityFields judges each field
+   *  against its current Attribute(2) rows rather than the stale pre-change `components` snapshot. */
+  function reloadEntityColumns() {
     if (!activeConnectionId || !selected || selectedNode?.kind !== "entity-columns") return;
     const component = selectedNode.component;
     fetchSolutionComponents(activeConnectionId, selected.solutionid)
@@ -167,6 +205,114 @@ export default function SolutionEditor() {
         selectEntityColumns(component, freshComponents);
       })
       .catch((err) => setComponentsError(err instanceof Error ? err.message : String(err)));
+  }
+
+  /** Reloads the tree after a table edit so both the tree label and the panel header pick up the
+   *  new display name, then re-selects that same table. */
+  function reloadAndReselectEntity(solutionComponentId: string) {
+    if (!activeConnectionId || !selected) return;
+    fetchSolutionComponents(activeConnectionId, selected.solutionid)
+      .then((freshComponents) => {
+        setComponents(freshComponents);
+        const row = freshComponents.find((c) => c.solutioncomponentid === solutionComponentId);
+        if (row) selectEntity(row);
+      })
+      .catch((err) => setComponentsError(err instanceof Error ? err.message : String(err)));
+  }
+
+  async function runAction(action: () => Promise<void>, onDone: () => void) {
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await action();
+      onDone();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function handleComponentAction(c: SolutionComponentRow, action: string) {
+    if (!activeConnectionId || !selected) return;
+    const connectionId = activeConnectionId;
+    const name = c.name ?? c.objectid;
+    const typeLabel = COMPONENT_TYPE_LABELS[c.componenttype] ?? `类型 ${c.componenttype}`;
+    const ok = await confirm(
+      action === "remove"
+        ? {
+            title: "从此解决方案移除",
+            message: `把「${name}」（${typeLabel}）从解决方案「${selected.friendlyname}」中移除？\n组件本身仍保留在环境中。`,
+            confirmLabel: "移除",
+          }
+        : {
+            title: "从环境中删除",
+            message:
+              `永久删除「${name}」（${typeLabel}）？\n它会从整个环境中删除，所有解决方案都会失去它，无法撤销。` +
+              (c.componenttype === ENTITY_COMPONENT_TYPE ? "\n表里的所有数据也会一起被删除。" : ""),
+            confirmLabel: "删除",
+            danger: true,
+          },
+    );
+    if (!ok) return;
+    await runAction(
+      () =>
+        action === "remove"
+          ? removeSolutionComponent(connectionId, selected.uniquename, c.componenttype, c.objectid)
+          : deleteComponent(connectionId, c.componenttype, c.objectid),
+      () => {
+        setSelectedNode(null);
+        loadComponents(selected.solutionid);
+      },
+    );
+  }
+
+  async function handleColumnAction(entity: SolutionComponentRow, field: ColumnFieldMeta, action: "remove" | "delete") {
+    if (!activeConnectionId || !selected || !entity.logicalName) return;
+    const connectionId = activeConnectionId;
+    const entityLogicalName = entity.logicalName;
+    const ok = await confirm(
+      action === "remove"
+        ? {
+            title: "从此解决方案移除字段",
+            message: `把字段「${field.displayName}」（${field.logicalName}）从解决方案「${selected.friendlyname}」中移除？\n字段本身仍保留在表上。`,
+            confirmLabel: "移除",
+          }
+        : {
+            title: "从环境中删除字段",
+            message: `永久删除字段「${field.displayName}」（${field.logicalName}）？\n字段和它在所有记录里的数据都会被删除，无法撤销。`,
+            confirmLabel: "删除",
+            danger: true,
+          },
+    );
+    if (!ok) return;
+    await runAction(
+      () =>
+        action === "remove"
+          ? removeSolutionComponent(connectionId, selected.uniquename, ATTRIBUTE_COMPONENT_TYPE, field.metadataId)
+          : deleteColumn(connectionId, entityLogicalName, field.metadataId),
+      reloadEntityColumns,
+    );
+  }
+
+  function openAddExistingColumns(entity: SolutionComponentRow) {
+    const entityLogicalName = entity.logicalName;
+    if (!entityLogicalName) return;
+    const inSolution = new Set((entityFields ?? []).map((f) => f.logicalName));
+    setAddExistingKind({
+      key: "column",
+      label: `${entity.name ?? entityLogicalName} 的字段`,
+      group: "",
+      componentType: ATTRIBUTE_COMPONENT_TYPE,
+      source: {
+        kind: "metadata",
+        load: async (connectionId) =>
+          (await fetchEntityFields(connectionId, entityLogicalName))
+            .filter((f) => !inSolution.has(f.logicalName))
+            .map((f) => ({ id: f.metadataId, name: f.displayName, secondary: f.logicalName }))
+            .sort((a, b) => a.name.localeCompare(b.name)),
+      },
+    });
   }
 
   async function handlePublish() {
@@ -477,7 +623,7 @@ export default function SolutionEditor() {
                                 return (
                                   <li key={f.solutioncomponentid}>
                                     <button
-                                      onClick={() => setSelectedNode({ kind: "other", component: f })}
+                                      onClick={() => selectOther(f)}
                                       className={`${rowBase} ${isFormSelected ? rowSelected : ""}`}
                                       title={f.name ?? f.objectid}
                                     >
@@ -512,7 +658,7 @@ export default function SolutionEditor() {
                       {items.map((c) => (
                         <li key={c.solutioncomponentid}>
                           <button
-                            onClick={() => setSelectedNode({ kind: "other", component: c })}
+                            onClick={() => selectOther(c)}
                             className={`${rowBase} ${
                               selectedNode?.kind === "other" && selectedNode.component.solutioncomponentid === c.solutioncomponentid ? rowSelected : ""
                             }`}
@@ -533,24 +679,45 @@ export default function SolutionEditor() {
         <div className="min-w-0 flex-1 rounded-lg border border-gray-200 p-3 dark:border-gray-800">
           {!selectedNode && <p className="text-sm text-gray-400">从左侧选一个组件查看详情。</p>}
 
-          {selectedNode?.kind === "other" && (
-            <div className="text-sm text-gray-700 dark:text-gray-300">
-              <p className="font-medium">{selectedNode.component.name ?? "(无法解析名称)"}</p>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {COMPONENT_TYPE_LABELS[selectedNode.component.componenttype] ?? `类型 ${selectedNode.component.componenttype}`}
-              </p>
-              <p className="mt-1 font-mono text-xs text-gray-400">{selectedNode.component.objectid}</p>
-              {!readOnly && selectedNode.component.componenttype === WEB_RESOURCE_COMPONENT_TYPE && (
-                <button
-                  onClick={() => publishComponents([], [selectedNode.component.objectid])}
-                  disabled={publishing}
-                  className="mt-4 rounded-md border border-purple-300 px-3 py-1.5 text-sm font-medium text-purple-700 hover:bg-purple-50 disabled:opacity-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-900/20"
-                >
-                  {publishing ? "发布中…" : "发布此 Web Resource"}
+          {!readOnly && (selectedNode?.kind === "entity" || selectedNode?.kind === "other") && (
+            <div className="mb-3 flex items-center gap-2 border-b border-gray-100 pb-3 dark:border-gray-800">
+              {selectedNode.kind === "entity" && (
+                <button onClick={() => setShowEditTable(true)} disabled={!entityBasicInfo || actionBusy} className={SECONDARY_BUTTON}>
+                  编辑
                 </button>
               )}
+              <DropdownMenuButton
+                label={actionBusy ? "处理中…" : "移除"}
+                items={[
+                  { key: "remove", label: "从此解决方案移除" },
+                  ...(componentDeletePath(selectedNode.component.componenttype, selectedNode.component.objectid)
+                    ? [{ key: "delete", label: "从环境中删除" }]
+                    : []),
+                ]}
+                onSelect={(key) => void handleComponentAction(selectedNode.component, key)}
+                buttonClassName={REMOVE_MENU_BUTTON}
+              />
             </div>
           )}
+          {actionError && <ErrorMessage error={actionError} className="mb-3 rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" />}
+
+          {selectedNode?.kind === "other" &&
+            (selectedNode.component.componenttype === WEB_RESOURCE_COMPONENT_TYPE ? (
+              <WebResourceEditor
+                key={selectedNode.component.objectid}
+                connectionId={activeConnectionId}
+                webResourceId={selectedNode.component.objectid}
+                readOnly={readOnly}
+              />
+            ) : (
+              <div className="text-sm text-gray-700 dark:text-gray-300">
+                <p className="font-medium">{selectedNode.component.name ?? "(无法解析名称)"}</p>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {COMPONENT_TYPE_LABELS[selectedNode.component.componenttype] ?? `类型 ${selectedNode.component.componenttype}`}
+                </p>
+                <p className="mt-1 font-mono text-xs text-gray-400">{selectedNode.component.objectid}</p>
+              </div>
+            ))}
 
           {selectedNode?.kind === "entity" && (
             <div>
@@ -619,13 +786,23 @@ export default function SolutionEditor() {
                   </h3>
                 </div>
                 {!readOnly && (
-                  <button
-                    onClick={() => setShowNewColumn(true)}
-                    disabled={!selectedNode.component.logicalName}
-                    className="rounded-md border border-blue-300 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
-                  >
-                    + 新建字段
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => openAddExistingColumns(selectedNode.component)}
+                      disabled={!selectedNode.component.logicalName || !entityFields || includesAllSubcomponents(selectedNode.component)}
+                      title={includesAllSubcomponents(selectedNode.component) ? "这个表以“包含所有子组件”方式加入解决方案，它的所有字段都已在解决方案里" : undefined}
+                      className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+                    >
+                      添加现有字段
+                    </button>
+                    <button
+                      onClick={() => setShowNewColumn(true)}
+                      disabled={!selectedNode.component.logicalName}
+                      className="rounded-md border border-blue-300 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                    >
+                      + 新建字段
+                    </button>
+                  </div>
                 )}
               </div>
               {entityFieldsError && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{entityFieldsError}</p>}
@@ -638,6 +815,7 @@ export default function SolutionEditor() {
                       <th className="py-1 pr-3">LogicalName</th>
                       <th className="py-1 pr-3">类型</th>
                       <th className="py-1 pr-3">必填</th>
+                      {!readOnly && <th className="py-1"></th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -650,6 +828,31 @@ export default function SolutionEditor() {
                         <td className="py-1 pr-3 font-mono text-xs">{f.logicalName}</td>
                         <td className="py-1 pr-3 text-xs">{f.attributeType}</td>
                         <td className="py-1 pr-3 text-xs">{f.required ? "是" : "否"}</td>
+                        {!readOnly && (
+                          <td className="space-x-3 whitespace-nowrap py-1 text-right text-xs">
+                            <button onClick={() => setEditingColumn(f.logicalName)} disabled={actionBusy} className="text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">
+                              编辑
+                            </button>
+                            {!includesAllSubcomponents(selectedNode.component) && !f.isPrimaryName && (
+                              <button
+                                onClick={() => void handleColumnAction(selectedNode.component, f, "remove")}
+                                disabled={actionBusy}
+                                className="text-gray-600 hover:underline disabled:opacity-50 dark:text-gray-400"
+                              >
+                                移出解决方案
+                              </button>
+                            )}
+                            {f.isCustomAttribute && !f.isPrimaryName && (
+                              <button
+                                onClick={() => void handleColumnAction(selectedNode.component, f, "delete")}
+                                disabled={actionBusy}
+                                className="text-red-600 hover:underline disabled:opacity-50 dark:text-red-400"
+                              >
+                                删除
+                              </button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -691,8 +894,10 @@ export default function SolutionEditor() {
           kind={addExistingKind}
           onClose={() => setAddExistingKind(null)}
           onAdded={() => {
+            const addedColumns = addExistingKind.componentType === ATTRIBUTE_COMPONENT_TYPE;
             setAddExistingKind(null);
-            loadComponents(selected.solutionid);
+            if (addedColumns) reloadEntityColumns();
+            else loadComponents(selected.solutionid);
           }}
         />
       )}
@@ -705,7 +910,32 @@ export default function SolutionEditor() {
           onClose={() => setShowNewColumn(false)}
           onCreated={() => {
             setShowNewColumn(false);
-            reloadEntityFieldsAfterColumnCreate();
+            reloadEntityColumns();
+          }}
+        />
+      )}
+      {editingColumn && selectedNode?.kind === "entity-columns" && selectedNode.component.logicalName && (
+        <EditColumnDialog
+          connectionId={activeConnectionId}
+          solutionUniqueName={selected.uniquename}
+          entityLogicalName={selectedNode.component.logicalName}
+          attributeLogicalName={editingColumn}
+          onClose={() => setEditingColumn(null)}
+          onSaved={() => {
+            setEditingColumn(null);
+            reloadEntityColumns();
+          }}
+        />
+      )}
+      {showEditTable && selectedNode?.kind === "entity" && entityBasicInfo && (
+        <EditTableDialog
+          connectionId={activeConnectionId}
+          solutionUniqueName={selected.uniquename}
+          info={entityBasicInfo}
+          onClose={() => setShowEditTable(false)}
+          onSaved={() => {
+            setShowEditTable(false);
+            reloadAndReselectEntity(selectedNode.component.solutioncomponentid);
           }}
         />
       )}

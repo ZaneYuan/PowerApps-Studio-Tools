@@ -18,10 +18,15 @@ import {
   createLookupColumn,
   createPublisher,
   createTable,
+  deleteColumn,
+  fetchColumnDetail,
+  fetchEntityBasicInfo,
   fetchEntityFields,
   fetchGlobalOptionSets,
   publishSolutionComponents,
+  updateColumn,
   updatePublisher,
+  updateTable,
   type NewColumnParams,
 } from "./dataverseOps";
 import type { BasicColumnType } from "./types";
@@ -104,6 +109,54 @@ describe.skipIf(!hasTestCredentials())("Solution Editor — real Dataverse integ
       // every type, including this one, is expected to round-trip as its own name here.
       expect(field!.attributeType, `field for type ${type} should report AttributeType=${type}`).toBe(type);
     }
+  }, 120_000);
+
+  it("edits a String column's labels, requirement level and max length", async () => {
+    const schemaName = `${PUBLISHER_PREFIX}_EditField${suffix}`;
+    const logicalName = schemaName.toLowerCase();
+    await createColumn(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, tableLogicalName, "String", {
+      schemaName,
+      displayName: `Edit Field ${suffix}`,
+      description: "",
+      required: false,
+    });
+
+    await updateColumn(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, tableLogicalName, logicalName, {
+      displayName: "Renamed Field",
+      description: "改过的字段描述",
+      requiredLevel: "ApplicationRequired",
+      maxLength: 250,
+    });
+
+    const detail = await fetchColumnDetail(FAKE_CONNECTION_ID, tableLogicalName, logicalName);
+    expect(detail).toMatchObject({ displayName: "Renamed Field", description: "改过的字段描述", requiredLevel: "ApplicationRequired", maxLength: 250 });
+  }, 120_000);
+
+  it("deletes a column from the environment", async () => {
+    const schemaName = `${PUBLISHER_PREFIX}_DeleteField${suffix}`;
+    await createColumn(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, tableLogicalName, "Integer", {
+      schemaName,
+      displayName: `Delete Field ${suffix}`,
+      description: "",
+      required: false,
+    });
+    const field = (await fetchEntityFields(FAKE_CONNECTION_ID, tableLogicalName)).find((f) => f.logicalName === schemaName.toLowerCase());
+    expect(field).toBeDefined();
+
+    await deleteColumn(FAKE_CONNECTION_ID, tableLogicalName, field!.metadataId);
+
+    const after = await fetchEntityFields(FAKE_CONNECTION_ID, tableLogicalName);
+    expect(after.some((f) => f.logicalName === schemaName.toLowerCase())).toBe(false);
+  }, 120_000);
+
+  it("edits a table's display name, plural name and description", async () => {
+    await updateTable(FAKE_CONNECTION_ID, SOLUTION_UNIQUE_NAME, tableLogicalName, {
+      displayName: `Renamed Table ${suffix}`,
+      displayCollectionName: `Renamed Tables ${suffix}`,
+      description: "改过的表描述",
+    });
+    const info = await fetchEntityBasicInfo(FAKE_CONNECTION_ID, tableLogicalName);
+    expect(info).toMatchObject({ displayName: `Renamed Table ${suffix}`, displayCollectionName: `Renamed Tables ${suffix}`, description: "改过的表描述" });
   }, 120_000);
 
   it("creates a Lookup field pointing at account, and the relationship + lookup attribute are real", async () => {

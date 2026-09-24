@@ -191,6 +191,45 @@ export async function addSolutionComponent(connectionId: string, solutionUniqueN
   });
 }
 
+/** `SolutionComponent.solutioncomponentid` takes the component's own id (the solutioncomponent
+ *  row's `objectid`), not the solutioncomponent row's id — confirmed against ZaneTest: passing the
+ *  row id fails with "Cannot find solution component WebResource <row id>". */
+export async function removeSolutionComponent(connectionId: string, solutionUniqueName: string, componentType: number, componentId: string): Promise<void> {
+  await callNative("dataverse.request", {
+    connectionId,
+    method: "POST",
+    path: "RemoveSolutionComponent",
+    body: {
+      SolutionComponent: { "@odata.type": "Microsoft.Dynamics.CRM.solutioncomponent", solutioncomponentid: componentId },
+      ComponentType: componentType,
+      SolutionUniqueName: solutionUniqueName,
+    },
+  });
+}
+
+/** Web API path that deletes a component from the whole environment, or null for a component type
+ *  this tool has no known entity set for. */
+export function componentDeletePath(componentType: number, objectId: string): string | null {
+  if (componentType === ENTITY_COMPONENT_TYPE) return `EntityDefinitions(${objectId})`;
+  if (componentType === SYSTEM_FORM_COMPONENT_TYPE) return `systemforms(${objectId})`;
+  const resolver = COMPONENT_NAME_RESOLVERS[componentType];
+  return resolver ? `${resolver.entitySet}(${objectId})` : null;
+}
+
+export async function deleteComponent(connectionId: string, componentType: number, objectId: string): Promise<void> {
+  const path = componentDeletePath(componentType, objectId);
+  if (!path) throw new Error(`不支持删除这种类型的组件（componenttype ${componentType}）。`);
+  await callNative("dataverse.request", { connectionId, method: "DELETE", path }, { timeoutMs: LONG_TIMEOUT_MS });
+}
+
+export async function deleteColumn(connectionId: string, entityLogicalName: string, attributeMetadataId: string): Promise<void> {
+  await callNative(
+    "dataverse.request",
+    { connectionId, method: "DELETE", path: `EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes(${attributeMetadataId})` },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
+}
+
 export interface RecordComponentSource {
   entitySet: string;
   idField: string;
@@ -256,6 +295,66 @@ export async function createWebResource(connectionId: string, solutionUniqueName
     { timeoutMs: LONG_TIMEOUT_MS },
   );
   return { webResourceId: created.webresourceid };
+}
+
+export interface WebResourceDetail {
+  name: string;
+  displayName: string;
+  description: string;
+  webResourceType: number;
+  /** Base64, as stored. */
+  content: string;
+}
+
+/** Reads the unpublished (latest saved) version — a plain GET returns the last *published* one, so
+ *  an edit saved without publishing would otherwise reopen showing the old content. */
+export async function fetchWebResource(connectionId: string, webResourceId: string): Promise<WebResourceDetail> {
+  const row = await fetchDataverse<{ name: string; displayname: string | null; description: string | null; webresourcetype: number; content: string | null }>(
+    connectionId,
+    `webresourceset(${webResourceId})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=name,displayname,description,webresourcetype,content`,
+  );
+  return {
+    name: row.name,
+    displayName: row.displayname ?? "",
+    description: row.description ?? "",
+    webResourceType: row.webresourcetype,
+    content: row.content ?? "",
+  };
+}
+
+/** `$select` keeps `return=representation` from echoing the base64 content back. */
+export async function updateWebResource(
+  connectionId: string,
+  webResourceId: string,
+  params: { displayName: string; description: string; content: string },
+): Promise<void> {
+  await callNative(
+    "dataverse.request",
+    {
+      connectionId,
+      method: "PATCH",
+      path: `webresourceset(${webResourceId})?$select=webresourceid`,
+      body: { displayname: params.displayName, description: params.description || null, content: params.content },
+    },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
+}
+
+/** `ignoreBOM` keeps a leading BOM as a U+FEFF character so saving the text back re-encodes it
+ *  byte for byte instead of silently dropping it. */
+export function decodeBase64Utf8(base64: string): string {
+  const bytes = Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
+}
+
+export function encodeBase64Bytes(bytes: Uint8Array): string {
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+export function encodeBase64Utf8(text: string): string {
+  return encodeBase64Bytes(new TextEncoder().encode(text));
 }
 
 export interface PickableEntity {
@@ -781,6 +880,111 @@ export async function fetchEntityBasicInfo(connectionId: string, entityLogicalNa
     entitySetName: meta.EntitySetName,
     modifiedOn: meta.ModifiedOn,
   };
+}
+
+interface LocalizedLabelShape {
+  Label: string;
+  LanguageCode: number;
+}
+
+interface LabelShape {
+  LocalizedLabels?: LocalizedLabelShape[];
+  UserLocalizedLabel?: LocalizedLabelShape | null;
+}
+
+/** A metadata PUT replaces labels wholesale (the bridge can't send `MSCRM.MergeLabels`), so only
+ *  the user's own language entry is replaced and every other language's label is sent back as-is.
+ *  An empty `text` drops that language's entry instead of saving an empty label. */
+export function withLabelText(existing: LabelShape | null | undefined, text: string): Record<string, unknown> {
+  const languageCode = existing?.UserLocalizedLabel?.LanguageCode ?? 1033;
+  const others = (existing?.LocalizedLabels ?? []).filter((l) => l.LanguageCode !== languageCode);
+  const own = text ? [{ "@odata.type": "Microsoft.Dynamics.CRM.LocalizedLabel", Label: text, LanguageCode: languageCode }] : [];
+  return { "@odata.type": "Microsoft.Dynamics.CRM.Label", LocalizedLabels: [...others, ...own] };
+}
+
+/** Metadata can't be PATCHed — an update is a PUT of the complete definition, so every update
+ *  below starts from the full retrieved definition (derived type included, via its @odata.type). */
+async function fetchFullDefinition(connectionId: string, path: string): Promise<Record<string, unknown>> {
+  const def = await fetchDataverse<Record<string, unknown>>(connectionId, path);
+  const body = { ...def };
+  delete body["@odata.context"];
+  return body;
+}
+
+function attributePath(entityLogicalName: string, attributeLogicalName: string): string {
+  return `EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes(LogicalName='${attributeLogicalName}')`;
+}
+
+export interface ColumnDetail {
+  logicalName: string;
+  attributeType: string;
+  displayName: string;
+  description: string;
+  requiredLevel: string;
+  /** String/Memo only. */
+  maxLength: number | null;
+}
+
+export async function fetchColumnDetail(connectionId: string, entityLogicalName: string, attributeLogicalName: string): Promise<ColumnDetail> {
+  const def = await fetchDataverse<{
+    LogicalName: string;
+    AttributeType: string;
+    DisplayName?: LabelShape | null;
+    Description?: LabelShape | null;
+    RequiredLevel?: { Value: string } | null;
+    MaxLength?: number | null;
+  }>(connectionId, attributePath(entityLogicalName, attributeLogicalName));
+  return {
+    logicalName: def.LogicalName,
+    attributeType: def.AttributeType,
+    displayName: def.DisplayName?.UserLocalizedLabel?.Label ?? "",
+    description: def.Description?.UserLocalizedLabel?.Label ?? "",
+    requiredLevel: def.RequiredLevel?.Value ?? "None",
+    maxLength: def.AttributeType === "String" || def.AttributeType === "Memo" ? (def.MaxLength ?? null) : null,
+  };
+}
+
+export interface ColumnUpdateParams {
+  displayName: string;
+  description: string;
+  requiredLevel: string;
+  maxLength?: number;
+}
+
+export async function updateColumn(
+  connectionId: string,
+  solutionUniqueName: string,
+  entityLogicalName: string,
+  attributeLogicalName: string,
+  params: ColumnUpdateParams,
+): Promise<void> {
+  const path = attributePath(entityLogicalName, attributeLogicalName);
+  const def = await fetchFullDefinition(connectionId, path);
+  const body: Record<string, unknown> = {
+    ...def,
+    DisplayName: withLabelText(def.DisplayName as LabelShape | null, params.displayName),
+    Description: withLabelText(def.Description as LabelShape | null, params.description),
+    RequiredLevel: { ...(def.RequiredLevel as Record<string, unknown> | null), Value: params.requiredLevel },
+  };
+  if (params.maxLength !== undefined && "MaxLength" in def) body.MaxLength = params.maxLength;
+  await callNative("dataverse.request", { connectionId, solutionUniqueName, method: "PUT", path, body }, { timeoutMs: LONG_TIMEOUT_MS });
+}
+
+export async function updateTable(
+  connectionId: string,
+  solutionUniqueName: string,
+  entityLogicalName: string,
+  params: { displayName: string; displayCollectionName: string; description: string },
+): Promise<void> {
+  const path = `EntityDefinitions(LogicalName='${entityLogicalName}')`;
+  const def = await fetchFullDefinition(connectionId, path);
+  const body = {
+    ...def,
+    DisplayName: withLabelText(def.DisplayName as LabelShape | null, params.displayName),
+    DisplayCollectionName: withLabelText(def.DisplayCollectionName as LabelShape | null, params.displayCollectionName),
+    Description: withLabelText(def.Description as LabelShape | null, params.description),
+  };
+  await callNative("dataverse.request", { connectionId, solutionUniqueName, method: "PUT", path, body }, { timeoutMs: LONG_TIMEOUT_MS });
 }
 
 /** Republishes every customization org-wide — Dataverse's Web API has no "publish only this one

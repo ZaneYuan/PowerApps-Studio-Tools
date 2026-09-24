@@ -6,7 +6,11 @@ import {
   buildComponentSearchPath,
   buildOneToManyRelationshipBody,
   buildPublishXml,
+  componentDeletePath,
+  decodeBase64Utf8,
+  encodeBase64Utf8,
   suggestSchemaName,
+  withLabelText,
   type NewColumnParams,
 } from "./dataverseOps";
 import { webResourceTypeForFileName } from "./componentCatalog";
@@ -312,5 +316,55 @@ describe("webResourceTypeForFileName", () => {
 
   it("returns null for an unsupported extension", () => {
     expect(webResourceTypeForFileName("archive.zip")).toBeNull();
+  });
+});
+
+describe("withLabelText", () => {
+  const existing = {
+    LocalizedLabels: [
+      { Label: "Account", LanguageCode: 1033 },
+      { Label: "客户", LanguageCode: 2052 },
+    ],
+    UserLocalizedLabel: { Label: "客户", LanguageCode: 2052 },
+  };
+
+  it("replaces only the user's own language and keeps every other language", () => {
+    const result = withLabelText(existing, "客户账号") as { LocalizedLabels: { Label: string; LanguageCode: number }[] };
+    expect(result.LocalizedLabels.map((l) => [l.LanguageCode, l.Label])).toEqual([
+      [1033, "Account"],
+      [2052, "客户账号"],
+    ]);
+  });
+
+  it("drops the user's language entry for empty text instead of saving an empty label", () => {
+    const result = withLabelText(existing, "") as { LocalizedLabels: { LanguageCode: number }[] };
+    expect(result.LocalizedLabels.map((l) => l.LanguageCode)).toEqual([1033]);
+  });
+
+  it("falls back to 1033 when there is no existing label", () => {
+    const result = withLabelText(null, "Name") as { LocalizedLabels: { Label: string; LanguageCode: number }[] };
+    expect(result.LocalizedLabels).toEqual([expect.objectContaining({ Label: "Name", LanguageCode: 1033 })]);
+  });
+});
+
+describe("componentDeletePath", () => {
+  const id = "11111111-2222-3333-4444-555555555555";
+
+  it("uses EntityDefinitions for tables and the record entity set for record-backed components", () => {
+    expect(componentDeletePath(1, id)).toBe(`EntityDefinitions(${id})`);
+    expect(componentDeletePath(60, id)).toBe(`systemforms(${id})`);
+    expect(componentDeletePath(61, id)).toBe(`webresourceset(${id})`);
+    expect(componentDeletePath(9, id)).toBe(`GlobalOptionSetDefinitions(${id})`);
+  });
+
+  it("returns null for a component type with no known entity set", () => {
+    expect(componentDeletePath(14, id)).toBeNull();
+  });
+});
+
+describe("base64 UTF-8 round trip", () => {
+  it("preserves non-ASCII text and a leading BOM", () => {
+    const text = "\uFEFF// 中文注释 — ok\n";
+    expect(decodeBase64Utf8(encodeBase64Utf8(text))).toBe(text);
   });
 });
