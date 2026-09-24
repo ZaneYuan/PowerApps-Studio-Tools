@@ -4,7 +4,7 @@ import { EditorView, keymap, placeholder as placeholderExt } from "@codemirror/v
 import { basicSetup } from "codemirror";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { sql } from "@codemirror/lang-sql";
-import { TSQL } from "./sqlDialect";
+import { tsqlForTables } from "./sqlDialect";
 import { acceptCompletion, autocompletion, snippetCompletion, type CompletionSource } from "@codemirror/autocomplete";
 import { tags as t } from "@lezer/highlight";
 
@@ -61,6 +61,13 @@ const snippetSource: CompletionSource = (context) => {
 // (see @codemirror/autocomplete's snippet() — appended via StateEffect.appendConfig when a
 // snippet completion is applied), so this only ever fires while the completion list is open.
 const tabAccepts = Prec.highest(keymap.of([{ key: "Tab", run: acceptCompletion }]));
+
+/** Each schema gets its own dialect (see tsqlForTables), and every dialect has its own language
+ *  object, so the snippet source is attached to whichever one is current. */
+function sqlLanguage(schema: Record<string, string[]>, defaultTable: string | undefined): Extension {
+  const dialect = tsqlForTables(Object.keys(schema));
+  return [sql({ dialect, schema, defaultTable, upperCaseKeywords: true }), dialect.language.data.of({ autocomplete: snippetSource })];
+}
 
 const lightHighlight = HighlightStyle.define(
   [
@@ -177,8 +184,7 @@ export default function SqlEditor({ value, onChange, schema, defaultTable, place
           basicSetup,
           tabAccepts,
           autocompletion(),
-          languageConf.current.of(sql({ dialect: TSQL, schema, defaultTable, upperCaseKeywords: true })),
-          TSQL.language.data.of({ autocomplete: snippetSource }),
+          languageConf.current.of(sqlLanguage(schema, defaultTable)),
           syntaxHighlighting(lightHighlight),
           syntaxHighlighting(darkHighlight),
           themeConf.current.of(chrome(isDarkPreferred())),
@@ -213,7 +219,7 @@ export default function SqlEditor({ value, onChange, schema, defaultTable, place
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
-      effects: languageConf.current.reconfigure(sql({ dialect: TSQL, schema, defaultTable, upperCaseKeywords: true })),
+      effects: languageConf.current.reconfigure(sqlLanguage(schema, defaultTable)),
     });
     // Keyed on a cheap fingerprint rather than the schema object identity — the caller rebuilds
     // schema on every render, and reconfiguring on every keystroke would reset completion state.

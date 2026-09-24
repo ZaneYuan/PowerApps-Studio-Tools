@@ -3,10 +3,15 @@ import { CompletionContext, type CompletionSource } from "@codemirror/autocomple
 import { syntaxTree } from "@codemirror/language";
 import { sql } from "@codemirror/lang-sql";
 import { EditorState } from "@codemirror/state";
-import { TSQL } from "./sqlDialect";
+import { TSQL, tsqlForTables } from "./sqlDialect";
 
 function stateFor(doc: string, schema: Record<string, string[]> = {}, defaultTable?: string): EditorState {
   return EditorState.create({ doc, selection: { anchor: doc.length }, extensions: [sql({ dialect: TSQL, schema, defaultTable })] });
+}
+
+function schemaStateFor(doc: string, schema: Record<string, string[]>, defaultTable?: string): EditorState {
+  const dialect = tsqlForTables(Object.keys(schema));
+  return EditorState.create({ doc, selection: { anchor: doc.length }, extensions: [sql({ dialect, schema, defaultTable })] });
 }
 
 function nodeNameAt(state: EditorState, pos: number): string {
@@ -40,6 +45,30 @@ describe("TSQL dialect", () => {
     const labels = await completionLabels(stateFor(doc, schema, "bupa_bupa_offer_product"));
     expect(labels).toEqual(expect.arrayContaining(["bupa_offerid", "bupa_name"]));
     expect(labels).not.toContain("productnumber");
+  });
+
+  it("completes the alias of a JOINed table named like a T-SQL built-in function (Requirements/9.23 #4)", async () => {
+    const doc =
+      "select p.productname from bupa_productbenefittype pbt\n  left join product p on pbt.bupa_productid = p.productid\n\nwhere p.produc";
+    const schema = { bupa_productbenefittype: ["bupa_name", "bupa_productid"], product: ["productname", "productid", "productnumber"] };
+    const state = schemaStateFor(doc, schema, "bupa_productbenefittype");
+    expect(nodeNameAt(state, doc.indexOf("product p"))).toBe("Identifier");
+    const labels = await completionLabels(state);
+    expect(labels).toEqual(expect.arrayContaining(["productname", "productid", "productnumber"]));
+    expect(labels).not.toContain("bupa_name");
+  });
+
+  it("completes the alias of a table named like a T-SQL keyword", async () => {
+    const doc = "select * from systemuser u join role r on r.roleid = u.systemuserid where r.";
+    const schema = { systemuser: ["systemuserid", "fullname"], role: ["roleid", "name"] };
+    const labels = await completionLabels(schemaStateFor(doc, schema, "systemuser"));
+    expect(labels).toEqual(expect.arrayContaining(["roleid", "name"]));
+  });
+
+  it("still highlights a colliding word as a keyword when no table has that name", () => {
+    const doc = "select product(1) from a";
+    const state = schemaStateFor(doc, { a: [] });
+    expect(nodeNameAt(state, doc.indexOf("product"))).toBe("Builtin");
   });
 
   it("completes the default table's columns without a prefix", async () => {
