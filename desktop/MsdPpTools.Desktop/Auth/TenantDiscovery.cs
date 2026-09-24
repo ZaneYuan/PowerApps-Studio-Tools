@@ -30,11 +30,22 @@ public sealed class TenantDiscovery
     /// <c>https://login.microsoftonline.com/&lt;tenant-guid&gt;</c>. The first call for a given
     /// environment does one HTTP round-trip; later calls are free. Throws with an actionable
     /// message when the environment URL is wrong/unreachable or the challenge header is missing.</summary>
-    public Task<string> ResolveAuthorityAsync(string environmentUrl)
+    public async Task<string> ResolveAuthorityAsync(string environmentUrl)
     {
         var key = environmentUrl.TrimEnd('/');
         // GetOrAdd stores the Task itself, so concurrent callers for the same env share one probe.
-        return _authorityByEnvironment.GetOrAdd(key, DiscoverAsync);
+        var probe = _authorityByEnvironment.GetOrAdd(key, DiscoverAsync);
+        try
+        {
+            return await probe.ConfigureAwait(false);
+        }
+        catch
+        {
+            // Only a success is cached for the process: a failed probe (often a transient network
+            // error) left in place would fail every later token request for this environment.
+            _authorityByEnvironment.TryRemove(new KeyValuePair<string, Task<string>>(key, probe));
+            throw;
+        }
     }
 
     private static async Task<string> DiscoverAsync(string environmentUrl)
@@ -44,8 +55,7 @@ public sealed class TenantDiscovery
         HttpResponseMessage response;
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, probeUrl);
-            response = await Http.SendAsync(request).ConfigureAwait(false);
+            response = await SendWithConnectRetryAsync(probeUrl).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -79,6 +89,25 @@ public sealed class TenantDiscovery
             authority = authority.Replace(
                 "login.windows.net", "login.microsoftonline.com", StringComparison.OrdinalIgnoreCase);
             return authority.TrimEnd('/');
+        }
+    }
+
+    /// <summary>A connection that couldn't be established (DNS, TCP or TLS handshake — seen
+    /// intermittently on real networks) is retried; the request was never sent in that case.</summary>
+    private static async Task<HttpResponseMessage> SendWithConnectRetryAsync(string url)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            try
+            {
+                return await Http.SendAsync(request).ConfigureAwait(false);
+            }
+            catch (HttpRequestException ex) when (attempt < 3 && ex.HttpRequestError is HttpRequestError.ConnectionError
+                or HttpRequestError.SecureConnectionError or HttpRequestError.NameResolutionError)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt)).ConfigureAwait(false);
+            }
         }
     }
 }

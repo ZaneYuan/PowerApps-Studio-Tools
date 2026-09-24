@@ -11,6 +11,7 @@ using System.Xml.Linq;
 using Microsoft.Web.WebView2.Core;
 using MsdPpTools.Desktop.Auth;
 using MsdPpTools.Desktop.Connections;
+using MsdPpTools.Desktop.Diagnostics;
 
 namespace MsdPpTools.Desktop.Bridge;
 
@@ -143,6 +144,8 @@ public sealed class RibbonWorkbenchHost
         }
         catch (Exception ex)
         {
+            // The page only sees a status code, so the cause is kept in crash.log.
+            CrashLog.Write($"RibbonWorkbenchHost {method} {uri.PathAndQuery}", ex);
             e.Response = CreateResponse(502, "Bad Gateway", "text/plain", Encoding.UTF8.GetBytes(ex.Message));
         }
         finally
@@ -210,24 +213,32 @@ public sealed class RibbonWorkbenchHost
         Connection connection, string accessToken, string label, Uri uri, string method, List<KeyValuePair<string, string>> headers, byte[]? body)
     {
         var environmentOrigin = connection.EnvironmentUrl.TrimEnd('/');
-        using var request = new HttpRequestMessage(new HttpMethod(method), environmentOrigin + uri.PathAndQuery);
-        if (body is not null) request.Content = new ByteArrayContent(body);
-        foreach (var (name, value) in headers)
+        HttpRequestMessage BuildRequest()
         {
-            if (SkippedRequestHeaders.Contains(name)) continue;
-            if (!request.Headers.TryAddWithoutValidation(name, value))
+            var request = new HttpRequestMessage(new HttpMethod(method), environmentOrigin + uri.PathAndQuery);
+            if (body is not null) request.Content = new ByteArrayContent(body);
+            foreach (var (name, value) in headers)
             {
-                // A content header on a bodiless GET still has to reach the server:
-                // ClientGlobalContext.js.aspx re-requests itself with Content-Type:
-                // application/json to get its initialization script, and without that header it
-                // gets the loader back, which re-requests itself again — endlessly.
-                request.Content ??= new ByteArrayContent([]);
-                request.Content.Headers.TryAddWithoutValidation(name, value);
+                if (SkippedRequestHeaders.Contains(name)) continue;
+                if (!request.Headers.TryAddWithoutValidation(name, value))
+                {
+                    // A content header on a bodiless GET still has to reach the server:
+                    // ClientGlobalContext.js.aspx re-requests itself with Content-Type:
+                    // application/json to get its initialization script, and without that header it
+                    // gets the loader back, which re-requests itself again — endlessly.
+                    request.Content ??= new ByteArrayContent([]);
+                    request.Content.Headers.TryAddWithoutValidation(name, value);
+                }
             }
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            return request;
         }
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
-        using var response = await Http.SendAsync(request);
+        var soapAction = headers.FirstOrDefault(h => h.Key.Equals("SOAPAction", StringComparison.OrdinalIgnoreCase)).Value ?? "";
+        var isRead = string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)
+            || soapAction.Trim('"').EndsWith("/Retrieve", StringComparison.Ordinal)
+            || soapAction.Trim('"').EndsWith("/RetrieveMultiple", StringComparison.Ordinal);
+        using var response = await SendWithRetryAsync(BuildRequest, isRead);
         var content = await response.Content.ReadAsByteArrayAsync();
         var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
 
@@ -241,6 +252,29 @@ public sealed class RibbonWorkbenchHost
         }
 
         return CreateResponse((int)response.StatusCode, response.ReasonPhrase ?? "", contentType, content);
+    }
+
+    /// <summary>RWB fires dozens of requests while it loads and any single failure strands it on its
+    /// spinner, so transient network failures are retried: a connection that couldn't be
+    /// established (DNS, TCP or TLS handshake — seen intermittently on real networks) always, since
+    /// the request was never sent; a response cut off mid-way only for reads (`isRead`), since a
+    /// write may already have been applied.</summary>
+    private static async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> buildRequest, bool isRead)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            using var request = buildRequest();
+            try
+            {
+                return await Http.SendAsync(request);
+            }
+            catch (HttpRequestException ex) when (attempt < 3 && (ex.HttpRequestError is HttpRequestError.ConnectionError
+                or HttpRequestError.SecureConnectionError or HttpRequestError.NameResolutionError
+                || (isRead && ex.HttpRequestError is HttpRequestError.ResponseEnded)))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt));
+            }
+        }
     }
 
     private PackageFile? FindPackageFile(string absolutePath)
