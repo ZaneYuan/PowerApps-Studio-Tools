@@ -1,4 +1,4 @@
-import { tools, isBetaCategory } from "../tools/registry";
+import { visibleTools as tools, isBetaCategory } from "../tools/registry";
 import { useActiveConnection } from "../native/activeConnection";
 import { useTabManager } from "../native/tabs";
 import SvgIcon from "../shared/SvgIcon";

@@ -16,6 +16,9 @@ export interface ToolMeta {
    *  manager itself) — opens as a single un-suffixed tab and hides the per-tab connection
    *  selector, instead of the default per-connection tab identity. Defaults to true. */
   connectionScoped?: boolean;
+  /** Keeps a tool out of the home grid and sidebar while leaving it registered, so tabs already
+   *  open on it (restored from localStorage) still resolve. */
+  hidden?: boolean;
 }
 
 export interface ToolDefinition extends ToolMeta {

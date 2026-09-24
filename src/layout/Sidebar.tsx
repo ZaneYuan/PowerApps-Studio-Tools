@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { tools, getCategories, getToolById, isBetaCategory } from "../tools/registry";
+import { visibleTools, getCategories, getToolById, isBetaCategory } from "../tools/registry";
 import { useActiveConnection } from "../native/activeConnection";
 import { useTabManager } from "../native/tabs";
 import type { ToolDefinition } from "../tools/types";
@@ -45,9 +45,9 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   const trimmedSearch = search.trim().toLowerCase();
   const searchResults = trimmedSearch
-    ? tools.filter((t) => t.name.toLowerCase().includes(trimmedSearch) || t.description.toLowerCase().includes(trimmedSearch))
+    ? visibleTools.filter((t) => t.name.toLowerCase().includes(trimmedSearch) || t.description.toLowerCase().includes(trimmedSearch))
     : null;
-  const recentTools = recentToolIds.map((id) => getToolById(id)).filter((t): t is ToolDefinition => !!t);
+  const recentTools = recentToolIds.map((id) => getToolById(id)).filter((t): t is ToolDefinition => !!t && !t.hidden);
 
   return (
     <nav className="flex h-full flex-col overflow-y-auto">
@@ -113,7 +113,7 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                   )}
                 </div>
                 <ul className="mt-2 space-y-1">
-                  {tools
+                  {visibleTools
                     .filter((t) => t.category === category)
                     .map((tool) => (
                       <li key={tool.id}>

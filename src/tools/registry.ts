@@ -98,11 +98,20 @@ export const tools: ToolDefinition[] = [
     Component: lazy(() => import("./solution-editor/SolutionEditor")),
   },
   {
-    id: "ribbon-workbench",
+    id: "ribbon-workbench-embedded",
     name: "Ribbon Workbench",
+    description: "嵌入环境里已安装的 Develop1 Ribbon Workbench 2016，编辑命令栏与功能区。",
+    category: "Power Apps",
+    icon: "ribbon",
+    Component: lazy(() => import("./ribbon-workbench-embedded/RibbonWorkbenchEmbedded")),
+  },
+  {
+    id: "ribbon-workbench",
+    name: "Ribbon Workbench（旧版）",
     description: "编辑单个表的功能区 RibbonDiffXml。",
     category: "Power Apps",
     icon: "ribbon",
+    hidden: true,
     Component: lazy(() => import("./ribbon-workbench/RibbonWorkbench")),
   },
   {
@@ -157,10 +166,12 @@ export function isBetaCategory(category: string): boolean {
   return betaCategories.has(category);
 }
 
+export const visibleTools = tools.filter((t) => !t.hidden);
+
 export function getToolById(id: string): ToolDefinition | undefined {
   return tools.find((t) => t.id === id);
 }
 
 export function getCategories(): string[] {
-  return Array.from(new Set(tools.map((t) => t.category)));
+  return Array.from(new Set(visibleTools.map((t) => t.category)));
 }
