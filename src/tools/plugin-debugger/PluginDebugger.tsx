@@ -324,7 +324,7 @@ export default function PluginDebugger() {
   }
 
   return (
-    <div className="max-w-7xl space-y-4">
+    <div className="space-y-4">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         使用微软官方 Plugin Profiler：在环境里抓取一次真实的插件执行上下文（Target、镜像、参数、异常），然后在本机用你编译的插件 DLL 重放，并可附加 Visual Studio 单步调试。
       </div>

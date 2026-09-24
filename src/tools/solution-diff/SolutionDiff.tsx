@@ -154,7 +154,7 @@ export default function SolutionDiff() {
   const bothLoaded = oldBundle && newBundle;
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="space-y-6">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         上传两个解决方案包（.zip）对比组件差异。解析在本地完成，文件不会上传。
       </div>

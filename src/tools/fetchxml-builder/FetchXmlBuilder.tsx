@@ -107,7 +107,7 @@ export default function FetchXmlBuilder() {
   }
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="space-y-6">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         可视化构建 FetchXML（支持嵌套过滤分组和 link-entity），生成后直接执行。
       </div>

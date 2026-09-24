@@ -67,7 +67,7 @@ export default function FetchXmlToOData() {
     : "";
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="space-y-6">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         基于规则转换，不读取字段元数据，请核对生成结果后再使用。
       </div>

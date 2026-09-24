@@ -224,7 +224,7 @@ export default function WorkflowViewer() {
   const triggers = item && item.category === 0 ? classicTriggers(item) : [];
 
   return (
-    <div className="flex max-w-7xl flex-col gap-4 lg:flex-row lg:items-start">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
       <div className="flex w-full flex-col gap-2 rounded-lg border border-gray-200 p-3 lg:w-96 lg:shrink-0 dark:border-gray-800">
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索名称 / 唯一名 / 表" className={inputCls} />
         <div className="flex flex-wrap items-center gap-1">

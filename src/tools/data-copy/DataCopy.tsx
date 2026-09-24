@@ -293,7 +293,7 @@ export default function DataCopy() {
   }
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="space-y-4">
       <UnsavedChangesBadge dirty={isDirty} />
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         用一条单表 SELECT 查出数据，在表格里编辑后把勾选的行创建为全新记录（主键由 Dataverse 生成）。不支持 JOIN / 聚合。

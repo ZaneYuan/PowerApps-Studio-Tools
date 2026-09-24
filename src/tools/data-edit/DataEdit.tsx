@@ -456,7 +456,7 @@ export default function DataEdit() {
   }
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="space-y-4">
       <UnsavedChangesBadge dirty={isDirty} />
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         用一条单表 SELECT 查出数据，在表格里编辑。勾选主键 ID 列时按"更新"（只提交真正变更的行），取消勾选时按"创建"复制为新记录；"删除"直接删掉勾选的行，不可撤销。不支持 JOIN / 聚合。

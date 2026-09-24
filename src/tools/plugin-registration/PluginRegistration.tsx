@@ -350,7 +350,7 @@ export default function PluginRegistration() {
         {selected && detailError && <p className="text-xs text-red-600 dark:text-red-400">{detailError}</p>}
         {selected && detail !== null && !detailLoading && (
           <div className="overflow-auto">
-            <table className="w-full max-w-2xl text-left text-sm">
+            <table className="w-full text-left text-sm">
               <tbody>
                 {detailRows(selected.kind, detail).map((row) => (
                   <tr key={row.label} className="border-t border-gray-100 dark:border-gray-800">

@@ -322,7 +322,7 @@ export default function RecordMerge() {
   }
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="space-y-4">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         输入实体 + GUID（或粘贴记录的表单 URL）定位一条记录，查看有哪些记录引用了它，再把这些引用批量迁移到另一条同表记录。
         旧记录不会被停用或删除。

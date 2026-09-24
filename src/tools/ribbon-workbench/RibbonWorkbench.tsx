@@ -258,7 +258,7 @@ export default function RibbonWorkbench() {
   }
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="space-y-4">
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
         编辑单个表的 RibbonDiffXml（原始 XML）：导出解决方案 → 修改 → 重新导入 → 发布。也可以只填表名，只读查看当前生效的完整功能区树。
         <br />

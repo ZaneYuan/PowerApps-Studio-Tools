@@ -338,7 +338,7 @@ export default function ConnectionsPage() {
   }
 
   return (
-    <div className="max-w-2xl space-y-8">
+    <div className="space-y-8">
       <div>
         <h2 className="mb-3 text-sm font-medium text-gray-700 dark:text-gray-300">已保存的连接</h2>
         {connections.length === 0 ? (

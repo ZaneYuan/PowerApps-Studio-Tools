@@ -239,7 +239,7 @@ export default function SolutionEditor() {
   // ---- List view ----
   if (!selected) {
     return (
-      <div className="max-w-5xl space-y-4">
+      <div className="space-y-4">
         <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
           查看或新建解决方案。进入一个非托管解决方案后可以浏览组件、添加已有组件（表、Web Resource、插件、流程等）、新建表/字段/Web Resource、管理发布者并发布。托管解决方案只能查看。
         </div>
@@ -340,7 +340,7 @@ export default function SolutionEditor() {
   const otherGroupTypes = [...otherGrouped.keys()].sort((a, b) => (COMPONENT_TYPE_LABELS[a] ?? "").localeCompare(COMPONENT_TYPE_LABELS[b] ?? ""));
 
   return (
-    <div className="max-w-6xl space-y-4">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <button onClick={backToList} className="text-sm text-blue-600 hover:underline dark:text-blue-400">
           ← 返回列表
