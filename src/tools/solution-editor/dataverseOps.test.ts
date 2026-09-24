@@ -3,11 +3,13 @@ import {
   buildAttributeBody,
   buildGlobalChoiceAttributeBody,
   buildGlobalOptionSetBody,
+  buildComponentSearchPath,
   buildOneToManyRelationshipBody,
-  buildPublishXmlForEntities,
+  buildPublishXml,
   suggestSchemaName,
   type NewColumnParams,
 } from "./dataverseOps";
+import { webResourceTypeForFileName } from "./componentCatalog";
 import type { BasicColumnType } from "./types";
 
 const BASE_PARAMS: NewColumnParams = {
@@ -253,14 +255,62 @@ describe("buildOneToManyRelationshipBody — Lookup field creation", () => {
   });
 });
 
-describe("buildPublishXmlForEntities — per-solution targeted publish", () => {
+describe("buildPublishXml — per-solution targeted publish", () => {
   it("lists every given entity inside <importexportxml><entities>", () => {
-    const xml = buildPublishXmlForEntities(["account", "ad_childthing"]);
+    const xml = buildPublishXml(["account", "ad_childthing"]);
     expect(xml).toBe("<importexportxml><entities><entity>account</entity><entity>ad_childthing</entity></entities></importexportxml>");
   });
 
-  it("produces a valid (if empty) element for zero entities rather than malformed XML", () => {
-    const xml = buildPublishXmlForEntities([]);
-    expect(xml).toBe("<importexportxml><entities></entities></importexportxml>");
+  it("lists web resources by braced id, leaving out an empty entities section", () => {
+    const xml = buildPublishXml([], ["40db20ad-2cb7-f111-aaad-000d3a802a2a"]);
+    expect(xml).toBe("<importexportxml><webresources><webresource>{40db20ad-2cb7-f111-aaad-000d3a802a2a}</webresource></webresources></importexportxml>");
+  });
+
+  it("combines entities and web resources", () => {
+    const xml = buildPublishXml(["account"], ["11111111-1111-1111-1111-111111111111"]);
+    expect(xml).toBe(
+      "<importexportxml><entities><entity>account</entity></entities><webresources><webresource>{11111111-1111-1111-1111-111111111111}</webresource></webresources></importexportxml>",
+    );
+  });
+});
+
+describe("buildComponentSearchPath — Add Existing picker query", () => {
+  const source = {
+    entitySet: "webresourceset",
+    idField: "webresourceid",
+    nameField: "name",
+    secondaryField: "displayname",
+    baseFilter: "ishidden/Value eq false",
+    orderBy: "modifiedon desc",
+  };
+
+  it("uses only the base filter for an empty query", () => {
+    expect(buildComponentSearchPath(source, "  ")).toBe(
+      "webresourceset?$select=webresourceid,name,displayname&$filter=(ishidden/Value eq false)&$orderby=modifiedon desc&$top=200",
+    );
+  });
+
+  it("adds an escaped contains() on the name field", () => {
+    expect(buildComponentSearchPath(source, "O'Brien")).toBe(
+      "webresourceset?$select=webresourceid,name,displayname&$filter=(ishidden/Value eq false) and contains(name,'O''Brien')&$orderby=modifiedon desc&$top=200",
+    );
+  });
+
+  it("omits $filter entirely when there is neither a base filter nor a query", () => {
+    expect(buildComponentSearchPath({ entitySet: "roles", idField: "roleid", nameField: "name", orderBy: "name" }, "")).toBe(
+      "roles?$select=roleid,name&$orderby=name&$top=200",
+    );
+  });
+});
+
+describe("webResourceTypeForFileName", () => {
+  it("maps known extensions case-insensitively", () => {
+    expect(webResourceTypeForFileName("Bupa.Offer.JS")).toBe(3);
+    expect(webResourceTypeForFileName("icon.svg")).toBe(11);
+    expect(webResourceTypeForFileName("page.htm")).toBe(1);
+  });
+
+  it("returns null for an unsupported extension", () => {
+    expect(webResourceTypeForFileName("archive.zip")).toBeNull();
   });
 });

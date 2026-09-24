@@ -92,7 +92,7 @@ export const tools: ToolDefinition[] = [
   {
     id: "solution-editor",
     name: "Solution 编辑器",
-    description: "管理解决方案组件：表、字段、发布者，并发布。",
+    description: "管理解决方案组件：表、字段、Web Resource、插件、流程等，并发布。",
     category: "Power Apps",
     icon: "solution",
     Component: lazy(() => import("./solution-editor/SolutionEditor")),

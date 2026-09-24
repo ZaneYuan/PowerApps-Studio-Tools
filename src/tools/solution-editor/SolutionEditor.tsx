@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { isNativeBridgeAvailable } from "../../native/bridge";
 import { useActiveConnection } from "../../native/activeConnection";
-import { fetchEntityBasicInfo, fetchEntityFields, fetchSolutionComponents, fetchSolutions, publishAll, publishSolutionEntities } from "./dataverseOps";
-import AddExistingTableDialog from "./AddExistingTableDialog";
+import { fetchEntityBasicInfo, fetchEntityFields, fetchSolutionComponents, fetchSolutions, publishAll, publishSolutionComponents } from "./dataverseOps";
+import AddExistingComponentDialog from "./AddExistingComponentDialog";
+import { ADD_EXISTING_KINDS, NEW_KINDS, type AddableComponentKind } from "./componentCatalog";
+import DropdownMenuButton from "./DropdownMenuButton";
 import NewColumnDialog from "./NewColumnDialog";
 import NewSolutionDialog from "./NewSolutionDialog";
 import NewTableDialog from "./NewTableDialog";
+import NewWebResourceDialog from "./NewWebResourceDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
 import SvgIcon from "../../shared/SvgIcon";
 import {
@@ -14,6 +17,7 @@ import {
   ENTITY_COMPONENT_TYPE,
   ENTITY_SUBCOMPONENT_TYPES,
   SYSTEM_FORM_COMPONENT_TYPE,
+  WEB_RESOURCE_COMPONENT_TYPE,
   type ColumnFieldMeta,
   type EntityBasicInfo,
   type SolutionComponentRow,
@@ -71,7 +75,8 @@ export default function SolutionEditor() {
   const [entityFieldsError, setEntityFieldsError] = useState<string | null>(null);
 
   const [showNewTable, setShowNewTable] = useState(false);
-  const [showAddExisting, setShowAddExisting] = useState(false);
+  const [showNewWebResource, setShowNewWebResource] = useState(false);
+  const [addExistingKind, setAddExistingKind] = useState<AddableComponentKind | null>(null);
   const [showNewColumn, setShowNewColumn] = useState(false);
 
   const [publishing, setPublishing] = useState(false);
@@ -171,24 +176,35 @@ export default function SolutionEditor() {
     }
   }
 
-  /** Publishes just this solution's own tables — builds the explicit component list PublishXml
-   *  requires from the Entity-type rows already loaded (`components`), no extra fetch needed. */
-  async function handlePublishThisSolution() {
-    if (!activeConnectionId || !components) return;
-    const logicalNames = components
-      .filter((c) => c.componenttype === ENTITY_COMPONENT_TYPE && c.logicalName)
-      .map((c) => c.logicalName!);
+  async function publishComponents(logicalNames: string[], webResourceIds: string[]) {
+    if (!activeConnectionId) return;
     setPublishing(true);
     setPublishError(null);
     setPublishDone(false);
     try {
-      await publishSolutionEntities(activeConnectionId, logicalNames);
+      await publishSolutionComponents(activeConnectionId, logicalNames, webResourceIds);
       setPublishDone(true);
     } catch (err) {
       setPublishError(err instanceof Error ? err.message : String(err));
     } finally {
       setPublishing(false);
     }
+  }
+
+  /** Publishes just this solution's own tables and web resources — builds the explicit component
+   *  list PublishXml requires from the rows already loaded (`components`), no extra fetch needed. */
+  async function handlePublishThisSolution() {
+    if (!components) return;
+    const logicalNames = components
+      .filter((c) => c.componenttype === ENTITY_COMPONENT_TYPE && c.logicalName)
+      .map((c) => c.logicalName!);
+    const webResourceIds = components.filter((c) => c.componenttype === WEB_RESOURCE_COMPONENT_TYPE).map((c) => c.objectid);
+    await publishComponents(logicalNames, webResourceIds);
+  }
+
+  function handleNewKind(key: string) {
+    if (key === "table") setShowNewTable(true);
+    else if (key === "webresource") setShowNewWebResource(true);
   }
 
   function toggleEntity(id: string) {
@@ -225,7 +241,7 @@ export default function SolutionEditor() {
     return (
       <div className="max-w-5xl space-y-4">
         <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-400">
-          查看或新建解决方案。进入一个非托管解决方案后可以浏览组件、添加已有表、新建表和字段、管理发布者并发布。托管解决方案只能查看。
+          查看或新建解决方案。进入一个非托管解决方案后可以浏览组件、添加已有组件（表、Web Resource、插件、流程等）、新建表/字段/Web Resource、管理发布者并发布。托管解决方案只能查看。
         </div>
 
         <div className="flex items-center gap-2">
@@ -301,6 +317,8 @@ export default function SolutionEditor() {
   // the flat grouping, so it doesn't just disappear. Every other componenttype keeps the old flat
   // "group by type" treatment.
   const entityRows = (components ?? []).filter((c) => c.componenttype === ENTITY_COMPONENT_TYPE);
+  const entityLogicalNamesInTree = new Set(entityRows.flatMap((c) => (c.logicalName ? [c.logicalName.toLowerCase()] : [])));
+  const webResourceRows = (components ?? []).filter((c) => c.componenttype === WEB_RESOURCE_COMPONENT_TYPE);
   const formsByOwnerEntity = new Map<string, SolutionComponentRow[]>();
   for (const c of components ?? []) {
     if (c.componenttype !== SYSTEM_FORM_COMPONENT_TYPE || !c.ownerEntityLogicalName) continue;
@@ -312,7 +330,9 @@ export default function SolutionEditor() {
   const otherGrouped = new Map<number, SolutionComponentRow[]>();
   for (const c of components ?? []) {
     if (c.componenttype === ENTITY_COMPONENT_TYPE || ENTITY_SUBCOMPONENT_TYPES.has(c.componenttype)) continue;
-    if (c.componenttype === SYSTEM_FORM_COMPONENT_TYPE && c.ownerEntityLogicalName) continue; // nested under its table instead
+    // Nested under its table instead — unless that table isn't in this solution, or the form is a
+    // dashboard (objecttypecode "none"), in which case there's no table node to nest under.
+    if (c.componenttype === SYSTEM_FORM_COMPONENT_TYPE && c.ownerEntityLogicalName && entityLogicalNamesInTree.has(c.ownerEntityLogicalName.toLowerCase())) continue;
     const list = otherGrouped.get(c.componenttype) ?? [];
     list.push(c);
     otherGrouped.set(c.componenttype, list);
@@ -328,8 +348,8 @@ export default function SolutionEditor() {
         <div className="flex items-center gap-2">
           <button
             onClick={handlePublishThisSolution}
-            disabled={publishing || entityRows.length === 0}
-            title="只发布这个 solution 里的表（PublishXml 显式列出组件），不影响其它 solution"
+            disabled={publishing || (entityRows.length === 0 && webResourceRows.length === 0)}
+            title="只发布这个 solution 里的表和 Web Resource（PublishXml 显式列出组件），不影响其它 solution"
             className="rounded-md border border-purple-300 px-3 py-1.5 text-sm font-medium text-purple-700 hover:bg-purple-50 disabled:opacity-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-900/20"
           >
             {publishing ? "发布中…" : "只发布这个 Solution"}
@@ -356,15 +376,18 @@ export default function SolutionEditor() {
       </div>
 
       <div className="flex items-center gap-2">
-        <button onClick={() => setShowNewTable(true)} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
-          + 新建表
-        </button>
-        <button
-          onClick={() => setShowAddExisting(true)}
-          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-        >
-          添加现有表
-        </button>
+        <DropdownMenuButton
+          label="+ 新建"
+          items={NEW_KINDS}
+          onSelect={handleNewKind}
+          buttonClassName="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+        />
+        <DropdownMenuButton
+          label="添加现有"
+          items={ADD_EXISTING_KINDS}
+          onSelect={(key) => setAddExistingKind(ADD_EXISTING_KINDS.find((k) => k.key === key) ?? null)}
+          buttonClassName="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+        />
       </div>
 
       <div className="flex gap-3">
@@ -475,6 +498,15 @@ export default function SolutionEditor() {
                 {COMPONENT_TYPE_LABELS[selectedNode.component.componenttype] ?? `类型 ${selectedNode.component.componenttype}`}
               </p>
               <p className="mt-1 font-mono text-xs text-gray-400">{selectedNode.component.objectid}</p>
+              {selectedNode.component.componenttype === WEB_RESOURCE_COMPONENT_TYPE && (
+                <button
+                  onClick={() => publishComponents([], [selectedNode.component.objectid])}
+                  disabled={publishing}
+                  className="mt-4 rounded-md border border-purple-300 px-3 py-1.5 text-sm font-medium text-purple-700 hover:bg-purple-50 disabled:opacity-50 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-900/20"
+                >
+                  {publishing ? "发布中…" : "发布此 Web Resource"}
+                </button>
+              )}
             </div>
           )}
 
@@ -596,13 +628,26 @@ export default function SolutionEditor() {
           }}
         />
       )}
-      {showAddExisting && (
-        <AddExistingTableDialog
+      {showNewWebResource && (
+        <NewWebResourceDialog
           connectionId={activeConnectionId}
           solutionUniqueName={selected.uniquename}
-          onClose={() => setShowAddExisting(false)}
+          publisherPrefix={selected.publisherPrefix}
+          onClose={() => setShowNewWebResource(false)}
+          onCreated={() => {
+            setShowNewWebResource(false);
+            loadComponents(selected.solutionid);
+          }}
+        />
+      )}
+      {addExistingKind && (
+        <AddExistingComponentDialog
+          connectionId={activeConnectionId}
+          solutionUniqueName={selected.uniquename}
+          kind={addExistingKind}
+          onClose={() => setAddExistingKind(null)}
           onAdded={() => {
-            setShowAddExisting(false);
+            setAddExistingKind(null);
             loadComponents(selected.solutionid);
           }}
         />

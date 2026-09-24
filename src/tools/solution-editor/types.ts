@@ -74,6 +74,7 @@ export const COMPONENT_TYPE_LABELS: Record<number, string> = {
   68: "Custom Control Default Config",
   70: "Field Security Profile",
   71: "Field Permission",
+  80: "Model-driven App",
   90: "Plugin Type",
   91: "Plugin Assembly",
   92: "SDK Message Processing Step",
@@ -114,6 +115,7 @@ export const COMPONENT_TYPE_LABELS: Record<number, string> = {
 export const ENTITY_COMPONENT_TYPE = 1;
 export const ATTRIBUTE_COMPONENT_TYPE = 2;
 export const SYSTEM_FORM_COMPONENT_TYPE = 60;
+export const WEB_RESOURCE_COMPONENT_TYPE = 61;
 
 /** componenttype values that are really *sub*-components of a specific table (a field, a
  *  relationship) rather than standalone objects — Dataverse's solutioncomponents list still gives
@@ -135,19 +137,24 @@ export const ENTITY_SUBCOMPONENT_TYPES = new Set([2, 3, 10, 11, 12]);
  *  Anything not in this map just shows its type label + raw GUID, which is an accepted v1
  *  limitation, not a bug — see the Solution 编辑器 plan. */
 export const COMPONENT_NAME_RESOLVERS: Record<number, { entitySet: string; nameField: string }> = {
+  9: { entitySet: "GlobalOptionSetDefinitions", nameField: "Name" },
   20: { entitySet: "roles", nameField: "name" },
   26: { entitySet: "savedqueries", nameField: "name" },
   29: { entitySet: "workflows", nameField: "name" },
   // 60 (System Form) is NOT here — it's special-cased in fetchSolutionComponents instead, since it
   // also needs `objecttypecode` (the owning table) to nest under that table's tree node, not just
   // a name (see SolutionComponentRow.ownerEntityLogicalName below).
+  36: { entitySet: "templates", nameField: "title" },
   61: { entitySet: "webresourceset", nameField: "name" },
+  62: { entitySet: "sitemaps", nameField: "sitemapnameunique" },
   63: { entitySet: "connectionroles", nameField: "name" },
   70: { entitySet: "fieldsecurityprofiles", nameField: "name" },
+  80: { entitySet: "appmodules", nameField: "name" },
   90: { entitySet: "plugintypes", nameField: "friendlyname" },
   91: { entitySet: "pluginassemblies", nameField: "name" },
   92: { entitySet: "sdkmessageprocessingsteps", nameField: "name" },
   300: { entitySet: "canvasapps", nameField: "name" },
+  380: { entitySet: "environmentvariabledefinitions", nameField: "schemaname" },
 };
 
 export interface SolutionComponentRow {
@@ -178,6 +185,12 @@ export interface SolutionComponentRow {
    *  lookup failed (stale/orphaned row) — falls back to the flat top-level grouping so the row
    *  doesn't just disappear. */
   ownerEntityLogicalName?: string;
+}
+
+export interface PickableComponent {
+  id: string;
+  name: string;
+  secondary: string | null;
 }
 
 /** The basic column types this tool builds a plain AttributeMetadata body for via

@@ -1,4 +1,5 @@
 import { callNative } from "../../native/bridge";
+import { escapeODataString } from "../../native/odata";
 import {
   COMPONENT_NAME_RESOLVERS,
   ENTITY_COMPONENT_TYPE,
@@ -6,6 +7,7 @@ import {
   type BasicColumnType,
   type ColumnFieldMeta,
   type EntityBasicInfo,
+  type PickableComponent,
   type Publisher,
   type SolutionComponentRow,
   type SolutionSummary,
@@ -35,7 +37,7 @@ export async function fetchSolutions(connectionId: string): Promise<SolutionSumm
     "solutions?$filter=isvisible eq true" +
       "&$select=solutionid,uniquename,friendlyname,version,description,ismanaged" +
       "&$expand=publisherid($select=friendlyname,customizationprefix)" +
-      "&$orderby=friendlyname",
+      "&$orderby=createdon desc",
   );
   return res.value.map((s) => ({
     solutionid: s.solutionid,
@@ -172,20 +174,88 @@ export async function fetchSolutionComponents(connectionId: string, solutionId: 
   );
 }
 
-/** Adds an existing table to the solution — same `AddSolutionComponent` shape ribbon-workbench
- *  would use for this (it currently only reads solutions that already contain the target entity). */
-export async function addExistingTableComponent(connectionId: string, solutionUniqueName: string, entityMetadataId: string): Promise<void> {
+/** `componentId` is the component's own id — MetadataId for tables/global choices, the record id
+ *  for everything else (confirmed against live solutioncomponent rows for Model-driven App and
+ *  Site Map, whose objectid is appmoduleid/sitemapid, not their *idunique counterparts). */
+export async function addSolutionComponent(connectionId: string, solutionUniqueName: string, componentType: number, componentId: string): Promise<void> {
   await callNative("dataverse.request", {
     connectionId,
     method: "POST",
     path: "AddSolutionComponent",
     body: {
-      ComponentType: ENTITY_COMPONENT_TYPE,
-      ComponentId: entityMetadataId,
+      ComponentType: componentType,
+      ComponentId: componentId,
       SolutionUniqueName: solutionUniqueName,
       AddRequiredComponents: false,
     },
   });
+}
+
+export interface RecordComponentSource {
+  entitySet: string;
+  idField: string;
+  nameField: string;
+  secondaryField?: string;
+  baseFilter?: string;
+  orderBy: string;
+}
+
+export const COMPONENT_SEARCH_LIMIT = 200;
+
+export function buildComponentSearchPath(source: RecordComponentSource, query: string): string {
+  const fields = [source.idField, source.nameField, ...(source.secondaryField ? [source.secondaryField] : [])];
+  const q = query.trim();
+  const filters = [
+    ...(source.baseFilter ? [`(${source.baseFilter})`] : []),
+    ...(q ? [`contains(${source.nameField},'${escapeODataString(q)}')`] : []),
+  ];
+  return (
+    `${source.entitySet}?$select=${fields.join(",")}` +
+    (filters.length > 0 ? `&$filter=${filters.join(" and ")}` : "") +
+    `&$orderby=${source.orderBy}&$top=${COMPONENT_SEARCH_LIMIT}`
+  );
+}
+
+/** Record-backed components are searched server-side rather than loaded whole: an org can hold
+ *  well over 5000 web resources (the Web API page cap), so a load-all-then-filter picker would
+ *  silently miss anything past the first page. */
+export async function searchComponentRecords(connectionId: string, source: RecordComponentSource, query: string): Promise<PickableComponent[]> {
+  const res = await fetchDataverse<{ value: Record<string, string | null>[] }>(connectionId, buildComponentSearchPath(source, query));
+  return res.value.map((r) => {
+    const name = r[source.nameField] ?? (source.secondaryField ? r[source.secondaryField] : null) ?? r[source.idField] ?? "";
+    const secondary = source.secondaryField ? r[source.secondaryField] : null;
+    return { id: r[source.idField] ?? "", name, secondary: secondary && secondary !== name ? secondary : null };
+  });
+}
+
+export interface NewWebResourceParams {
+  name: string;
+  displayName: string;
+  webResourceType: number;
+  /** Base64 file content, as the `content` column stores it. */
+  content: string;
+}
+
+/** `$select` on the POST keeps `return=representation` (always sent by the bridge) from echoing
+ *  the whole base64 `content` back. */
+export async function createWebResource(connectionId: string, solutionUniqueName: string, params: NewWebResourceParams): Promise<{ webResourceId: string }> {
+  const created = await callNative<{ webresourceid: string }>(
+    "dataverse.request",
+    {
+      connectionId,
+      solutionUniqueName,
+      method: "POST",
+      path: "webresourceset?$select=webresourceid",
+      body: {
+        name: params.name,
+        displayname: params.displayName || params.name,
+        webresourcetype: params.webResourceType,
+        content: params.content,
+      },
+    },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
+  return { webResourceId: created.webresourceid };
 }
 
 export interface PickableEntity {
@@ -556,22 +626,24 @@ export async function createLookupColumn(connectionId: string, solutionUniqueNam
   );
 }
 
-/** Publishes exactly the tables that belong to one solution, instead of `publishAll`'s org-wide
- *  republish — Dataverse's Web API has no "publish this one solution" primitive (`PublishXml` only
- *  takes an explicit component list, never a solution id), so this builds that list from the
- *  Entity-type rows the caller already has (SolutionEditor.tsx's own `entityRows`, straight from
- *  fetchSolutionComponents — no extra round-trip needed). Pure text-building split out from the
- *  network call for the same testability reason every other builder in this file is. */
-export function buildPublishXmlForEntities(entityLogicalNames: string[]): string {
-  const entities = entityLogicalNames.map((n) => `<entity>${n}</entity>`).join("");
-  return `<importexportxml><entities>${entities}</entities></importexportxml>`;
+/** Publishes exactly the tables and web resources that belong to one solution, instead of
+ *  `publishAll`'s org-wide republish — Dataverse's Web API has no "publish this one solution"
+ *  primitive (`PublishXml` only takes an explicit component list, never a solution id), so this
+ *  builds that list from the rows the caller already has (SolutionEditor.tsx's own component list,
+ *  straight from fetchSolutionComponents — no extra round-trip needed). An empty section is left
+ *  out rather than sent as an empty element. */
+export function buildPublishXml(entityLogicalNames: string[], webResourceIds: string[] = []): string {
+  const entities = entityLogicalNames.length > 0 ? `<entities>${entityLogicalNames.map((n) => `<entity>${n}</entity>`).join("")}</entities>` : "";
+  const webResources =
+    webResourceIds.length > 0 ? `<webresources>${webResourceIds.map((id) => `<webresource>{${id}}</webresource>`).join("")}</webresources>` : "";
+  return `<importexportxml>${entities}${webResources}</importexportxml>`;
 }
 
-export async function publishSolutionEntities(connectionId: string, entityLogicalNames: string[]): Promise<void> {
-  if (entityLogicalNames.length === 0) return; // nothing to publish — same as PublishXml's own no-op for an empty list
+export async function publishSolutionComponents(connectionId: string, entityLogicalNames: string[], webResourceIds: string[] = []): Promise<void> {
+  if (entityLogicalNames.length === 0 && webResourceIds.length === 0) return;
   await callNative(
     "dataverse.request",
-    { connectionId, method: "POST", path: "PublishXml", body: { ParameterXml: buildPublishXmlForEntities(entityLogicalNames) } },
+    { connectionId, method: "POST", path: "PublishXml", body: { ParameterXml: buildPublishXml(entityLogicalNames, webResourceIds) } },
     { timeoutMs: LONG_TIMEOUT_MS },
   );
 }

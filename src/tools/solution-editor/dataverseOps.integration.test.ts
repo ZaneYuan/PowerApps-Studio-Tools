@@ -20,7 +20,7 @@ import {
   createTable,
   fetchEntityFields,
   fetchGlobalOptionSets,
-  publishSolutionEntities,
+  publishSolutionComponents,
   updatePublisher,
   type NewColumnParams,
 } from "./dataverseOps";
@@ -193,7 +193,7 @@ describe.skipIf(!hasTestCredentials())("Solution Editor — real Dataverse integ
     ).rejects.toThrow(/10000/);
   });
 
-  it("publishSolutionEntities succeeds against the real solution's table", async () => {
-    await expect(publishSolutionEntities(FAKE_CONNECTION_ID, [tableLogicalName])).resolves.toBeUndefined();
+  it("publishSolutionComponents succeeds against the real solution's table", async () => {
+    await expect(publishSolutionComponents(FAKE_CONNECTION_ID, [tableLogicalName])).resolves.toBeUndefined();
   }, 60_000);
 });
