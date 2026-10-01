@@ -207,6 +207,8 @@ export interface SdkMessageFilter {
 
 export interface EntityAttribute {
   LogicalName: string;
+  /** Logical name of the column this one is derived from; null/absent for real columns. */
+  AttributeOf?: string | null;
 }
 
 /** All SDK messages, sorted by name. There's only ever a few hundred of these org-wide and no
@@ -232,9 +234,15 @@ export async function fetchMessageFilters(connectionId: string, messageId: strin
 export async function fetchEntityAttributes(connectionId: string, entityLogicalName: string): Promise<string[]> {
   const res = await fetchDataverse<{ value: EntityAttribute[] }>(
     connectionId,
-    `EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes?$select=LogicalName`,
+    `EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes?$select=LogicalName,AttributeOf`,
   );
-  return res.value.map((a) => a.LogicalName).sort();
+  // AttributeOf != null marks a companion column generated from another one (a lookup's
+  // `<lookup>name` / `<lookup>yominame`, a picklist's `<field>name`…). They're not stored columns,
+  // so they can't be in a step's filteringattributes or an image's attribute list.
+  return res.value
+    .filter((a) => !a.AttributeOf)
+    .map((a) => a.LogicalName)
+    .sort();
 }
 
 export interface RegisterStepInput {

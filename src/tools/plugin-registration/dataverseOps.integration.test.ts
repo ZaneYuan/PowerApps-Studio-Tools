@@ -223,6 +223,9 @@ describe.skipIf(!hasTestCredentials())("Plugin Registration — real Dataverse i
     const attrs = await fetchEntityAttributes(FAKE_CONNECTION_ID, tableLogical);
     expect(attrs).toContain(`${tableLogical}id`);
     expect(attrs).toContain(`${PUBLISHER_PREFIX}_name`);
+    // Companion columns (a lookup's `<lookup>name`, AttributeOf != null) aren't real stored columns.
+    expect(attrs).not.toContain("createdbyname");
+    expect(attrs).toContain("createdby");
   }, 30_000);
 
   it("deleteImage really removes just the image, leaving the step alone", async () => {
