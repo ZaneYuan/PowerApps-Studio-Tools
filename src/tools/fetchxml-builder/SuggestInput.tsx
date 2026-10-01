@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { rankByMatch } from "../../shared/rankMatch";
 
 /** Own fixed visual style (border/bg/text/padding), independent of each call site's sizing
  *  class — callers pass sizing/flex classes (e.g. "w-40", "flex-1 min-w-32") via `className`,
@@ -33,8 +34,7 @@ export default function SuggestInput({
 }) {
   const [open, setOpen] = useState(false);
 
-  const q = value.trim().toLowerCase();
-  const filtered = (q ? suggestions.filter((s) => s.toLowerCase().includes(q)) : suggestions).slice(0, 50);
+  const filtered = rankByMatch(suggestions, value, (s) => s).slice(0, 50);
 
   return (
     <div className={`relative ${className}`}>

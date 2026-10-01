@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AttributePicker from "../../shared/AttributePicker";
 import ErrorMessage from "../../shared/ErrorMessage";
+import { rankByMatch } from "../../shared/rankMatch";
 import {
   fetchEntityAttributes,
   fetchMessageFilters,
@@ -51,6 +52,9 @@ export default function StepRegisterDialog({
 
   const [filters, setFilters] = useState<SdkMessageFilter[] | null>(null);
   const [filterId, setFilterId] = useState("");
+  // Primary-entity combobox text + dropdown visibility (same pattern as the message box above).
+  const [entityQuery, setEntityQuery] = useState("");
+  const [entityDropdownOpen, setEntityDropdownOpen] = useState(false);
 
   const [attributes, setAttributes] = useState<string[] | null>(null);
   const [selectedAttributes, setSelectedAttributes] = useState<Set<string>>(new Set());
@@ -113,6 +117,7 @@ export default function StepRegisterDialog({
   useEffect(() => {
     if (isEdit) return;
     setFilterId("");
+    setEntityQuery("");
     setFilters(null);
     setAttributes(null);
     setSelectedAttributes(new Set());
@@ -137,9 +142,7 @@ export default function StepRegisterDialog({
 
   const filteredMessages = useMemo(() => {
     if (!messages) return [];
-    const q = messageQuery.trim().toLowerCase();
-    if (!q) return messages;
-    return messages.filter((m) => m.name.toLowerCase().includes(q));
+    return rankByMatch(messages, messageQuery, (m) => m.name);
   }, [messages, messageQuery]);
 
   const selectedMessage = messages?.find((m) => m.sdkmessageid === messageId);
@@ -149,6 +152,26 @@ export default function StepRegisterDialog({
     setMessageId(m.sdkmessageid);
     setMessageQuery(m.name);
     setMessageDropdownOpen(false);
+  }
+
+  const filteredEntities = useMemo(
+    () => rankByMatch(filters ?? [], entityQuery, (f) => f.primaryobjecttypecode),
+    [filters, entityQuery],
+  );
+
+  function selectEntity(f: SdkMessageFilter | null) {
+    setFilterId(f?.sdkmessagefilterid ?? "");
+    setEntityQuery(f?.primaryobjecttypecode ?? "");
+    setEntityDropdownOpen(false);
+  }
+
+  function handleEntityQueryChange(v: string) {
+    setEntityQuery(v);
+    setEntityDropdownOpen(true);
+    // Same rule as the message box: only an explicit pick (or an exact name) counts as selected;
+    // partial text means "不限" until the user picks one.
+    const exact = filters?.find((f) => f.primaryobjecttypecode.toLowerCase() === v.trim().toLowerCase());
+    setFilterId(exact?.sdkmessagefilterid ?? "");
   }
 
   function handleMessageQueryChange(v: string) {
@@ -287,14 +310,51 @@ export default function StepRegisterDialog({
                       <p className="text-xs text-gray-400">该消息是 org-level，没有主实体可选。</p>
                     )}
                     {filters && filters.length > 0 && (
-                      <select value={filterId} onChange={(e) => setFilterId(e.target.value)} className={inputCls}>
-                        <option value="">（不限）</option>
-                        {filters.map((f) => (
-                          <option key={f.sdkmessagefilterid} value={f.sdkmessagefilterid}>
-                            {f.primaryobjecttypecode}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="（不限）— 输入搜索实体名，如 opportunity…"
+                          value={entityQuery}
+                          onChange={(e) => handleEntityQueryChange(e.target.value)}
+                          onFocus={() => setEntityDropdownOpen(true)}
+                          onBlur={() => setEntityDropdownOpen(false)}
+                          className={inputCls}
+                        />
+                        {entityDropdownOpen && (
+                          <ul
+                            onMouseDown={(e) => e.preventDefault()}
+                            className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-gray-300 bg-white shadow-lg dark:border-gray-600 dark:bg-gray-800"
+                          >
+                            <li>
+                              <button
+                                type="button"
+                                onClick={() => selectEntity(null)}
+                                className="block w-full truncate px-2 py-1 text-left text-sm text-gray-500 hover:bg-blue-50 dark:text-gray-400 dark:hover:bg-blue-900/20"
+                              >
+                                （不限）
+                              </button>
+                            </li>
+                            {filteredEntities.map((f) => (
+                              <li key={f.sdkmessagefilterid}>
+                                <button
+                                  type="button"
+                                  onClick={() => selectEntity(f)}
+                                  className={`block w-full truncate px-2 py-1 text-left text-sm hover:bg-blue-50 dark:hover:bg-blue-900/20 ${
+                                    f.sdkmessagefilterid === filterId
+                                      ? "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
+                                      : "text-gray-700 dark:text-gray-300"
+                                  }`}
+                                >
+                                  {f.primaryobjecttypecode}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {primaryEntity && (
+                          <p className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400"><SvgIcon name="check" className="h-3.5 w-3.5" />已选择：{primaryEntity}</p>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
