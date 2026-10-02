@@ -1,5 +1,5 @@
 import { callNative } from "../../native/bridge";
-import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, type ManyToManyInfo } from "../../native/metadataService";
+import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, isLookupAttributeType, type ManyToManyInfo } from "../../native/metadataService";
 import { getBindNavigationProperty } from "../../native/navProperty";
 import { runConcurrent } from "../sql4cds/concurrency";
 import { deleteIntersectRow, insertIntersectRow, withRetryOn429, type IntersectRowValues } from "../sql4cds/writeOps";
@@ -54,6 +54,15 @@ async function fetchDataverse<T>(connectionId: string, path: string, includeForm
  *  `ManyToManyRefTable`/intersect-entity queries, use the bare attribute name directly. */
 function lookupValueKey(attr: string): string {
   return `_${attr}_value`;
+}
+
+/** `$filter` selecting the child rows of a 1:N relationship that point at `id`. Address 1 and 2
+ *  of an account/contact are customeraddress rows the platform keys on (parentid, addressnumber)
+ *  and recreates for every record, so moving them to another record always 412s with "A record
+ *  with matching key values already exists" — only the extra addresses (number 3+) can move. */
+function referencingRowsFilter(referencingEntity: string, referencingAttribute: string, id: string): string {
+  const filter = `${lookupValueKey(referencingAttribute)} eq ${id}`;
+  return referencingEntity === "customeraddress" ? `${filter} and addressnumber gt 2` : filter;
 }
 
 /** Dataverse errors that mean "this relationship can never be queried, full stop" — a disabled
@@ -176,7 +185,7 @@ export async function scanReferences(connectionId: string, entityLogicalName: st
           connectionId,
           childMeta.entitySetName,
           childMeta.primaryIdAttribute,
-          `${lookupValueKey(rel.ReferencingAttribute)} eq ${id}`,
+          referencingRowsFilter(rel.ReferencingEntity, rel.ReferencingAttribute, id),
         );
         if (count === 0) return null;
         const table: OneToManyRefTable = {
@@ -308,11 +317,11 @@ export async function fetchRefTableRecords(connectionId: string, table: RefTable
   const typeByName = new Map(attrs.map((a) => [a.logicalName.toLowerCase(), a.attributeType]));
   const columns = viewOrder.length > 0 ? viewOrder : [meta.primaryIdAttribute, meta.primaryNameAttribute];
   const select = [...new Set([...columns, meta.primaryIdAttribute, meta.primaryNameAttribute])]
-    .map((c) => (typeByName.get(c.toLowerCase()) === "Lookup" ? lookupValueKey(c) : c))
+    .map((c) => (isLookupAttributeType(typeByName.get(c.toLowerCase()) ?? "") ? lookupValueKey(c) : c))
     .join(",");
 
   if (table.kind === "onetomany") {
-    const filter = `${lookupValueKey(table.referencingAttribute)} eq ${scannedId}`;
+    const filter = referencingRowsFilter(table.entityLogicalName, table.referencingAttribute, scannedId);
     const res = await fetchDataverse<{ value: Record<string, unknown>[] }>(
       connectionId,
       `${meta.entitySetName}?$select=${select}&$filter=${filter}&$top=${REF_RECORD_ROW_LIMIT + 1}`,
@@ -388,7 +397,7 @@ async function migrateOneToManyTable(
     connectionId,
     childMeta.entitySetName,
     childMeta.primaryIdAttribute,
-    `${lookupValueKey(table.referencingAttribute)} eq ${oldId}`,
+    referencingRowsFilter(table.entityLogicalName, table.referencingAttribute, oldId),
   );
   const ids = rows.map((r) => String(r[childMeta.primaryIdAttribute]));
 
