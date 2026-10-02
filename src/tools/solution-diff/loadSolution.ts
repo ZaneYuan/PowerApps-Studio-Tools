@@ -61,10 +61,14 @@ export function isTextWebResource(name: string): boolean {
   return TEXT_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
-/** WebResource file paths inside the zip don't always match the logical <Name> verbatim
- *  (special characters get encoded). This does a best-effort search rather than assuming
- *  a fixed encoding scheme. */
-export function findWebResourceZipPath(zip: JSZip, logicalName: string): string | null {
+/** WebResource file paths inside the zip don't always match the logical <Name> verbatim —
+ *  current exports store each one as its name with "/" and "." stripped plus its id
+ *  (`WebResources/demo_scriptsproject_formjs25563B6E-…`) and record that path in the resource's
+ *  <FileName>, so that is tried first; the name-based guesses cover older exports without it. */
+export function findWebResourceZipPath(zip: JSZip, logicalName: string, customizationsXml: Document | null): string | null {
+  const declared = declaredWebResourceFileName(customizationsXml, logicalName);
+  if (declared && zip.file(declared)) return declared;
+
   const candidates = [
     `WebResources/${logicalName}`,
     `WebResources/${encodeURIComponent(logicalName)}`,
@@ -79,4 +83,14 @@ export function findWebResourceZipPath(zip: JSZip, logicalName: string): string 
       (path.endsWith(`/${basename}`) || decodeURIComponent(path) === `WebResources/${logicalName}`),
   );
   return match ?? null;
+}
+
+function declaredWebResourceFileName(customizationsXml: Document | null, logicalName: string): string | null {
+  if (!customizationsXml) return null;
+  for (const webResource of Array.from(customizationsXml.getElementsByTagName("WebResource"))) {
+    if (webResource.getElementsByTagName("Name")[0]?.textContent?.trim() !== logicalName) continue;
+    const fileName = webResource.getElementsByTagName("FileName")[0]?.textContent?.trim();
+    return fileName ? fileName.replace(/^\//, "") : null;
+  }
+  return null;
 }

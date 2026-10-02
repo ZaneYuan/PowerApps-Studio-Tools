@@ -1,7 +1,6 @@
-import type JSZip from "jszip";
 import { toDiffLines } from "./xmlDiff";
 import { findWebResourceZipPath, isTextWebResource } from "./loadSolution";
-import type { WebResourceFileDiff } from "./types";
+import type { SolutionBundle, WebResourceFileDiff } from "./types";
 
 async function sha256(buffer: ArrayBuffer): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", buffer);
@@ -11,12 +10,14 @@ async function sha256(buffer: ArrayBuffer): Promise<string> {
 }
 
 export async function diffWebResourceFile(
-  oldZip: JSZip,
-  newZip: JSZip,
+  oldBundle: SolutionBundle,
+  newBundle: SolutionBundle,
   logicalName: string,
 ): Promise<WebResourceFileDiff> {
-  const oldPath = findWebResourceZipPath(oldZip, logicalName);
-  const newPath = findWebResourceZipPath(newZip, logicalName);
+  const oldZip = oldBundle.zip;
+  const newZip = newBundle.zip;
+  const oldPath = findWebResourceZipPath(oldZip, logicalName, oldBundle.customizationsXml);
+  const newPath = findWebResourceZipPath(newZip, logicalName, newBundle.customizationsXml);
   const isText = isTextWebResource(logicalName);
 
   if (!oldPath && !newPath) return { status: "unavailable", isText };

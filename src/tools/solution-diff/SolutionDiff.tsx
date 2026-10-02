@@ -123,7 +123,7 @@ export default function SolutionDiff() {
       const map = new Map<string, WebResourceFileDiff>();
       for (const item of webResourceSection.items) {
         if (item.key.startsWith("#")) continue;
-        const result = await diffWebResourceFile(oldBundle.zip, newBundle.zip, item.key);
+        const result = await diffWebResourceFile(oldBundle, newBundle, item.key);
         if (cancelled) return;
         map.set(item.key, result);
       }
