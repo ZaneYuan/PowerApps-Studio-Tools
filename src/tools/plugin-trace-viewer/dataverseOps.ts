@@ -18,7 +18,8 @@ export function buildFilterClauses(filters: TraceFilters): string[] {
     clauses.push(`contains(primaryentity,'${escapeODataString(filters.primaryEntity.trim())}')`);
   }
   if (filters.onlyErrors) {
-    clauses.push("exceptiondetails ne null");
+    // A trace log without an exception stores exceptiondetails as "" rather than null.
+    clauses.push("exceptiondetails ne null and exceptiondetails ne ''");
   }
   if (filters.from) {
     clauses.push(`createdon ge ${new Date(filters.from).toISOString()}`);

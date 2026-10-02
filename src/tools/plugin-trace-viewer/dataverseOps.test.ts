@@ -29,8 +29,8 @@ describe("buildFilterClauses — the OData $filter clause list fetchTraceLogs bu
     expect(buildFilterClauses({ ...DEFAULT_FILTERS, typeName: "   " })).toEqual([]);
   });
 
-  it("onlyErrors emits the exact exceptiondetails ne null clause", () => {
-    expect(buildFilterClauses({ ...DEFAULT_FILTERS, onlyErrors: true })).toEqual(["exceptiondetails ne null"]);
+  it("onlyErrors excludes both null and empty exceptiondetails", () => {
+    expect(buildFilterClauses({ ...DEFAULT_FILTERS, onlyErrors: true })).toEqual(["exceptiondetails ne null and exceptiondetails ne ''"]);
   });
 
   it("onlyErrors=false emits nothing", () => {
@@ -63,7 +63,7 @@ describe("buildFilterClauses — the OData $filter clause list fetchTraceLogs bu
       "contains(typename,'MyPlugin')",
       "contains(messagename,'Create')",
       "contains(primaryentity,'contact')",
-      "exceptiondetails ne null",
+      "exceptiondetails ne null and exceptiondetails ne ''",
       expect.stringMatching(/^createdon ge /),
       expect.stringMatching(/^createdon le /),
     ]);
