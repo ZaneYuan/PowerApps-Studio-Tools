@@ -8,12 +8,15 @@ import StepRegisterDialog from "./StepRegisterDialog";
 import ImageRegisterDialog from "./ImageRegisterDialog";
 import AssemblyRegisterDialog from "./AssemblyRegisterDialog";
 import {
+  deleteAssemblyCascade,
   deleteImage,
   deleteStepCascade,
   deleteTypeCascade,
   fetchImageDetail,
+  fetchPluginTypes,
   fetchRecordDetail,
   fetchStepDetail,
+  fetchSteps,
   setStepEnabled,
 } from "./dataverseOps";
 import {
@@ -239,6 +242,38 @@ export default function PluginRegistration() {
     }
   }
 
+  async function handleUnregisterAssembly() {
+    if (!activeConnectionId || !selected || selected.kind !== "assembly") return;
+    const assemblyName = String((detail as { name?: string } | null)?.name ?? selected.id);
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const types = await fetchPluginTypes(activeConnectionId, selected.id);
+      const stepsByType = await Promise.all(types.map((t) => fetchSteps(activeConnectionId, t.plugintypeid)));
+      const stepCount = stepsByType.reduce((n, steps) => n + steps.length, 0);
+      const affected = types.flatMap((t, i) => [
+        `插件类型  ${t.typename}`,
+        ...stepsByType[i].map((step) => `    Step  ${step.name}`),
+      ]);
+      const confirmed = await confirmDialog({
+        title: "注销程序集",
+        message: `将从环境中删除程序集「${assemblyName}」，连同它下面的 ${types.length} 个插件类型、${stepCount} 个 Step 及其 Image。此操作不可撤销，确定继续？`,
+        detail: affected,
+        confirmLabel: "注销",
+        danger: true,
+      });
+      if (!confirmed) return;
+      await deleteAssemblyCascade(activeConnectionId, selected.id);
+      treeRef.current?.reloadRoot();
+      setSelected(null);
+      setDetail(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   if (!isNativeBridgeAvailable()) {
     return (
       <div className="max-w-xl rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
@@ -256,6 +291,7 @@ export default function PluginRegistration() {
   }
 
   const stepEnabled = selected?.kind === "step" && (detail as { statecode?: number } | null)?.statecode === 0;
+  const assemblyManaged = selected?.kind === "assembly" && (detail as { ismanaged?: boolean } | null)?.ismanaged === true;
 
   return (
     <div className="flex h-[calc(100vh-8rem)]">
@@ -291,6 +327,16 @@ export default function PluginRegistration() {
                 更新程序集（重新上传 DLL）
               </button>
             )}
+            {selected.kind === "assembly" && (
+              <button
+                onClick={handleUnregisterAssembly}
+                disabled={actionBusy || detailLoading || assemblyManaged}
+                title={assemblyManaged ? "托管程序集只能通过卸载它所在的解决方案来删除" : undefined}
+                className="rounded-md border border-red-300 px-3 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20"
+              >
+                注销程序集（Unregister）
+              </button>
+            )}
             {selected.kind === "step" && (
               <button
                 onClick={() => handleToggleStepEnabled(!stepEnabled)}
@@ -322,9 +368,6 @@ export default function PluginRegistration() {
                 编辑（或双击树节点）
               </button>
             )}
-            {/* Assembly delete is deliberately not exposed here — cascades through every type/
-                step/image under it, too easy to trigger by accident. See deleteAssemblyCascade's
-                doc comment in dataverseOps.ts. */}
             {selected.kind !== "assembly" && (
               <button
                 onClick={
