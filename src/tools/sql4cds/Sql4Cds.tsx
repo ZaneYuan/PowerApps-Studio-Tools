@@ -9,6 +9,7 @@ import { downloadTextFile } from "../../native/download";
 import { selectedResultColumnKeys, unwrapODataRowWithFormatting } from "../../native/odata";
 import { useConfirmDialog } from "../../shared/ConfirmDialog";
 import ErrorMessage from "../../shared/ErrorMessage";
+import { formatDataverseError } from "../../shared/errorFormatting";
 import SvgIcon from "../../shared/SvgIcon";
 import { fetchAttributes, fetchDefaultViewColumnOrder, fetchEntityMeta, fetchManyToManyInfo, sortColumnsForDisplay } from "../../native/metadataService";
 import { buildDisplayGridColumns } from "../../shared/gridColumns";
@@ -479,7 +480,7 @@ export default function Sql4Cds() {
               entry = { key, state: "success", detail: newId ?? undefined };
             }
           } catch (err) {
-            entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
+            entry = { key, state: "error", error: formatDataverseError(err).summary };
           }
           entries.push(entry);
           setWriteResults((r) => [...(r ?? []), entry]);
@@ -547,7 +548,7 @@ export default function Sql4Cds() {
             }
             entry = { key: id, state: "success" };
           } catch (err) {
-            entry = { key: id, state: "error", error: err instanceof Error ? err.message : String(err) };
+            entry = { key: id, state: "error", error: formatDataverseError(err).summary };
           }
           entries.push(entry);
           setWriteResults((r) => [...(r ?? []), entry]);
@@ -658,7 +659,7 @@ export default function Sql4Cds() {
                     entry = { key, state: "success", detail: newId ?? undefined };
                   }
                 } catch (err) {
-                  entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
+                  entry = { key, state: "error", error: formatDataverseError(err).summary };
                 }
                 entries.push(entry);
                 setWriteResults((r2) => [...(r2 ?? []), entry]);
@@ -695,7 +696,7 @@ export default function Sql4Cds() {
                   }
                   entry = { key, state: "success" };
                 } catch (err) {
-                  entry = { key, state: "error", error: err instanceof Error ? err.message : String(err) };
+                  entry = { key, state: "error", error: formatDataverseError(err).summary };
                 }
                 entries.push(entry);
                 setWriteResults((r2) => [...(r2 ?? []), entry]);
@@ -713,7 +714,7 @@ export default function Sql4Cds() {
           const entry: Sql4CdsLogEntry = {
             key: `语句 ${stmtLabel}`,
             state: "error",
-            error: err instanceof Error ? err.message : String(err),
+            error: formatDataverseError(err).summary,
           };
           entries.push(entry);
           setWriteResults((r2) => [...(r2 ?? []), entry]);
