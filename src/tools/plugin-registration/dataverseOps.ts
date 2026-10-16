@@ -8,12 +8,27 @@ async function fetchDataverse<T>(connectionId: string, path: string): Promise<T>
   return callNative<T>("dataverse.request", { connectionId, method: "GET", path });
 }
 
-async function postDataverse<T>(connectionId: string, path: string, body: Record<string, unknown>): Promise<T> {
-  return callNative<T>("dataverse.request", { connectionId, method: "POST", path, body });
+/** Uploading a DLL (base64 `content`) is processed server-side before the response returns and
+ *  routinely outlasts the bridge's default 30s; the client-side timeout does not cancel the
+ *  request, so a short limit reports failure for a write that actually succeeded. */
+const ASSEMBLY_UPLOAD_TIMEOUT_MS = 180_000;
+
+async function postDataverse<T>(
+  connectionId: string,
+  path: string,
+  body: Record<string, unknown>,
+  timeoutMs?: number,
+): Promise<T> {
+  return callNative<T>("dataverse.request", { connectionId, method: "POST", path, body }, { timeoutMs });
 }
 
-async function patchDataverse(connectionId: string, path: string, body: Record<string, unknown>): Promise<void> {
-  await callNative("dataverse.request", { connectionId, method: "PATCH", path, body });
+async function patchDataverse(
+  connectionId: string,
+  path: string,
+  body: Record<string, unknown>,
+  timeoutMs?: number,
+): Promise<void> {
+  await callNative("dataverse.request", { connectionId, method: "PATCH", path, body }, { timeoutMs });
 }
 
 async function deleteDataverse(connectionId: string, path: string): Promise<void> {
@@ -442,15 +457,20 @@ export async function registerAssembly(
   inspection: AssemblyInspectionResult,
   selectedTypeNames: Set<string>,
 ): Promise<PluginAssembly> {
-  const assembly = await postDataverse<PluginAssembly>(connectionId, "pluginassemblies", {
-    name: inspection.name,
-    version: inspection.version,
-    culture: inspection.culture,
-    publickeytoken: inspection.publicKeyToken,
-    content: inspection.contentBase64,
-    isolationmode: 2,
-    sourcetype: 0,
-  });
+  const assembly = await postDataverse<PluginAssembly>(
+    connectionId,
+    "pluginassemblies",
+    {
+      name: inspection.name,
+      version: inspection.version,
+      culture: inspection.culture,
+      publickeytoken: inspection.publicKeyToken,
+      content: inspection.contentBase64,
+      isolationmode: 2,
+      sourcetype: 0,
+    },
+    ASSEMBLY_UPLOAD_TIMEOUT_MS,
+  );
 
   const selected = inspection.pluginTypes.filter((t) => selectedTypeNames.has(t.typeName));
   await Promise.all(
@@ -469,12 +489,17 @@ export async function updateAssembly(
   inspection: AssemblyInspectionResult,
   selectedTypeNames: Set<string>,
 ): Promise<void> {
-  await patchDataverse(connectionId, `pluginassemblies(${assemblyId})`, {
-    content: inspection.contentBase64,
-    version: inspection.version,
-    culture: inspection.culture,
-    publickeytoken: inspection.publicKeyToken,
-  });
+  await patchDataverse(
+    connectionId,
+    `pluginassemblies(${assemblyId})`,
+    {
+      content: inspection.contentBase64,
+      version: inspection.version,
+      culture: inspection.culture,
+      publickeytoken: inspection.publicKeyToken,
+    },
+    ASSEMBLY_UPLOAD_TIMEOUT_MS,
+  );
 
   const existing = await fetchPluginTypes(connectionId, assemblyId);
   const existingNames = new Set(existing.map((t) => t.typename));
