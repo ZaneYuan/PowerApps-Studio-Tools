@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseWorkflowXaml } from "./xamlParser";
+import { encodeXmlnsValues, parseWorkflowXaml } from "./xamlParser";
 import { parseFlowClientData } from "./flowParser";
 import type { FlowAction, XamlStep } from "./types";
 
@@ -97,6 +97,33 @@ describe("parseWorkflowXaml", () => {
 
   it("rejects malformed xaml instead of returning an empty tree", () => {
     expect(() => parseWorkflowXaml("<Activity><broken></Activity>")).toThrow(/xaml 解析失败/);
+  });
+});
+
+// jsdom accepts whitespace in xmlns values but Chromium's libxml2 rejects it as "not a valid URI",
+// so these assert on the rewritten text rather than on whether jsdom happens to parse it.
+describe("encodeXmlnsValues", () => {
+  it("percent-encodes whitespace inside xmlns declarations", () => {
+    const out = encodeXmlnsValues(
+      `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:mva='clr-namespace:A;assembly=B, Version=4.0.0.0, Culture=neutral'>`,
+    );
+    expect(out).toBe(
+      `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:mva='clr-namespace:A;assembly=B,%20Version=4.0.0.0,%20Culture=neutral'>`,
+    );
+  });
+
+  it("leaves other attributes and text alone", () => {
+    const xml = `<a x:Name="has space" Value="xmlns is not a decl">text xmlns:y="a b"</a>`;
+    expect(encodeXmlnsValues(xml)).toBe(xml);
+  });
+
+  it("leaves no whitespace in any xmlns value of the real fixtures", () => {
+    for (const name of ["reminder-email.workflow.xaml", "create-translations.workflow.xaml", "close-quote.workflow.xaml", "send-password-reset.action.xaml", "business-rule.xaml"]) {
+      const out = encodeXmlnsValues(fixture(name));
+      const values = [...out.matchAll(/\sxmlns(?::[\w.-]+)?="([^"]*)"/g)].map((m) => m[1]);
+      expect(values.length).toBeGreaterThan(0);
+      expect(values.filter((v) => /\s/.test(v))).toEqual([]);
+    }
   });
 });
 

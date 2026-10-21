@@ -150,9 +150,29 @@ function newStep(match: RegExpExecArray): XamlStep {
   return { kind: match[1], number: match[2], description: (match[3] ?? "").trim(), detail: "", assignments: [], children: [] };
 }
 
+const START_TAG = /<[\w:.-]+(?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*\s*\/?>/g;
+const XMLNS_ATTRIBUTE = /(\sxmlns(?::[\w.-]+)?\s*=\s*)(?:"([^"]*)"|'([^']*)')/g;
+
+/** The designer writes assembly-qualified CLR namespaces as xmlns values, e.g.
+ *  `xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities, Version=4.0.0.0, …"`.
+ *  The spaces make them invalid URIs: Chromium's libxml2 (Electron, Edge, Chrome) rejects the whole
+ *  document with "xmlns:mva: '…' is not a valid URI", while jsdom accepts it — so unit tests can't
+ *  catch this. Namespaces are only used as opaque identifiers here (everything matches on
+ *  `localName`), so percent-encoding the whitespace keeps them distinct and parseable. */
+export function encodeXmlnsValues(xaml: string): string {
+  // Only touch real start tags, so text content that happens to contain ` xmlns:x="…"` is left alone.
+  return xaml.replace(START_TAG, (tag) =>
+    tag.replace(XMLNS_ATTRIBUTE, (_m, head: string, dq?: string, sq?: string) => {
+      const quote = dq !== undefined ? '"' : "'";
+      return `${head}${quote}${(dq ?? sq ?? "").replace(/\s/g, "%20")}${quote}`;
+    }),
+  );
+}
+
 export function parseWorkflowXaml(xaml: string): XamlStep[] {
   // DOMParser rejects `encoding="utf-16"` on an already-decoded JS string in some engines.
-  const doc = new DOMParser().parseFromString(xaml.replace(/^\s*<\?xml[^>]*\?>/, ""), "application/xml");
+  const source = encodeXmlnsValues(xaml.replace(/^\s*<\?xml[^>]*\?>/, ""));
+  const doc = new DOMParser().parseFromString(source, "application/xml");
   const parserError = doc.getElementsByTagName("parsererror")[0];
   if (parserError) throw new Error(`xaml 解析失败：${parserError.textContent ?? ""}`);
 
